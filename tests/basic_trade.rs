@@ -3,6 +3,7 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use futures::{SinkExt, StreamExt};
 use matching_engine::protocol::{NewOrderRequest, OrderType, TradeNotification, OrderConfirmation};
 use serde_json;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn test_basic_match() {
@@ -13,7 +14,7 @@ async fn test_basic_match() {
     // 1. 发送一个买单 (限价单)
     let buy_order = NewOrderRequest {
         user_id: 101,
-        symbol: "BTC/USD".to_string(),
+        symbol: Arc::from("BTC/USD"),
         order_type: OrderType::Buy,
         price: 50000,
         quantity: 10,
@@ -30,7 +31,7 @@ async fn test_basic_match() {
     // 3. 发送一个卖单，应该能与上面的买单撮合
     let sell_order = NewOrderRequest {
         user_id: 102,
-        symbol: "BTC/USD".to_string(),
+        symbol: Arc::from("BTC/USD"),
         order_type: OrderType::Sell,
         price: 50000, // 价格匹配
         quantity: 7,      // 数量小于买单

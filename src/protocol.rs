@@ -102,7 +102,7 @@ impl Encode for NewOrderRequest {
 }
 
 // Manual Decode implementation for NewOrderRequest
-impl Decode for NewOrderRequest {
+impl<Context> Decode<Context> for NewOrderRequest {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
         let user_id = u64::decode(decoder)?;
         let symbol_string = String::decode(decoder)?;
@@ -137,7 +137,7 @@ impl Encode for TradeNotification {
 }
 
 // Manual Decode implementation for TradeNotification
-impl Decode for TradeNotification {
+impl<Context> Decode<Context> for TradeNotification {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
         let trade_id = u64::decode(decoder)?;
         let symbol_string = String::decode(decoder)?;
@@ -181,7 +181,7 @@ impl Encode for ClientMessage {
 }
 
 // Manual Decode implementation for ClientMessage
-impl Decode for ClientMessage {
+impl<Context> Decode<Context> for ClientMessage {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
         let tag = u32::decode(decoder)?;
         match tag {
@@ -214,7 +214,7 @@ impl Encode for ServerMessage {
 }
 
 // Manual Decode implementation for ServerMessage
-impl Decode for ServerMessage {
+impl<Context> Decode<Context> for ServerMessage {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
         let tag = u32::decode(decoder)?;
         match tag {
