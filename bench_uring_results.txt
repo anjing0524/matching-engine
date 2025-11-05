@@ -1,0 +1,15 @@
+   Compiling matching-engine v0.1.0 (/Users/liushuo/code/tradeing/matching-engine)
+error[E0282]: type annotations needed for `Vec<_>`
+  --> benches/uring_verification_benchmark.rs:28:13
+   |
+28 |         let mut connections = Vec::new();
+   |             ^^^^^^^^^^^^^^^   ---------- type must be known at this point
+   |
+help: consider giving `connections` an explicit type, where the type for type parameter `T` is specified
+   |
+28 |         let mut connections: Vec<T> = Vec::new();
+   |                            ++++++++
+
+For more information about this error, try `rustc --explain E0282`.
+error: could not compile `matching-engine` (bench "uring_verification_benchmark") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

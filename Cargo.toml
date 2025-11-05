@@ -1,0 +1,37 @@
+[package]
+name = "matching-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+bytes = "1"
+tokio-util = { version = "0.7", features = ["codec"] }
+parking_lot = "0.12"
+bumpalo = { version = "3.16.0", features = ["collections"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tikv-jemallocator = { version = "0.5", optional = true }
+futures = "0.3"
+rand = "0.8"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "orderbook_benchmark"
+harness = false
+
+[[bench]]
+name = "comprehensive_benchmark"
+harness = false
+
+[[bench]]
+name = "network_benchmark"
+harness = false
+
+[[bench]]
+name = "e2e_network_benchmark"
+harness = false
