@@ -1,6 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 use matching_engine::orderbook::OrderBook;
 use matching_engine::protocol::{NewOrderRequest, OrderType};
+use std::sync::Arc;
 
 // OrderBook 需要实现 Clone trait 才能在基准测试中被高效克隆
 // 我们需要在 orderbook.rs 中添加 #[derive(Clone)]
@@ -29,7 +30,7 @@ fn realistic_match_benchmark(c: &mut Criterion) {
                 let orderbook_clone = master_orderbook.clone();
                 let incoming_order = NewOrderRequest {
                     user_id: 0,
-                    symbol: "BTC/USD".to_string(),
+                    symbol: Arc::from("BTC/USD"),
                     order_type: OrderType::Buy,
                     price: 50000,
                     quantity: 10,

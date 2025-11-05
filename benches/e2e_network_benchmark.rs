@@ -8,6 +8,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 use matching_engine::protocol::{NewOrderRequest, OrderType};
+use std::sync::Arc;
 
 /// 启动简单的TCP回显服务器
 fn start_echo_server(port: u16) -> thread::JoinHandle<()> {
@@ -135,7 +136,7 @@ fn bench_application_processing(c: &mut Criterion) {
             // 构造订单请求
             let order = NewOrderRequest {
                 user_id: 1,
-                symbol: "BTC/USD".to_string(),
+                symbol: Arc::from("BTC/USD"),
                 order_type: OrderType::Buy,
                 price: 50000,
                 quantity: 100,

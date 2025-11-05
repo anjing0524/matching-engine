@@ -56,14 +56,15 @@ impl OrderBook {
     // 撮合一个新订单
     // 返回值是一个元组，包含 (成交列表, 新挂单的确认信息)
     pub fn match_order(&mut self, mut request: NewOrderRequest) -> (Vec<TradeNotification>, Option<OrderConfirmation>) {
-        let mut trades = Vec::new();
+        // Pre-allocate with reasonable capacity estimates
+        let mut trades = Vec::with_capacity(16);
         let mut remaining_quantity = request.quantity;
-        let symbol = request.symbol.clone(); // Clone once here
+        let symbol = request.symbol.clone(); // Arc::clone is cheap (atomic ref count)
 
         // 移除已完全成交的对手订单ID列表
-        let mut orders_to_remove = Vec::new();
+        let mut orders_to_remove = Vec::with_capacity(16);
         // 需要从价格map中移除的key列表
-        let mut prices_to_remove = Vec::new();
+        let mut prices_to_remove = Vec::with_capacity(4);
 
         match request.order_type {
             OrderType::Buy => {
@@ -78,8 +79,9 @@ impl OrderBook {
                         let counter_order = &mut self.orders[node_idx];
                         let trade_quantity = std::cmp::min(remaining_quantity, counter_order.quantity);
 
+                        // Use Arc::clone which is just atomic increment (cheap)
                         trades.push(TradeNotification {
-                            trade_id: 0, 
+                            trade_id: 0,
                             symbol: symbol.clone(),
                             matched_price: counter_order.price,
                             matched_quantity: trade_quantity,
@@ -119,6 +121,7 @@ impl OrderBook {
                         let counter_order = &mut self.orders[node_idx];
                         let trade_quantity = std::cmp::min(remaining_quantity, counter_order.quantity);
 
+                        // Use Arc::clone which is just atomic increment (cheap)
                         trades.push(TradeNotification {
                             trade_id: 0,
                             symbol: symbol.clone(),
@@ -225,6 +228,7 @@ impl OrderBook {
     }
 
     // 从订单簿中移除一个订单
+    #[inline]
     fn remove_order(&mut self, order_id: u64) {
         // 1. 通过 order_id 找到节点索引
         let node_index = if let Some(index) = self.order_id_to_index.remove(&order_id) {
@@ -239,15 +243,17 @@ impl OrderBook {
             (node.prev, node.next, node.price, node.order_type)
         };
 
+        // 选择正确的价格 map（只查一次）
+        let price_map = match order_type {
+            OrderType::Buy => &mut self.bids,
+            OrderType::Sell => &mut self.asks,
+        };
+
         // 2. 从价格队列的双向链表中移除节点
         if let Some(prev_index) = prev {
             self.orders[prev_index].next = next;
         } else {
             // 节点是头节点
-            let price_map = match order_type {
-                OrderType::Buy => &mut self.bids,
-                OrderType::Sell => &mut self.asks,
-            };
             if let Some(level) = price_map.get_mut(&price) {
                 level.head = next;
             }
@@ -257,20 +263,12 @@ impl OrderBook {
             self.orders[next_index].prev = prev;
         } else {
             // 节点是尾节点
-            let price_map = match order_type {
-                OrderType::Buy => &mut self.bids,
-                OrderType::Sell => &mut self.asks,
-            };
             if let Some(level) = price_map.get_mut(&price) {
                 level.tail = prev;
             }
         }
 
         // 3. 如果价格队列为空，则从 BTreeMap 中移除该价格层级
-        let price_map = match order_type {
-            OrderType::Buy => &mut self.bids,
-            OrderType::Sell => &mut self.asks,
-        };
         if let Some(level) = price_map.get(&price) {
             if level.head.is_none() {
                 price_map.remove(&price);

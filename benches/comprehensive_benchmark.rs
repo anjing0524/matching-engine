@@ -9,6 +9,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput, BenchmarkId};
 use matching_engine::orderbook::OrderBook;
 use matching_engine::protocol::{NewOrderRequest, OrderType, TradeNotification, OrderConfirmation};
+use std::sync::Arc;
 
 /// ============================================================================
 /// 1. CORE MATCHING PERFORMANCE
@@ -26,7 +27,7 @@ fn bench_order_add_no_match(c: &mut Criterion) {
             |mut book| {
                 let order = NewOrderRequest {
                     user_id: 1,
-                    symbol: "BTC/USD".to_string(),
+                    symbol: Arc::from("BTC/USD"),
                     order_type: OrderType::Buy,
                     price: black_box(50000),
                     quantity: black_box(100),
@@ -53,7 +54,7 @@ fn bench_full_match(c: &mut Criterion) {
                 // Pre-populate with a sell order
                 book.match_order(NewOrderRequest {
                     user_id: 2,
-                    symbol: "BTC/USD".to_string(),
+                    symbol: Arc::from("BTC/USD"),
                     order_type: OrderType::Sell,
                     price: 50000,
                     quantity: 100,
@@ -63,7 +64,7 @@ fn bench_full_match(c: &mut Criterion) {
             |mut book| {
                 let buy_order = NewOrderRequest {
                     user_id: 1,
-                    symbol: "BTC/USD".to_string(),
+                    symbol: Arc::from("BTC/USD"),
                     order_type: OrderType::Buy,
                     price: black_box(50000),
                     quantity: black_box(100),
@@ -89,7 +90,7 @@ fn bench_partial_match(c: &mut Criterion) {
                 let mut book = OrderBook::new();
                 let (_, _) = book.match_order(NewOrderRequest {
                     user_id: 2,
-                    symbol: "BTC/USD".to_string(),
+                    symbol: Arc::from("BTC/USD"),
                     order_type: OrderType::Sell,
                     price: 50000,
                     quantity: 100,
@@ -99,7 +100,7 @@ fn bench_partial_match(c: &mut Criterion) {
             |mut book| {
                 let buy_order = NewOrderRequest {
                     user_id: 1,
-                    symbol: "BTC/USD".to_string(),
+                    symbol: Arc::from("BTC/USD"),
                     order_type: OrderType::Buy,
                     price: black_box(50000),
                     quantity: black_box(50), // Partial
@@ -129,7 +130,7 @@ fn bench_memory_pool_reuse(c: &mut Criterion) {
                 // Add order 1
                 let order1 = NewOrderRequest {
                     user_id: 1,
-                    symbol: "BTC/USD".to_string(),
+                    symbol: Arc::from("BTC/USD"),
                     order_type: OrderType::Buy,
                     price: 50000,
                     quantity: 100,
@@ -139,7 +140,7 @@ fn bench_memory_pool_reuse(c: &mut Criterion) {
                 // Remove order (via complete match)
                 let order2 = NewOrderRequest {
                     user_id: 2,
-                    symbol: "BTC/USD".to_string(),
+                    symbol: Arc::from("BTC/USD"),
                     order_type: OrderType::Sell,
                     price: 49999,
                     quantity: 100,
@@ -149,7 +150,7 @@ fn bench_memory_pool_reuse(c: &mut Criterion) {
                 // Add order 3 - should reuse freed slot
                 let order3 = NewOrderRequest {
                     user_id: 3,
-                    symbol: "BTC/USD".to_string(),
+                    symbol: Arc::from("BTC/USD"),
                     order_type: OrderType::Buy,
                     price: 51000,
                     quantity: 50,
@@ -185,7 +186,7 @@ fn bench_price_level_lookup(c: &mut Criterion) {
                         for i in 0..num_levels {
                             book.match_order(NewOrderRequest {
                                 user_id: 100 + i as u64,
-                                symbol: "BTC/USD".to_string(),
+                                symbol: Arc::from("BTC/USD"),
                                 order_type: OrderType::Sell,
                                 price: 50000 + (i as u64),
                                 quantity: 100,
@@ -197,7 +198,7 @@ fn bench_price_level_lookup(c: &mut Criterion) {
                         // Issue a buy order that will scan all levels
                         let buy_order = NewOrderRequest {
                             user_id: 1,
-                            symbol: "BTC/USD".to_string(),
+                            symbol: Arc::from("BTC/USD"),
                             order_type: OrderType::Buy,
                             price: black_box(50000 + num_levels as u64),
                             quantity: black_box(1000),
@@ -235,7 +236,7 @@ fn bench_fifo_order_queue(c: &mut Criterion) {
                         for i in 0..queue_depth {
                             book.match_order(NewOrderRequest {
                                 user_id: 100 + i as u64,
-                                symbol: "BTC/USD".to_string(),
+                                symbol: Arc::from("BTC/USD"),
                                 order_type: OrderType::Sell,
                                 price: 50000,
                                 quantity: 100,
@@ -247,7 +248,7 @@ fn bench_fifo_order_queue(c: &mut Criterion) {
                         // Single large buy that matches all orders in queue
                         let buy_order = NewOrderRequest {
                             user_id: 1,
-                            symbol: "BTC/USD".to_string(),
+                            symbol: Arc::from("BTC/USD"),
                             order_type: OrderType::Buy,
                             price: 50000,
                             quantity: black_box((queue_depth * 100) as u64),
@@ -284,7 +285,7 @@ fn bench_trade_allocation(c: &mut Criterion) {
                     for i in 0..num_trades {
                         trades.push(TradeNotification {
                             trade_id: i as u64,
-                            symbol: "BTC/USD".to_string(),
+                            symbol: Arc::from("BTC/USD"),
                             matched_price: 50000,
                             matched_quantity: 100,
                             buyer_user_id: 1,
@@ -361,7 +362,7 @@ fn bench_worst_case_crossing(c: &mut Criterion) {
                 for i in 0..1000 {
                     book.match_order(NewOrderRequest {
                         user_id: 100 + i as u64,
-                        symbol: "BTC/USD".to_string(),
+                        symbol: Arc::from("BTC/USD"),
                         order_type: OrderType::Sell,
                         price: 50000 + i as u64,
                         quantity: 10,
@@ -373,7 +374,7 @@ fn bench_worst_case_crossing(c: &mut Criterion) {
                 // Massive buy order crossing all levels
                 let big_buy = NewOrderRequest {
                     user_id: 1,
-                    symbol: "BTC/USD".to_string(),
+                    symbol: Arc::from("BTC/USD"),
                     order_type: OrderType::Buy,
                     price: black_box(51000),
                     quantity: black_box(10000),

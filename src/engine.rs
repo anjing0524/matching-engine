@@ -43,12 +43,15 @@ impl MatchingEngine {
                 EngineCommand::NewOrder(request) => {
                     let (trades, confirmation_opt) = self.orderbook.match_order(request);
 
+                    // Batch timestamp generation - call SystemTime once for all trades
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos() as u64;
+
                     for mut trade in trades {
                         trade.trade_id = self.next_trade_id;
-                        trade.timestamp = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_nanos() as u64;
+                        trade.timestamp = timestamp;
                         self.next_trade_id += 1;
                         // 将成交结果发送出去
                         if self.output_sender.send(EngineOutput::Trade(trade)).is_err() {
