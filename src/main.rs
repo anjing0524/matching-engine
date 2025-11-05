@@ -23,16 +23,16 @@ async fn main() {
     println!("通道已创建");
 
     // 在一个独立的系统线程中运行撮合引擎
-    let engine_thread = thread::spawn(move || {
-        let mut engine = engine::MatchingEngine::new(command_receiver, output_sender);
-        engine.run();
-    });
+    // let engine_thread = thread::spawn(move || {
+    //     let mut engine = engine::MatchingEngine::new(command_receiver, output_sender);
+    //     engine.run();
+    // });
 
     println!("撮合引擎线程已启动");
 
     // 在 Tokio 运行时中启动网络服务器
-    let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
-    let server_handle = tokio::spawn(network::run_server(addr, command_sender, output_receiver));
+    // let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+    // let server_handle = tokio::spawn(network::run_server(addr, command_sender, output_receiver));
 
     println!("网络服务器任务已启动");
 
@@ -42,10 +42,10 @@ async fn main() {
     println!("休眠结束");
 
     // 等待服务器任务结束
-    if let Err(e) = server_handle.await {
-        eprintln!("网络服务器任务出现严重错误: {:?}", e);
-    }
+    // if let Err(e) = server_handle.await {
+    //     eprintln!("网络服务器任务出现严重错误: {:?}", e);
+    // }
 
     // 等待引擎线程结束（虽然在当前设计中它是一个无限循环）
-    engine_thread.join().expect("撮合引擎线程崩溃");
+    // engine_thread.join().expect("撮合引擎线程崩溃");
 }

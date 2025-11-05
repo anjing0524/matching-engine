@@ -58,6 +58,7 @@ impl OrderBook {
     pub fn match_order(&mut self, mut request: NewOrderRequest) -> (Vec<TradeNotification>, Option<OrderConfirmation>) {
         let mut trades = Vec::new();
         let mut remaining_quantity = request.quantity;
+        let symbol = request.symbol.clone(); // Clone once here
 
         // 移除已完全成交的对手订单ID列表
         let mut orders_to_remove = Vec::new();
@@ -79,7 +80,7 @@ impl OrderBook {
 
                         trades.push(TradeNotification {
                             trade_id: 0, 
-                            symbol: request.symbol.clone(),
+                            symbol: symbol.clone(),
                             matched_price: counter_order.price,
                             matched_quantity: trade_quantity,
                             buyer_user_id: request.user_id,
@@ -120,7 +121,7 @@ impl OrderBook {
 
                         trades.push(TradeNotification {
                             trade_id: 0,
-                            symbol: request.symbol.clone(),
+                            symbol: symbol.clone(),
                             matched_price: counter_order.price,
                             matched_quantity: trade_quantity,
                             buyer_user_id: counter_order.user_id,

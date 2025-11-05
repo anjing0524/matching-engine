@@ -1,14 +1,15 @@
 use serde::{Deserialize, Serialize};
+use bincode::{Encode, Decode};
 
 /// 订单类型，区分买单和卖单
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
 pub enum OrderType {
     Buy,
     Sell,
 }
 
 /// 新订单请求，由客户端发起
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct NewOrderRequest {
     pub user_id: u64,
     pub symbol: String,
@@ -18,21 +19,21 @@ pub struct NewOrderRequest {
 }
 
 /// 取消订单请求
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct CancelOrderRequest {
     pub user_id: u64,
     pub order_id: u64,
 }
 
 /// 订单确认回报，发送给下单用户
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct OrderConfirmation {
     pub order_id: u64,
     pub user_id: u64,
 }
 
 /// 成交回报，发送给交易双方
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct TradeNotification {
     pub trade_id: u64,
     pub symbol: String,
@@ -48,4 +49,18 @@ pub struct TradeNotification {
     pub seller_order_id: u64,
     // 时间戳
     pub timestamp: u64,
+}
+
+/// 客户端发送给服务器的所有消息的顶层枚举
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+pub enum ClientMessage {
+    NewOrder(NewOrderRequest),
+    CancelOrder(CancelOrderRequest),
+}
+
+/// 服务器发送给客户端的所有消息的顶层枚举
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+pub enum ServerMessage {
+    Trade(TradeNotification),
+    Confirmation(OrderConfirmation),
 }

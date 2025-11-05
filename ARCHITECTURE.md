@@ -43,25 +43,26 @@ This is a **high-performance futures trading matching engine** written in 100% S
 │   ├── lib.rs                   # Library module declarations (exported to tests/benches)
 │   ├── main.rs                  # Application entry point & orchestration
 │   ├── protocol.rs              # Data types for client-server communication
-│   ├── orderbook.rs             # Core order book implementation (282 lines)
-│   ├── engine.rs                # Matching engine main loop (75 lines)
-│   ├── network.rs               # TCP server & client connection handling (93 lines)
+│   ├── orderbook.rs             # Core order book implementation
+│   ├── engine.rs                # Matching engine main loop
+│   ├── network.rs               # TCP server & client connection handling
 │   └── bin/
 │       └── load_generator.rs    # Performance testing tool with concurrent clients
 ├── tests/
 │   └── basic_trade.rs           # Integration test: buy/sell order matching
 ├── benches/
+│   ├── comprehensive_benchmark.rs
+│   ├── e2e_network_benchmark.rs
+│   ├── network_benchmark.rs
 │   └── orderbook_benchmark.rs   # Criterion benchmarks for order matching performance
 ├── Cargo.toml                   # Project manifest & dependencies
 ├── Cargo.lock                   # Locked dependency versions
-├── PROGRESS.md                  # Implementation progress tracking
-├── BENCHMARK_REPORT.md          # Performance analysis & results
 └── target/                      # Build artifacts (Rust standard)
 ```
 
 ## 3. Core Modules Description
 
-### 3.1 `protocol.rs` (50 lines)
+### 3.1 `protocol.rs`
 **Purpose**: Defines all data structures for client-server communication
 
 **Key Types**:
@@ -73,7 +74,7 @@ This is a **high-performance futures trading matching engine** written in 100% S
 
 **Design Pattern**: All types use `serde` for JSON serialization/deserialization
 
-### 3.2 `orderbook.rs` (282 lines)
+### 3.2 `orderbook.rs`
 **Purpose**: Core matching engine data structure and matching algorithm
 
 **Key Components**:
@@ -110,7 +111,7 @@ OrderNode {
 - Remove order: O(log n) for price lookup
 - Match order: O(n) worst case (iterate all price levels)
 
-### 3.3 `engine.rs` (75 lines)
+### 3.3 `engine.rs`
 **Purpose**: Matching engine main loop - receives commands, processes orders
 
 **Key Logic**:
@@ -134,12 +135,12 @@ MatchingEngine {
 
 **Trade Flow**:
 ```
-NewOrderRequest → orderbook.match_order() → (Vec<TradeNotification>, Option<OrderConfirmation>)
+NewOrderRequest → orderbook.match_order(request) → (Vec<TradeNotification>, Option<OrderConfirmation>)
                                              ↓
                                          Send to output_sender
 ```
 
-### 3.4 `network.rs` (93 lines)
+### 3.4 `network.rs`
 **Purpose**: Async TCP server handling multiple concurrent client connections
 
 **Architecture**:
@@ -162,7 +163,7 @@ For each client connection:
 - Broadcast channel for efficient multi-client distribution
 - Connection auto-closes on client disconnect
 
-### 3.5 `main.rs` (51 lines)
+### 3.5 `main.rs`
 **Purpose**: Application orchestration and bootstrapping
 
 **Startup Sequence**:
@@ -187,7 +188,7 @@ For each client connection:
 | `bytes` | 1.x | Efficient byte handling | Required by tokio-util |
 | `tokio-util` | 0.7 | Codec utilities | LengthDelimitedCodec for framing |
 | `parking_lot` | 0.12 | Mutex replacement | Faster, no poisoning |
-| `bumpalo` | 3.16 | Arena allocator | Fast allocation, potential future use |
+| `bumpalo` | 3.16.0 | Arena allocator | Fast allocation, potential future use |
 | `serde` + `serde_json` | 1.0 | Serialization | All JSON protocol communication |
 | `tracing` | 0.1 | Structured logging | With env-filter subscriber |
 | `futures` | 0.3 | Async utilities | StreamExt, SinkExt traits |
@@ -333,10 +334,9 @@ cargo run --release --bin load_generator
 
 | Operation | Median Time | Throughput |
 |-----------|------------|-----------|
-| Add order (no match) | ~227 ns | ~4,400,000 ops/sec |
-| Full match | ~4.287 ms | ~233 ops/sec* |
+| 1-to-1 Match (1000 levels) | ~108 µs | ~9,250 ops/sec |
 
-*Note: Matching performance is unreliable due to benchmark test design issues (includes setup overhead). See `BENCHMARK_REPORT.md` for detailed analysis.
+*Note: See `BENCHMARK_CONSOLIDATED_REPORT.md` for detailed analysis.
 
 ### 7.3 Known Limitations
 
@@ -384,9 +384,8 @@ Client (TCP) ↔ Network Handler (Tokio)
 - Verifies trade notification received
 - Verifies correctness of trade details
 
-**Benchmark** (`benches/orderbook_benchmark.rs`):
-- Pre-populates 1000 price levels
-- Measures single matching operation
+**Benchmark** (`benches/`):
+- Comprehensive benchmarks for various scenarios.
 - Uses Criterion for statistical analysis
 
 **Load Generator** (`src/bin/load_generator.rs`):

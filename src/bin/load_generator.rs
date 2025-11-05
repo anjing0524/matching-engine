@@ -1,5 +1,5 @@
 use futures::{SinkExt, StreamExt};
-use matching_engine::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
+use matching_engine::protocol::{ClientMessage, NewOrderRequest, OrderType, ServerMessage};
 use rand::Rng;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use bincode::config;
 
 // --- 配置 ---
 const NUM_CLIENTS: u32 = 8; // 模拟的并发客户端数量
@@ -61,6 +62,8 @@ async fn main() {
     std::process::exit(0);
 }
 
+
+
 async fn run_client(
     client_id: u32,
     trade_counter: Arc<AtomicU64>,
@@ -79,6 +82,7 @@ async fn run_client(
     let (mut writer, mut reader) = framed.split();
 
     let (order_time_tx, mut order_time_rx) = mpsc::channel::<(u64, Instant)>(1000);
+    let config = config::standard();
 
     // 监听服务器响应的任务
     tokio::spawn(async move {
@@ -89,15 +93,25 @@ async fn run_client(
                     sent_orders.insert(order_id, time);
                 }
                 Some(Ok(buf)) = reader.next() => {
-                    if let Ok(trade) = serde_json::from_slice::<TradeNotification>(&buf) {
-                        trade_counter.fetch_add(1, Ordering::Relaxed);
-                        // 估算延迟
-                        if let Some(start_time) = sent_orders.get(&trade.buyer_order_id).or_else(|| sent_orders.get(&trade.seller_order_id)) {
-                            let latency = start_time.elapsed().as_nanos();
-                            let _ = latency_tx.send(latency).await;
+                    match bincode::decode_from_slice(&buf, config) {
+                        Ok((decoded, _len)) => {
+                            match decoded {
+                                ServerMessage::Trade(trade) => {
+                                    trade_counter.fetch_add(1, Ordering::Relaxed);
+                                    // 估算延迟
+                                    if let Some(start_time) = sent_orders.get(&trade.buyer_order_id).or_else(|| sent_orders.get(&trade.seller_order_id)) {
+                                        let latency = start_time.elapsed().as_nanos();
+                                        let _ = latency_tx.send(latency).await;
+                                    }
+                                }
+                                ServerMessage::Confirmation(_conf) => {
+                                    // 可以在这里处理挂单确认的延迟
+                                }
+                            }
                         }
-                    } else if let Ok(_conf) = serde_json::from_slice::<OrderConfirmation>(&buf) {
-                        // 可以在这里处理挂单确认的延迟
+                        Err(e) => {
+                            eprintln!("Bincode decoding error in load_generator: {:?}", e);
+                        }
                     }
                 }
                 else => break,
@@ -126,14 +140,19 @@ async fn run_client(
             (order, order_id_counter)
         };
 
-        let order_json = serde_json::to_string(&order).unwrap();
-        if writer.send(order_json.into()).await.is_ok() {
-            // 记录发送时间，用于计算延迟
-            let _ = order_time_tx.send((order_id, Instant::now())).await;
-        } else {
-            break; // 连接断开
+        let client_message = ClientMessage::NewOrder(order);
+        match bincode::encode_to_vec(client_message, config) {
+            Ok(encoded_msg) => {
+                if writer.send(encoded_msg.into()).await.is_ok() {
+                    // 记录发送时间，用于计算延迟
+                    let _ = order_time_tx.send((order_id, Instant::now())).await;
+                } else {
+                    break; // 连接断开
+                }
+            }
+            Err(e) => {
+                eprintln!("Bincode encoding error in load_generator: {:?}", e);
+            }
         }
-        // 控制发送速率，避免瞬间打满channel，可以按需调整
-        tokio::time::sleep(Duration::from_micros(100)).await;
     }
 }

@@ -18,14 +18,20 @@ fn start_echo_server(port: u16) -> thread::JoinHandle<()> {
         for stream in listener.incoming() {
             match stream {
                 Ok(mut stream) => {
-                    let mut buffer = [0; 1024];
-                    match stream.read(&mut buffer) {
-                        Ok(n) if n > 0 => {
-                            // 立即回显
-                            let _ = stream.write_all(&buffer[..n]);
+                    // 为每个连接创建一个新线程来处理
+                    thread::spawn(move || {
+                        let mut buffer = [0; 1024];
+                        // 在单个连接上循环处理多个请求
+                        while let Ok(n) = stream.read(&mut buffer) {
+                            if n == 0 {
+                                break; // 客户端关闭了连接
+                            }
+                            // 回显数据
+                            if stream.write_all(&buffer[..n]).is_err() {
+                                break; // 写入失败，客户端可能已断开
+                            }
                         }
-                        _ => {}
-                    }
+                    });
                 }
                 Err(_) => {}
             }
@@ -42,9 +48,15 @@ fn start_matching_server(port: u16) -> thread::JoinHandle<()> {
         for stream in listener.incoming() {
             match stream {
                 Ok(mut stream) => {
-                    let mut buffer = [0; 1024];
-                    match stream.read(&mut buffer) {
-                        Ok(n) if n > 0 => {
+                    // 为每个连接创建一个新线程来处理
+                    thread::spawn(move || {
+                        let mut buffer = [0; 1024];
+                        // 在单个连接上循环处理多个请求
+                        while let Ok(n) = stream.read(&mut buffer) {
+                            if n == 0 {
+                                break; // 客户端关闭了连接
+                            }
+
                             // 模拟JSON反序列化 + 匹配 + 序列化
                             let _data = String::from_utf8_lossy(&buffer[..n]);
 
@@ -56,10 +68,11 @@ fn start_matching_server(port: u16) -> thread::JoinHandle<()> {
 
                             // 模拟响应序列化
                             let response = format!("{{\"result\":{}}}\n", sum);
-                            let _ = stream.write_all(response.as_bytes());
+                            if stream.write_all(response.as_bytes()).is_err() {
+                                break; // 写入失败
+                            }
                         }
-                        _ => {}
-                    }
+                    });
                 }
                 Err(_) => {}
             }

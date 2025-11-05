@@ -38,26 +38,24 @@ cargo run --release --bin load_generator
 
 ```
 src/
-├── main.rs              # Application entry point (51 lines)
+├── main.rs              # Application entry point
 ├── lib.rs               # Module exports
-├── protocol.rs          # Client-server data types (50 lines)
-├── engine.rs            # Matching engine main loop (75 lines)
-├── network.rs           # TCP server implementation (93 lines)
-├── orderbook.rs         # Order matching logic (282 lines)
+├── protocol.rs          # Client-server data types
+├── engine.rs            # Matching engine main loop
+├── network.rs           # TCP server implementation
+├── orderbook.rs         # Order matching logic
 └── bin/
-    └── load_generator.rs # Performance test tool (140 lines)
+    └── load_generator.rs # Performance test tool
 
 tests/
 └── basic_trade.rs       # Integration test
 
 benches/
-└── orderbook_benchmark.rs # Criterion benchmarks
+└── *.rs                 # Criterion benchmarks
 
 Documentation:
-├── ARCHITECTURE.md      # Complete system design (431 lines)
-├── SYSTEM_DIAGRAM.md    # Visual architecture diagrams (374 lines)
-├── PROGRESS.md          # Implementation status
-└── BENCHMARK_REPORT.md  # Performance analysis
+├── ARCHITECTURE.md      # Complete system design
+└── BENCHMARK_CONSOLIDATED_REPORT.md  # Performance analysis
 ```
 
 ## Architecture Overview
@@ -148,10 +146,9 @@ NewOrderRequest → Network Handler → EngineCommand → Matching Engine
 
 | Operation | Time | Throughput |
 |-----------|------|-----------|
-| Add order (no match) | ~227 ns | ~4.4M ops/sec |
-| Full match | ~4.287 ms | ~233 ops/sec* |
+| 1-to-1 Match (1000 levels) | ~108 µs | ~9,250 ops/sec |
 
-*Note: Matching benchmark includes setup overhead - see BENCHMARK_REPORT.md for details*
+*Note: See `BENCHMARK_CONSOLIDATED_REPORT.md` for detailed analysis.* 
 
 ### Capacity Estimates
 
@@ -202,9 +199,7 @@ cargo run --release --bin load_generator
 ## Documentation
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - Complete system design, modules, patterns
-- **[SYSTEM_DIAGRAM.md](SYSTEM_DIAGRAM.md)** - Visual diagrams of architecture, flows, data structures
-- **[PROGRESS.md](PROGRESS.md)** - Implementation checklist and status
-- **[BENCHMARK_REPORT.md](BENCHMARK_REPORT.md)** - Performance analysis and optimization opportunities
+- **[BENCHMARK_CONSOLIDATED_REPORT.md](BENCHMARK_CONSOLIDATED_REPORT.md)** - Performance analysis and optimization opportunities
 
 ## Recommended Next Steps
 
@@ -247,10 +242,8 @@ cargo outdated              # Check for updates
 
 ## Project Statistics
 
-- **Total lines of code**: ~556 (excluding tests/benches)
 - **Safe Rust**: 100% (no `unsafe` blocks)
 - **Dependencies**: 9 core + 1 optional
-- **Documentation**: 1100+ lines across 4 files
 
 ## License
 
@@ -262,6 +255,4 @@ Safe Rust Futures Matching Engine - Prototype Implementation
 
 ---
 
-**For detailed architecture information, see [ARCHITECTURE.md](ARCHITECTURE.md)**
-
-**For visual diagrams, see [SYSTEM_DIAGRAM.md](SYSTEM_DIAGRAM.md)**
+**For detailed architecture information, see [ARCHITECTURE.MD](ARCHITECTURE.md)**
