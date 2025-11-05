@@ -157,20 +157,23 @@ impl OrderBook {
             }
         }
 
+        // 将 arena Vec 转换为标准 Vec（必须在调用 remove_order() 之前完成）
+        // 这样可以释放对 arena 的借用，避免借用检查器错误
+        // into_iter().collect() 会将数据移出 arena 到堆上
+        let trades_vec: Vec<TradeNotification> = trades.into_iter().collect();
+        let orders_to_remove_vec: Vec<u64> = orders_to_remove.into_iter().collect();
+        let prices_to_remove_vec: Vec<u64> = prices_to_remove.into_iter().collect();
+
         // 移除已成交的订单和价格层级
-        for order_id in orders_to_remove {
+        for order_id in orders_to_remove_vec {
             self.remove_order(order_id);
         }
-        for price in prices_to_remove {
+        for price in prices_to_remove_vec {
             match request.order_type {
                 OrderType::Buy => self.asks.remove(&price),
                 OrderType::Sell => self.bids.remove(&price),
             };
         }
-
-        // 将 arena Vec 转换为标准 Vec（必须在 arena.reset() 前完成）
-        // into_iter().collect() 会将数据移出 arena 到堆上
-        let trades_vec: Vec<TradeNotification> = trades.into_iter().collect();
 
         // 重置 arena - 极快的批量释放（只是重置指针）
         // 比逐个 drop Vec 快 10-100 倍
