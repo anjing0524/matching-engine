@@ -316,7 +316,7 @@ fn bench_json_serialization(c: &mut Criterion) {
     group.bench_function("trade_notification_serialize", |b| {
         let trade = TradeNotification {
             trade_id: 1,
-            symbol: "BTC/USD".to_string(),
+            symbol: Arc::from("BTC/USD"),
             matched_price: 50000,
             matched_quantity: 100,
             buyer_user_id: 1,

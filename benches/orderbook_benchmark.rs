@@ -11,12 +11,12 @@ fn realistic_match_benchmark(c: &mut Criterion) {
 
     let book_size = 1000;
 
-    // 1. 一次性创建一个预填充的“母版”订单簿
+    // 1. 一次性创建一个预填充的"母版"订单簿
     let mut master_orderbook = OrderBook::new();
     for i in 0..book_size {
         master_orderbook.match_order(NewOrderRequest {
             user_id: (i + 1) as u64,
-            symbol: "BTC/USD".to_string(),
+            symbol: Arc::from("BTC/USD"),
             order_type: OrderType::Sell,
             price: 50000 + i as u64,
             quantity: 10,
