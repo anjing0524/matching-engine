@@ -19,6 +19,7 @@ crossbeam = "0.8"
 futures = "0.3"
 rand = "0.8"
 num_cpus = "1.16"
+smallvec = "1.13"
 
 # 可选依赖
 core_affinity = { version = "0.8", optional = true }

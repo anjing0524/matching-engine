@@ -3,6 +3,7 @@ use crate::symbol_pool::SymbolPool;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use bumpalo::Bump;
+use smallvec::SmallVec;
 
 // 订单簿中的一个节点，代表一个具体的订单
 #[derive(Clone)]
@@ -77,15 +78,16 @@ impl OrderBook {
 
     // 撮合一个新订单
     // 返回值是一个元组，包含 (成交列表, 新挂单的确认信息)
-    pub fn match_order(&mut self, mut request: NewOrderRequest) -> (Vec<TradeNotification>, Option<OrderConfirmation>) {
+    pub fn match_order(&mut self, mut request: NewOrderRequest) -> (SmallVec<[TradeNotification; 8]>, Option<OrderConfirmation>) {
         // 优化策略：
         // 1. 使用symbol_pool.intern()确保符号共享（避免重复Arc创建）
         // 2. 订单/价格ID使用普通Vec（简单u64不需要arena）
-        // 3. 交易通知使用arena分配（大对象，批量释放效率高）
+        // 3. 交易通知使用SmallVec（90%场景<8个trades，避免堆分配）
 
         let symbol = self.symbol_pool.intern(&request.symbol);
 
-        let mut trades = bumpalo::collections::Vec::with_capacity_in(16, &self.arena);
+        // SmallVec: 8个以内trades栈上分配，超过则堆分配
+        let mut trades: SmallVec<[TradeNotification; 8]> = SmallVec::new();
         let mut orders_to_remove = Vec::with_capacity(16);  // 普通Vec，避免arena借用
         let mut prices_to_remove = Vec::with_capacity(4);   // 普通Vec，避免arena借用
 
@@ -178,12 +180,7 @@ impl OrderBook {
             }
         }
 
-        // 优化：将arena trades转换为标准Vec（仅一次convert）
-        // 由于orders_to_remove和prices_to_remove已经是普通Vec，无需转换
-        let trades_vec: Vec<TradeNotification> = trades.into_iter().collect();
-
         // 移除已成交的订单和价格层级
-        // 此时arena借用已释放，可以安全调用remove_order
         for order_id in orders_to_remove {
             self.remove_order(order_id);
         }
@@ -194,19 +191,15 @@ impl OrderBook {
             };
         }
 
-        // 重置 arena - 极快的批量释放（只是重置指针）
-        // 比逐个 drop Vec 快 10-100 倍
-        self.arena.reset();
-
         // 如果新订单还有剩余数量，则将其添加到订单簿中
         if remaining_quantity > 0 {
             request.quantity = remaining_quantity;
             request.symbol = symbol; // 使用interned symbol
             let (new_order_id, user_id) = self.add_order(request);
             let confirmation = OrderConfirmation { order_id: new_order_id, user_id };
-            (trades_vec, Some(confirmation))
+            (trades, Some(confirmation))
         } else {
-            (trades_vec, None) // 完全成交，没有新挂单
+            (trades, None) // 完全成交，没有新挂单
         }
     }
 

@@ -30,7 +30,7 @@ fn bench_partition_count(c: &mut Criterion) {
                     // 提交1000个订单
                     for i in 0..1000 {
                         let order = NewOrderRequest {
-                            user_id: i,
+                            user_id: i as u64,
                             symbol: Arc::from("BTC/USD"),
                             order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
                             price: 50000 + (i % 100) as u64,
@@ -70,7 +70,7 @@ fn bench_batch_size(c: &mut Criterion) {
                 b.iter(|| {
                     for i in 0..1000 {
                         let order = NewOrderRequest {
-                            user_id: i,
+                            user_id: i as u64,
                             symbol: Arc::from("BTC/USD"),
                             order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
                             price: 50000,
@@ -111,7 +111,7 @@ fn bench_multi_symbol(c: &mut Criterion) {
             for i in 0..1000 {
                 let symbol = symbols[i % symbols.len()];
                 let order = NewOrderRequest {
-                    user_id: i,
+                    user_id: i as u64,
                     symbol: Arc::from(symbol),
                     order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
                     price: 50000,

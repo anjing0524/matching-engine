@@ -10,6 +10,7 @@ use crate::orderbook::OrderBook;
 use crate::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
 use crate::symbol_pool::SymbolPool;
 use crossbeam::channel::{bounded, Sender, Receiver};
+use smallvec::SmallVec;
 use std::sync::Arc;
 use std::thread;
 use std::collections::hash_map::DefaultHasher;
@@ -52,7 +53,7 @@ pub struct OrderRequest {
 /// 订单响应
 pub enum OrderResponse {
     Matched {
-        trades: Vec<TradeNotification>,
+        trades: SmallVec<[TradeNotification; 8]>,
         confirmation: Option<OrderConfirmation>,
     },
     Error(String),
