@@ -13,3 +13,4 @@ pub mod orderbook;
 pub mod engine;
 pub mod network;
 pub mod symbol_pool;
+pub mod partitioned_engine;

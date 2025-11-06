@@ -18,6 +18,14 @@ tikv-jemallocator = "0.5"
 crossbeam = "0.8"
 futures = "0.3"
 rand = "0.8"
+num_cpus = "1.16"
+
+# 可选依赖
+core_affinity = { version = "0.8", optional = true }
+
+[features]
+# CPU亲和性特性（需要平台支持）
+cpu-affinity = ["core_affinity"]
 
 [dev-dependencies]
 criterion = "0.5"
@@ -36,4 +44,9 @@ harness = false
 
 [[bench]]
 name = "e2e_network_benchmark"
+harness = false
+
+
+[[bench]]
+name = "partitioned_engine_benchmark"
 harness = false
