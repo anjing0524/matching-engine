@@ -1,5 +1,7 @@
 use crate::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
+use crate::symbol_pool::SymbolPool;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use bumpalo::Bump;
 
 // 订单簿中的一个节点，代表一个具体的订单
@@ -26,7 +28,7 @@ struct PriceLevel {
 }
 
 // 订单簿核心结构
-// 注意: 手动实现 Clone 因为 Bump 不支持 Clone
+// 注意: 手动实现 Clone 因为 Bump 和 Arc<SymbolPool> 需要特殊处理
 pub struct OrderBook {
     // 买单侧，按价格从高到低排序
     bids: BTreeMap<u64, PriceLevel>,
@@ -43,10 +45,19 @@ pub struct OrderBook {
     // Arena 分配器：用于临时 Vec 分配，显著减少堆分配开销
     // 每次匹配后 reset，实现零开销批量释放
     arena: Bump,
+    // 符号字符串池：避免重复创建Arc<str>
+    // 使用Arc包装以便Clone时共享同一个池
+    symbol_pool: Arc<SymbolPool>,
 }
 
 impl OrderBook {
     pub fn new() -> Self {
+        Self::with_symbol_pool(Arc::new(SymbolPool::new()))
+    }
+
+    /// 创建一个使用指定符号池的订单簿
+    /// 允许多个订单簿共享同一个符号池
+    pub fn with_symbol_pool(symbol_pool: Arc<SymbolPool>) -> Self {
         OrderBook {
             bids: BTreeMap::new(),
             asks: BTreeMap::new(),
@@ -55,20 +66,30 @@ impl OrderBook {
             free_list_head: None,
             next_order_id: 1,
             arena: Bump::with_capacity(1024), // 初始 1KB arena，自动扩展
+            symbol_pool,
         }
+    }
+
+    /// 获取符号池的引用
+    pub fn symbol_pool(&self) -> &SymbolPool {
+        &self.symbol_pool
     }
 
     // 撮合一个新订单
     // 返回值是一个元组，包含 (成交列表, 新挂单的确认信息)
     pub fn match_order(&mut self, mut request: NewOrderRequest) -> (Vec<TradeNotification>, Option<OrderConfirmation>) {
-        // 使用 arena 分配临时 Vec - 极快的指针 bump 分配
-        // 相比 heap 分配快 10-40 倍 (5-10ns vs 100-200ns)
+        // 优化策略：
+        // 1. 使用symbol_pool.intern()确保符号共享（避免重复Arc创建）
+        // 2. 订单/价格ID使用普通Vec（简单u64不需要arena）
+        // 3. 交易通知使用arena分配（大对象，批量释放效率高）
+
+        let symbol = self.symbol_pool.intern(&request.symbol);
+
         let mut trades = bumpalo::collections::Vec::with_capacity_in(16, &self.arena);
-        let mut orders_to_remove = bumpalo::collections::Vec::with_capacity_in(16, &self.arena);
-        let mut prices_to_remove = bumpalo::collections::Vec::with_capacity_in(4, &self.arena);
+        let mut orders_to_remove = Vec::with_capacity(16);  // 普通Vec，避免arena借用
+        let mut prices_to_remove = Vec::with_capacity(4);   // 普通Vec，避免arena借用
 
         let mut remaining_quantity = request.quantity;
-        let symbol = request.symbol.clone(); // Arc::clone is cheap (atomic ref count)
 
         match request.order_type {
             OrderType::Buy => {
@@ -157,18 +178,16 @@ impl OrderBook {
             }
         }
 
-        // 将 arena Vec 转换为标准 Vec（必须在调用 remove_order() 之前完成）
-        // 这样可以释放对 arena 的借用，避免借用检查器错误
-        // into_iter().collect() 会将数据移出 arena 到堆上
+        // 优化：将arena trades转换为标准Vec（仅一次convert）
+        // 由于orders_to_remove和prices_to_remove已经是普通Vec，无需转换
         let trades_vec: Vec<TradeNotification> = trades.into_iter().collect();
-        let orders_to_remove_vec: Vec<u64> = orders_to_remove.into_iter().collect();
-        let prices_to_remove_vec: Vec<u64> = prices_to_remove.into_iter().collect();
 
         // 移除已成交的订单和价格层级
-        for order_id in orders_to_remove_vec {
+        // 此时arena借用已释放，可以安全调用remove_order
+        for order_id in orders_to_remove {
             self.remove_order(order_id);
         }
-        for price in prices_to_remove_vec {
+        for price in prices_to_remove {
             match request.order_type {
                 OrderType::Buy => self.asks.remove(&price),
                 OrderType::Sell => self.bids.remove(&price),
@@ -182,6 +201,7 @@ impl OrderBook {
         // 如果新订单还有剩余数量，则将其添加到订单簿中
         if remaining_quantity > 0 {
             request.quantity = remaining_quantity;
+            request.symbol = symbol; // 使用interned symbol
             let (new_order_id, user_id) = self.add_order(request);
             let confirmation = OrderConfirmation { order_id: new_order_id, user_id };
             (trades_vec, Some(confirmation))
@@ -298,6 +318,7 @@ impl OrderBook {
 
 // 手动实现 Clone trait
 // Bump allocator 不支持 Clone，所以创建新的空 arena
+// SymbolPool使用Arc共享，克隆时仅增加引用计数
 impl Clone for OrderBook {
     fn clone(&self) -> Self {
         OrderBook {
@@ -308,6 +329,7 @@ impl Clone for OrderBook {
             free_list_head: self.free_list_head,
             next_order_id: self.next_order_id,
             arena: Bump::with_capacity(1024), // 新建 arena
+            symbol_pool: self.symbol_pool.clone(), // Arc克隆，共享池
         }
     }
 }

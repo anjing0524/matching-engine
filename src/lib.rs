@@ -12,3 +12,4 @@ pub mod protocol;
 pub mod orderbook;
 pub mod engine;
 pub mod network;
+pub mod symbol_pool;
