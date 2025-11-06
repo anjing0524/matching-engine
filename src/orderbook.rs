@@ -53,7 +53,7 @@ pub struct OrderBook {
 
 impl OrderBook {
     pub fn new() -> Self {
-        Self::with_symbol_pool(Arc::new(SymbolPool::new()))
+        Self::with_symbol_pool(Arc::clone(crate::symbol_pool::global_symbol_pool()))
     }
 
     /// 创建一个使用指定符号池的订单簿

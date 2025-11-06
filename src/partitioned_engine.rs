@@ -171,7 +171,8 @@ pub struct PartitionedEngine {
 impl PartitionedEngine {
     /// 创建新的分区引擎
     pub fn new(config: PartitionConfig) -> Self {
-        let symbol_pool = Arc::new(SymbolPool::with_capacity(1000));
+        // 使用全局符号池，所有分区共享
+        let symbol_pool = Arc::clone(crate::symbol_pool::global_symbol_pool());
 
         // 预加载常见交易对
         symbol_pool.preload(&[

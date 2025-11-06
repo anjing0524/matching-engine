@@ -10,7 +10,7 @@
 /// - 后续访问：~10-20ns（读锁 + Arc克隆）
 /// - 预期性能提升：15-20%
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::collections::HashMap;
 use parking_lot::RwLock;
 
@@ -109,6 +109,21 @@ impl Default for SymbolPool {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// 全局单例符号池
+///
+/// 使用OnceLock确保线程安全的单次初始化
+/// 所有OrderBook实例共享这个全局池，最大化缓存效率
+static GLOBAL_SYMBOL_POOL: OnceLock<Arc<SymbolPool>> = OnceLock::new();
+
+/// 获取全局符号池的引用
+///
+/// 第一次调用时初始化，后续调用直接返回
+/// 线程安全，零开销
+#[inline]
+pub fn global_symbol_pool() -> &'static Arc<SymbolPool> {
+    GLOBAL_SYMBOL_POOL.get_or_init(|| Arc::new(SymbolPool::new()))
 }
 
 #[cfg(test)]
