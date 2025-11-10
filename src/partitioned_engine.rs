@@ -69,6 +69,7 @@ pub struct PartitionStats {
 
 /// 单个分区worker
 struct PartitionWorker {
+    #[allow(dead_code)] // partition_id is used in cpu-affinity feature
     partition_id: usize,
     orderbook: OrderBook,
     rx: Receiver<OrderRequest>,
@@ -164,7 +165,8 @@ pub struct PartitionedEngine {
     /// 配置
     config: PartitionConfig,
 
-    /// Worker线程句柄
+    /// Worker线程句柄 - 必须持有以保持线程运行
+    #[allow(dead_code)]
     workers: Vec<thread::JoinHandle<()>>,
 }
 

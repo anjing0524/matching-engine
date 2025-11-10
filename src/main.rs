@@ -1,8 +1,7 @@
-use std::net::SocketAddr;
 use std::thread;
 use std::time::Duration;
-use tokio::sync::mpsc;
-use matching_engine::{engine, network};
+// use tokio::sync::mpsc;
+// use matching_engine::{engine, network};
 
 #[tokio::main]
 async fn main() {
@@ -16,11 +15,11 @@ async fn main() {
 
     println!("日志系统已初始化");
 
-    // 创建用于网络层和引擎层通信的通道
-    let (command_sender, command_receiver) = mpsc::unbounded_channel::<engine::EngineCommand>();
-    let (output_sender, output_receiver) = mpsc::unbounded_channel::<engine::EngineOutput>();
+    // 创建用于网络层和引擎层通信的通道（已禁用）
+    // let (command_sender, command_receiver) = mpsc::unbounded_channel::<engine::EngineCommand>();
+    // let (output_sender, output_receiver) = mpsc::unbounded_channel::<engine::EngineOutput>();
 
-    println!("通道已创建");
+    // println!("通道已创建");
 
     // 在一个独立的系统线程中运行撮合引擎
     // let engine_thread = thread::spawn(move || {
