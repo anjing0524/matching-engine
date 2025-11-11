@@ -55,3 +55,7 @@ harness = false
 [[bench]]
 name = "high_load_benchmark"
 harness = false
+
+[[bench]]
+name = "ringbuffer_comparison"
+harness = false
