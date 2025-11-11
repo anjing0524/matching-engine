@@ -51,3 +51,7 @@ harness = false
 [[bench]]
 name = "partitioned_engine_benchmark"
 harness = false
+
+[[bench]]
+name = "high_load_benchmark"
+harness = false

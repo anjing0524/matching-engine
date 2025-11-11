@@ -252,6 +252,47 @@ impl PartitionedEngine {
             .map_err(|e| format!("Failed to receive response: {}", e))
     }
 
+    /// 批量提交订单（异步，无响应）- 高性能API
+    ///
+    /// 最高效的提交方式，相比循环调用submit_order():
+    /// - 减少函数调用开销 (N个订单 → 1次调用)
+    /// - 预先分组减少路由计算
+    /// - 更好的CPU缓存局部性
+    /// - 预期提升: 20-40%
+    pub fn submit_order_batch(&self, requests: Vec<NewOrderRequest>) -> Result<(), String> {
+        if requests.is_empty() {
+            return Ok(());
+        }
+
+        // 预分配分区向量
+        let mut partitioned: Vec<Vec<OrderRequest>> = (0..self.config.partition_count)
+            .map(|_| Vec::with_capacity(requests.len() / self.config.partition_count + 1))
+            .collect();
+
+        // 按分区分组
+        for request in requests {
+            let partition_id = self.route_to_partition(&request.symbol);
+            partitioned[partition_id].push(OrderRequest {
+                request,
+                response_tx: None,
+            });
+        }
+
+        // 批量发送
+        for (partition_id, orders) in partitioned.into_iter().enumerate() {
+            if orders.is_empty() {
+                continue;
+            }
+            for order in orders {
+                self.partitions[partition_id]
+                    .send(order)
+                    .map_err(|e| format!("Partition {} send failed: {}", partition_id, e))?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// 将订单路由到对应分区
     ///
     /// 使用快速哈希算法确保相同交易对总是路由到同一分区
