@@ -91,7 +91,7 @@ impl OrderBookV2 {
                     }
 
                     // 处理该价格层的所有订单
-                    while let Some(mut counter_order) = queue.front_mut() {
+                    while let Some(counter_order) = queue.front_mut() {
                         if remaining_quantity == 0 {
                             break;
                         }
@@ -137,7 +137,7 @@ impl OrderBookV2 {
                     }
 
                     // 处理该价格层的所有订单
-                    while let Some(mut counter_order) = queue.front_mut() {
+                    while let Some(counter_order) = queue.front_mut() {
                         if remaining_quantity == 0 {
                             break;
                         }

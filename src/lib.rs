@@ -11,6 +11,7 @@ static GLOBAL: Jemalloc = Jemalloc;
 pub mod protocol;
 pub mod orderbook;
 pub mod orderbook_v2;
+pub mod orderbook_tick;
 pub mod engine;
 pub mod network;
 pub mod symbol_pool;

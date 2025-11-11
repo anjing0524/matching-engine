@@ -59,3 +59,7 @@ harness = false
 [[bench]]
 name = "ringbuffer_comparison"
 harness = false
+
+[[bench]]
+name = "tick_orderbook_benchmark"
+harness = false
