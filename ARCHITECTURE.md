@@ -1,430 +1,469 @@
-# Trading Matching Engine - Codebase Structure & Architecture Overview
+# 撮合引擎架构设计文档
 
-## 1. High-Level Project Architecture
+## 1. 系统架构概览
 
-### 1.1 System Design Overview
+### 1.1 整体设计
 
-This is a **high-performance futures trading matching engine** written in 100% Safe Rust, designed to process millions of order matches per second. The system follows a **decoupled actor-based architecture** with three main components:
+本项目是一个**高性能期货交易撮合引擎**，采用100% Safe Rust实现，设计目标是单核处理900万+ orders/sec。系统采用**分层解耦的Actor模式**架构：
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Async Network Layer                         │
-│         (Tokio Runtime - Multiple Concurrent Connections)       │
+│                     异步网络层 (Tokio)                           │
+│         多客户端并发连接 - Length-Delimited Codec                │
 ├─────────────────────────────────────────────────────────────────┤
-│  TCP Server → Length-Delimited Codec → Client Handler Tasks     │
-│                         ↓                                        │
-│                 Unbounded MPSC Channels                         │
-│                         ↓                                        │
+│                   ↓ MPSC Unbounded Channels                     │
 ├─────────────────────────────────────────────────────────────────┤
-│          Single-Threaded Matching Engine (Actor Model)          │
-│              (Synchronous Core - Blocking Recv)                 │
+│            分区撮合引擎 (Partitioned Engine)                      │
+│              Crossbeam无锁通道 + 多核并行                         │
 │                                                                 │
-│  • OrderBook (BTreeMap + Vec-based Index Pool)                │
-│  • Order Matching & Execution Logic                           │
-│  • Trade Notification Generation                              │
+│  Partition 0    Partition 1    ...    Partition N              │
+│  TickOrderBook  TickOrderBook  ...    TickOrderBook            │
+│  (独立线程)     (独立线程)             (独立线程)                 │
 ├─────────────────────────────────────────────────────────────────┤
-│                   Broadcast Output Channel                      │
-│         (Distributes Trade Notifications to All Clients)        │
+│                   ↓ Broadcast Channel                           │
+├─────────────────────────────────────────────────────────────────┤
+│               成交通知广播 (发送到所有客户端)                      │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 1.2 Key Architectural Decisions
-
-1. **Decoupled Processing**: Network I/O runs on Tokio async runtime, core matching engine runs on dedicated system thread
-2. **Single-threaded Matching Engine**: Eliminates contention, simplifies logic, maximizes throughput
-3. **Broadcast Pattern**: All clients receive all market updates (trades) in real-time
-4. **Memory Efficiency**: Object pool pattern with free list for order reuse
-
-## 2. Directory Structure & Component Purposes
-
-```
-/Users/liushuo/code/tradeing/matching-engine/
-├── src/                          # Main Rust source code
-│   ├── lib.rs                   # Library module declarations (exported to tests/benches)
-│   ├── main.rs                  # Application entry point & orchestration
-│   ├── protocol.rs              # Data types for client-server communication
-│   ├── orderbook.rs             # Core order book implementation
-│   ├── engine.rs                # Matching engine main loop
-│   ├── network.rs               # TCP server & client connection handling
-│   └── bin/
-│       └── load_generator.rs    # Performance testing tool with concurrent clients
-├── tests/
-│   └── basic_trade.rs           # Integration test: buy/sell order matching
-├── benches/
-│   ├── comprehensive_benchmark.rs
-│   ├── e2e_network_benchmark.rs
-│   ├── network_benchmark.rs
-│   └── orderbook_benchmark.rs   # Criterion benchmarks for order matching performance
-├── Cargo.toml                   # Project manifest & dependencies
-├── Cargo.lock                   # Locked dependency versions
-└── target/                      # Build artifacts (Rust standard)
-```
-
-## 3. Core Modules Description
-
-### 3.1 `protocol.rs`
-**Purpose**: Defines all data structures for client-server communication
-
-**Key Types**:
-- `OrderType`: Enum for Buy/Sell orders
-- `NewOrderRequest`: Client submits new order
-- `CancelOrderRequest`: Client cancels existing order
-- `OrderConfirmation`: Server confirms pending order
-- `TradeNotification`: Server broadcasts executed trade details
-
-**Design Pattern**: All types use `serde` for JSON serialization/deserialization
-
-### 3.2 `orderbook.rs`
-**Purpose**: Core matching engine data structure and matching algorithm
-
-**Key Components**:
-```rust
-OrderBook {
-    bids: BTreeMap<u64, PriceLevel>,        // Buy orders, price descending
-    asks: BTreeMap<u64, PriceLevel>,        // Sell orders, price ascending
-    orders: Vec<OrderNode>,                 // Dense object pool for all orders
-    order_id_to_index: BTreeMap<u64, usize>, // Fast O(log n) lookup
-    free_list_head: Option<usize>,          // Free list for memory reuse
-    next_order_id: u64,                     // Order ID generator
-}
-
-PriceLevel {
-    head: Option<usize>,                    // Doubly-linked list of orders at price
-    tail: Option<usize>,                    // FIFO ordering (price-time priority)
-}
-
-OrderNode {
-    user_id, order_id, price, quantity,
-    order_type, next, prev                  // Doubly-linked list pointers
-}
-```
-
-**Matching Algorithm**:
-1. For **Buy orders**: Iterate asks (price ascending), match against cheapest sellers
-2. For **Sell orders**: Iterate bids (price descending), match against highest buyers
-3. **Partial Fill**: Reduce quantity, keep remainder in order book
-4. **Full Fill**: Recycle node via free list
-5. **No Match**: Add order to appropriate price level
-
-**Performance Characteristics**:
-- Add order: O(log n) for price level insertion + O(1) node allocation
-- Remove order: O(log n) for price lookup
-- Match order: O(n) worst case (iterate all price levels)
-
-### 3.3 `engine.rs`
-**Purpose**: Matching engine main loop - receives commands, processes orders
-
-**Key Logic**:
-```rust
-MatchingEngine {
-    orderbook: OrderBook,
-    command_receiver: UnboundedReceiver<EngineCommand>,  // From network
-    output_sender: UnboundedSender<EngineOutput>,        // To broadcast
-    next_trade_id: u64,
-}
-```
-
-**Main Loop**:
-1. Block on `command_receiver.blocking_recv()`
-2. Process `NewOrderRequest` → call `orderbook.match_order()`
-3. For each trade generated:
-   - Assign trade ID and timestamp
-   - Send via `output_sender`
-4. If order partially fills, send `OrderConfirmation`
-5. Loop until channel closes
-
-**Trade Flow**:
-```
-NewOrderRequest → orderbook.match_order(request) → (Vec<TradeNotification>, Option<OrderConfirmation>)
-                                             ↓
-                                         Send to output_sender
-```
-
-### 3.4 `network.rs`
-**Purpose**: Async TCP server handling multiple concurrent client connections
-
-**Architecture**:
-```
-TCP Server (127.0.0.1:8080)
-    ↓
-For each client connection:
-    ├─ LengthDelimitedCodec (message framing)
-    ├─ Tokio select! loop:
-    │  ├─ Receive client commands (NewOrderRequest/CancelOrderRequest)
-    │  │  └─ Forward to command_sender (unbounded channel)
-    │  └─ Receive broadcast messages (trade results)
-    │     └─ Send to client via TCP
-    └─ Broadcast channel subscription (receive all market updates)
-```
-
-**Key Features**:
-- `tokio::select!` for concurrent read/write handling
-- `LengthDelimitedCodec` from `tokio-util` for framing (prevents message fragmentation)
-- Broadcast channel for efficient multi-client distribution
-- Connection auto-closes on client disconnect
-
-### 3.5 `main.rs`
-**Purpose**: Application orchestration and bootstrapping
-
-**Startup Sequence**:
-1. Initialize `tracing` logging
-2. Create MPSC channels for command/output
-3. Spawn system thread for matching engine
-4. Parse server address (127.0.0.1:8080)
-5. Spawn Tokio task for network server
-6. Wait for Ctrl+C or server shutdown
-
-**Threading Model**:
-- **System Thread**: Blocking matching engine loop
-- **Tokio Runtime**: Async network I/O in main thread
-
-## 4. Technology Stack & Key Dependencies
-
-### 4.1 Core Dependencies
-
-| Dependency | Version | Purpose | Notes |
-|-----------|---------|---------|-------|
-| `tokio` | 1.x | Async runtime | All features enabled for flexibility |
-| `bytes` | 1.x | Efficient byte handling | Required by tokio-util |
-| `tokio-util` | 0.7 | Codec utilities | LengthDelimitedCodec for framing |
-| `parking_lot` | 0.12 | Mutex replacement | Faster, no poisoning |
-| `bumpalo` | 3.16.0 | Arena allocator | Fast allocation, potential future use |
-| `serde` + `serde_json` | 1.0 | Serialization | All JSON protocol communication |
-| `tracing` | 0.1 | Structured logging | With env-filter subscriber |
-| `futures` | 0.3 | Async utilities | StreamExt, SinkExt traits |
-| `rand` | 0.8 | Random number generation | Used in load generator |
-
-### 4.2 Dev & Optional Dependencies
-
-| Dependency | Purpose |
-|-----------|---------|
-| `criterion` | Benchmarking with statistical rigor |
-| `tikv-jemallocator` (optional) | High-performance memory allocator for release builds |
-
-### 4.3 Language & Toolchain
-
-- **Language**: Rust 2021 Edition
-- **Minimum Rust**: 1.56+ (due to dependency requirements)
-- **Safety**: 100% Safe Rust (no `unsafe` blocks)
-- **Threading**: Native Tokio + standard threads
-
-## 5. Build & Development Setup Requirements
-
-### 5.1 Prerequisites
-
-```bash
-# Install Rust (if not present)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Verify installation
-rustc --version
-cargo --version
-```
-
-### 5.2 Project Structure Setup
-
-```bash
-cd /Users/liushuo/code/tradeing/matching-engine
-
-# Install dependencies (automatic via Cargo)
-cargo build
-
-# Build release (with optimizations)
-cargo build --release
-
-# Run tests
-cargo test
-
-# Run benchmarks
-cargo bench
-
-# Run load generator binary
-cargo run --release --bin load_generator
-```
-
-### 5.3 Build Output Locations
-
-- **Debug binary**: `target/debug/matching-engine`
-- **Release binary**: `target/release/matching-engine`
-- **Load generator**: `target/release/load_generator`
-- **Test results**: Console output + `.criterion/` directory
-- **Artifacts**: `Cargo.lock` for dependency pinning
-
-### 5.4 Development Workflow
-
-**Running the server**:
-```bash
-cargo run --release
-# Server listens on 127.0.0.1:8080
-```
-
-**Running integration tests** (requires server running):
-```bash
-# In another terminal
-cargo test --test basic_trade -- --nocapture
-```
-
-**Running benchmarks**:
-```bash
-cargo bench
-```
-
-**Running load generator** (requires server running):
-```bash
-cargo run --release --bin load_generator
-# Spawns 8 concurrent clients, 10-second test
-```
-
-## 6. Key Design Patterns & Architectural Decisions
-
-### 6.1 Patterns Used
-
-| Pattern | Location | Benefit |
-|---------|----------|---------|
-| **Actor Model** | `engine.rs` | Single-threaded core, message passing |
-| **Object Pool** | `orderbook.rs` | Memory efficiency, cache locality |
-| **Command Pattern** | `engine.rs` | Decouples client commands from execution |
-| **Observer/Broadcast** | `network.rs` | All clients receive market updates |
-| **FIFO Queue** | `orderbook.rs` | Price-time priority in doubly-linked lists |
-
-### 6.2 Design Rationale
-
-1. **Why single-threaded engine?**
-   - Eliminates lock contention
-   - Predictable performance
-   - Easier reasoning about order of execution
-   - Perfect for order matching (inherently sequential)
-
-2. **Why async network layer?**
-   - Thousands of concurrent connections with minimal threads
-   - Efficient CPU utilization
-   - Non-blocking I/O
-
-3. **Why BTreeMap + Vec pool?**
-   - O(log n) price level lookup
-   - O(1) order insertion at price
-   - Cache-friendly dense allocation
-   - Fast reuse via free list
-
-4. **Why broadcast channel?**
-   - Each client sees consistent market view
-   - Scales to many connections
-   - No per-client filtering overhead
-
-## 7. Current Status & Known Issues
-
-### 7.1 Implementation Status
-
-✅ **Completed**:
-- Full order matching algorithm (Buy/Sell)
-- Network protocol (TCP + JSON)
-- FIFO order queue at each price level
-- Trade generation and distribution
-- Integration tests
-- Benchmark framework
-
-❌ **Not Yet Implemented**:
-- Order cancellation logic
-- Multiple trading symbols
-- Margin/leverage features
-- PnL calculation
-- Persistent order book snapshots
-
-### 7.2 Performance Benchmark Results
-
-| Operation | Median Time | Throughput |
-|-----------|------------|-----------|
-| 1-to-1 Match (1000 levels) | ~108 µs | ~9,250 ops/sec |
-
-*Note: See `BENCHMARK_CONSOLIDATED_REPORT.md` for detailed analysis.
-
-### 7.3 Known Limitations
-
-1. **No cancellation**: `EngineCommand::CancelOrder` not yet implemented
-2. **Single symbol**: All orders for "BTC/USD" hardcoded
-3. **No persistence**: All data lost on shutdown
-4. **No authentication**: Any client can trade
-5. **Test data only**: Not production-ready
-
-## 8. Communication Paths
-
-### 8.1 Inter-Process Communication
-
-```
-Client (TCP) ↔ Network Handler (Tokio)
-                      ↓
-                 UnboundedSender<EngineCommand>
-                      ↓
-              Matching Engine Thread
-              (blocking_recv loop)
-                      ↓
-                 UnboundedSender<EngineOutput>
-                      ↓
-              Broadcast Channel
-                      ↓
-         All Connected Clients (TCP)
-```
-
-### 8.2 Channel Characteristics
-
-| Channel | Type | Direction | Behavior |
-|---------|------|-----------|----------|
-| Commands | Unbounded MPSC | Network → Engine | Blocking recv in engine |
-| Output | Unbounded MPSC | Engine → Broadcast | Non-blocking send |
-| Broadcast | Tokio Broadcast | Broadcast → Clients | ~1024 capacity |
-
-## 9. Testing Strategy
-
-### 9.1 Test Coverage
-
-**Integration Test** (`tests/basic_trade.rs`):
-- Creates TCP connection to server
-- Sends buy order (pending)
-- Sends sell order (matches)
-- Verifies trade notification received
-- Verifies correctness of trade details
-
-**Benchmark** (`benches/`):
-- Comprehensive benchmarks for various scenarios.
-- Uses Criterion for statistical analysis
-
-**Load Generator** (`src/bin/load_generator.rs`):
-- 8 concurrent TCP clients
-- Randomized buy/sell orders
-- 10-second duration test
-- Measures throughput (TPS) and latency percentiles
-
-### 9.2 Running Tests
-
-```bash
-# Unit & integration tests
-cargo test
-
-# Benchmarks (with statistical analysis)
-cargo bench
-
-# Load testing
-cargo run --release --bin load_generator
-```
-
-## 10. Performance Characteristics
-
-### 10.1 Expected Behavior
-
-- **Order arrival to fill**: <1ms typical (network + matching)
-- **Orders per second**: Millions (orders)/second theoretical with optimized matching
-- **Concurrent clients**: Thousands (limited by TCP stack)
-- **Memory per order**: ~100-150 bytes (OrderNode + overhead)
-- **Max capacity**: ~1M orders in memory (with 1-1.5 GB RAM)
-
-### 10.2 Optimization Opportunities
-
-1. **Hardware affinity**: Pin engine thread to specific CPU core
-2. **Allocator**: Enable jemalloc in release mode
-3. **Message batching**: Process multiple orders per iteration
-4. **Better benchmarks**: Fix matching performance measurement
-5. **Lock-free structures**: Replace BTreeMap with skip list (advanced)
+### 1.2 核心设计原则
+
+1. **零拷贝**: 预分配内存，避免运行时动态分配
+2. **无锁并发**: Crossbeam SPSC通道，分区隔离
+3. **硬件加速**: 利用CPU硬件指令(leading_zeros/trailing_zeros)
+4. **缓存友好**: 连续内存布局，提升CPU缓存命中率
+5. **类型安全**: 100% Safe Rust，编译期内存安全保证
 
 ---
 
-**Project Status**: Functional prototype with solid architecture foundation. Ready for further optimization and feature development.
+## 2. 订单簿架构演进
+
+### 2.1 V1: BTreeMap + 链表 (Baseline)
+
+```rust
+pub struct OrderBook {
+    bids: BTreeMap<u64, VecDeque<Order>>,  // 价格 → 订单队列
+    asks: BTreeMap<u64, VecDeque<Order>>,
+}
+```
+
+**性能**: 2.71M orders/sec
+**问题**:
+- VecDeque动态分配开销大
+- 链表指针追踪导致缓存miss
+- 大量malloc/free调用
+
+### 2.2 V2: BTreeMap + RingBuffer
+
+```rust
+pub struct OrderBookV2 {
+    bids: BTreeMap<u64, RingBuffer<OrderNode>>,
+    asks: BTreeMap<u64, RingBuffer<OrderNode>>,
+}
+
+pub struct RingBuffer<T> {
+    buffer: Box<[MaybeUninit<T>]>,  // 预分配
+    capacity: usize,
+    head: usize,
+    tail: usize,
+}
+```
+
+**性能**: 3.59M orders/sec (+32%)
+**优势**:
+- 零动态分配 (MaybeUninit避免初始化)
+- 连续内存，缓存友好
+- O(1) push/pop
+
+**问题**:
+- BTreeMap仍然是O(log n)查找
+
+### 2.3 V3: Tick-Based Array + FastBitmap (最优方案) ⭐
+
+```rust
+pub struct TickBasedOrderBook {
+    spec: ContractSpec,                          // 合约规格
+    bid_levels: Vec<Option<RingBuffer<OrderNode>>>, // O(1)数组索引
+    ask_levels: Vec<Option<RingBuffer<OrderNode>>>,
+    bid_bitmap: FastBitmap,                      // 硬件指令查找
+    ask_bitmap: FastBitmap,
+    best_bid_idx: Option<usize>,                 // 缓存最优价
+    best_ask_idx: Option<usize>,
+}
+```
+
+**性能**: 9.34M orders/sec (+160% vs V2, +245% vs V1)
+**核心优化**:
+1. **Array O(1)索引**: `(price - min_price) / tick_size`
+2. **硬件指令查找**: leading_zeros/trailing_zeros
+3. **位图稀疏优化**: 6000价格层 = 94个u64块
+
+---
+
+## 3. FastBitmap硬件指令优化
+
+### 3.1 数据结构
+
+```rust
+pub struct FastBitmap {
+    blocks: Vec<u64>,  // 每块64个bit
+    len: usize,
+}
+```
+
+**内存布局**:
+```
+价格层0-63:   block[0] = 0b00...1001  (bit 0, 3设置)
+价格层64-127: block[1] = 0b00...0010  (bit 1设置)
+...
+价格层5952-6015: block[93] = 0b10...0000 (bit 63设置)
+```
+
+### 3.2 硬件指令实现
+
+**查找最优买价 (最高价)**:
+
+```rust
+#[inline]
+pub fn find_last_one(&self) -> Option<usize> {
+    // 从高到低遍历u64块
+    for (block_idx, &block) in self.blocks.iter().enumerate().rev() {
+        if block != 0 {
+            // 使用硬件指令 - x86: BSR, ARM: CLZ
+            let bit_offset = 63 - block.leading_zeros() as usize;
+            return Some(block_idx * 64 + bit_offset);
+        }
+    }
+    None
+}
+```
+
+**查找最优卖价 (最低价)**:
+
+```rust
+#[inline]
+pub fn find_first_one(&self) -> Option<usize> {
+    // 从低到高遍历u64块
+    for (block_idx, &block) in self.blocks.iter().enumerate() {
+        if block != 0 {
+            // 使用硬件指令 - x86: BSF, ARM: CTZ
+            let bit_offset = block.trailing_zeros() as usize;
+            return Some(block_idx * 64 + bit_offset);
+        }
+    }
+    None
+}
+```
+
+**复杂度分析**:
+- 6000价格层 = 94个u64块
+- 最坏情况: 94次比较 + 1次硬件指令
+- 时间: ~100-300 CPU周期 vs BitVec的 ~60K周期
+- **提升: 200-600倍**
+
+### 3.3 CPU硬件指令映射
+
+| 操作 | x86指令 | ARM指令 | 延迟 |
+|------|---------|---------|------|
+| leading_zeros | BSR (Bit Scan Reverse) | CLZ (Count Leading Zeros) | 1-3 cycles |
+| trailing_zeros | BSF (Bit Scan Forward) | CTZ (Count Trailing Zeros) | 1-3 cycles |
+
+---
+
+## 4. 撮合算法
+
+### 4.1 价格-时间优先
+
+**核心规则**:
+1. 买单按价格**从高到低**排序
+2. 卖单按价格**从低到高**排序
+3. 同价格按**时间优先** (FIFO)
+
+### 4.2 撮合流程
+
+```rust
+pub fn match_order(&mut self, request: NewOrderRequest)
+    -> (SmallVec<[TradeNotification; 8]>, Option<OrderConfirmation>)
+{
+    let mut trades = SmallVec::new();
+    let mut remaining = request.quantity;
+
+    match request.order_type {
+        OrderType::Buy => {
+            // 1. 从最优卖价开始匹配
+            while let Some(ask_idx) = self.best_ask_idx {
+                let ask_price = self.index_to_price(ask_idx);
+
+                // 2. 价格检查
+                if ask_price > request.price {
+                    break;  // 无法成交
+                }
+
+                // 3. 从队列头部取订单
+                if let Some(queue) = &mut self.ask_levels[ask_idx] {
+                    while let Some(counter_order) = queue.front_mut() {
+                        let trade_qty = min(remaining, counter_order.quantity);
+
+                        // 4. 生成成交通知
+                        trades.push(TradeNotification { ... });
+
+                        // 5. 更新数量
+                        remaining -= trade_qty;
+                        counter_order.quantity -= trade_qty;
+
+                        if counter_order.quantity == 0 {
+                            queue.pop();  // 完全成交，移除
+                        }
+
+                        if remaining == 0 {
+                            return (trades, None);  // 完全成交
+                        }
+                    }
+                }
+
+                // 6. 更新最优价
+                self.best_ask_idx = self.find_best_ask();
+            }
+
+            // 7. 未完全成交，挂单
+            if remaining > 0 {
+                self.add_bid_order(request_idx, user_id, remaining);
+            }
+        }
+        OrderType::Sell => { /* 对称逻辑 */ }
+    }
+
+    (trades, confirmation)
+}
+```
+
+### 4.3 关键优化点
+
+1. **最优价缓存**: `best_bid_idx/best_ask_idx` 避免重复查找
+2. **SmallVec**: 栈分配成交通知数组 (8个内联)
+3. **前置检查**: 价格检查在队列遍历之前
+4. **批量更新**: 位图标记延迟到队列为空时
+
+---
+
+## 5. 分区引擎架构
+
+### 5.1 分区策略
+
+```rust
+pub struct PartitionedEngine {
+    partitions: Vec<Sender<OrderRequest>>,
+    partition_count: usize,
+}
+
+impl PartitionedEngine {
+    fn route_to_partition(&self, symbol: &str) -> usize {
+        // 基于符号哈希的一致性路由
+        let mut hasher = DefaultHasher::new();
+        symbol.hash(&mut hasher);
+        (hasher.finish() as usize) % self.partition_count
+    }
+}
+```
+
+**优势**:
+- 每个品种固定分配到一个分区
+- 分区内单线程，无锁
+- 品种间并行处理
+
+### 5.2 批量提交API
+
+```rust
+pub fn submit_order_batch(&self, requests: Vec<NewOrderRequest>)
+    -> Result<(), String>
+{
+    // 1. 预分配per-partition向量
+    let mut partitioned: Vec<Vec<OrderRequest>> =
+        (0..self.partition_count)
+            .map(|_| Vec::with_capacity(requests.len() / self.partition_count))
+            .collect();
+
+    // 2. 按分区分组
+    for request in requests {
+        let partition_id = self.route_to_partition(&request.symbol);
+        partitioned[partition_id].push(OrderRequest { ... });
+    }
+
+    // 3. 批量发送
+    for (partition_id, orders) in partitioned.into_iter().enumerate() {
+        for order in orders {
+            self.partitions[partition_id].send(order)?;
+        }
+    }
+
+    Ok(())
+}
+```
+
+---
+
+## 6. 性能优化技术
+
+### 6.1 内存分配优化
+
+| 技术 | 实现 | 收益 |
+|------|------|------|
+| RingBuffer预分配 | `Box<[MaybeUninit<T>]>` | 零运行时分配 |
+| SmallVec | 栈分配8个元素 | 避免堆分配 |
+| 符号池化 | `Arc<str>` 缓存 | 字符串零拷贝 |
+| 位图索引 | `Vec<u64>` | 固定内存占用 |
+
+### 6.2 CPU优化
+
+| 技术 | 原理 | 收益 |
+|------|------|------|
+| 硬件指令 | BSR/BSF/CLZ/CTZ | 200-600x |
+| 缓存局部性 | 连续数组布局 | 减少cache miss |
+| 分支预测 | 小循环 + 可预测分支 | 提升流水线效率 |
+| SIMD潜力 | 连续内存 | 未来可批量处理 |
+
+### 6.3 并发优化
+
+| 技术 | 实现 | 收益 |
+|------|------|------|
+| SPSC通道 | Crossbeam | 无锁通信 |
+| 分区隔离 | 品种级别 | 零竞争 |
+| CPU亲和性 | core_affinity | 减少上下文切换 |
+
+---
+
+## 7. 代码组织
+
+### 7.1 核心模块
+
+```
+src/
+├── orderbook.rs          # V1: BTreeMap + 链表
+├── orderbook_v2.rs       # V2: BTreeMap + RingBuffer
+├── orderbook_tick.rs     # V3: Tick-based Array ⭐
+├── fast_bitmap.rs        # FastBitmap硬件指令 ⭐
+├── ringbuffer.rs         # 零分配循环队列
+├── symbol_pool.rs        # 符号池化
+├── timestamp.rs          # 高性能时间戳
+├── partitioned_engine.rs # 分区引擎
+└── engine.rs             # 单线程引擎
+```
+
+### 7.2 基准测试
+
+```
+benches/
+├── tick_orderbook_benchmark.rs       # V1/V2/V3对比
+├── ringbuffer_comparison.rs          # RingBuffer vs VecDeque
+├── partitioned_engine_benchmark.rs   # 多核性能
+└── ...
+```
+
+---
+
+## 8. 性能基准测试
+
+### 8.1 测试环境
+
+- **CPU**: x86_64 (支持BSR/BSF指令)
+- **内存**: 16GB
+- **OS**: Linux 4.4.0
+- **编译**: `cargo build --release` (opt-level=3, lto=fat)
+
+### 8.2 单核性能
+
+| 场景 | V1 | V2 | V3 | 提升 |
+|------|----|----|----|----|
+| 100订单 | 138µs | 26µs | **12µs** | **11.8x** |
+| 1000订单 | 369µs | 278µs | **107µs** | **3.4x** |
+| 深度簿 | 358µs | 358µs | **113µs** | **3.2x** |
+
+**吞吐量**: 9.34M orders/sec
+
+### 8.3 多核扩展
+
+**理论计算**:
+```
+单核: 9.34M
+16核: 9.34M × 16 × 0.6 (效率) = 89.7M orders/sec
+```
+
+**实际测试**: 待补充16核完整压测数据
+
+---
+
+## 9. 适用场景
+
+### 9.1 ✅ 推荐场景
+
+- **期货交易所**: 价格有固定tick size
+- **期权交易所**: 行权价离散分布
+- **高频交易**: 延迟敏感型应用
+- **大规模订单簿**: 1000+活跃价格层
+
+### 9.2 ⚠️ 限制
+
+- 价格必须是离散的 (tick_size已知)
+- 价格范围需要合理边界 (避免数组过大)
+- 单品种单线程模型 (跨品种通过分区并行)
+
+### 9.3 ❌ 不推荐场景
+
+- 股票交易 (价格连续，无固定tick)
+- 价格范围未知/动态扩展场景
+- 需要跨品种原子操作的场景
+
+---
+
+## 10. 未来优化方向
+
+### 10.1 P0 - 生产就绪
+
+- [x] Tick-based Array订单簿
+- [x] FastBitmap硬件指令
+- [ ] 16核完整性能测试
+- [ ] 生产环境压测
+
+### 10.2 P1 - 性能提升
+
+- [ ] SIMD批量价格匹配 (AVX2/AVX512)
+- [ ] Lock-Free SkipMap (替代分区内BTreeMap)
+- [ ] 每品种CPU核心绑定
+- [ ] 零拷贝网络 (DPDK)
+
+### 10.3 P2 - 探索性
+
+- [ ] FPGA硬件加速
+- [ ] GPU批量撮合
+- [ ] 机器学习订单预测
+
+---
+
+## 11. 参考资料
+
+### 11.1 关键算法
+
+- **Tick-based Array**: 利用期货价格离散特性
+- **FastBitmap**: x86 BSR/BSF指令，ARM CLZ/CTZ指令
+- **SPSC RingBuffer**: 单生产者单消费者无锁队列
+
+### 11.2 性能优化技巧
+
+1. **避免分配**: MaybeUninit + 预分配
+2. **缓存友好**: 连续内存 + 小数据结构
+3. **硬件加速**: 利用CPU指令
+4. **减少分支**: 提升流水线效率
+5. **分区并行**: 无锁架构
+
+### 11.3 Rust特性利用
+
+- **零成本抽象**: inline + 单态化
+- **所有权系统**: 编译期内存安全
+- **类型系统**: 防止数据竞争
+- **unsafe零使用**: 100% Safe Rust
+
+---
+
+**文档版本**: v3.0
+**最后更新**: 2025-11-12
+**维护者**: Matching Engine Team
