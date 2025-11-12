@@ -1,7 +1,6 @@
 /// 编解码器实现
 
-use super::traits::ZeroCopyBuffer;
-use crate::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
+use crate::protocol::{NewOrderRequest, TradeNotification};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
@@ -43,21 +42,55 @@ where
     T: Serialize + for<'de> Deserialize<'de> + Send,
 {
     type Item = T;
-    type Error = bincode::Error;
+    type Error = BincodeError;
 
     fn decode(&mut self, buf: &[u8]) -> Result<Option<Self::Item>, Self::Error> {
         if buf.is_empty() {
             return Ok(None);
         }
 
-        let item: T = bincode::deserialize(buf)?;
-        Ok(Some(item))
+        // Decode using bincode v2 serde support
+        let decoded: T = bincode::serde::decode_from_slice(buf, bincode::config::standard())
+            .map(|(item, _size)| item)
+            .map_err(|_| BincodeError(bincode::error::EncodeError::Other("Decode failed")))?;
+        Ok(Some(decoded))
     }
 
     fn encode(&mut self, item: &Self::Item, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        let config = bincode::config::standard();
-        let size = bincode::serde::encode_into_slice(item, buf, config)?;
-        Ok(size)
+        // Encode to vec first, then copy to buffer
+        let encoded = bincode::serde::encode_to_vec(item, bincode::config::standard())?;
+        if encoded.len() > buf.len() {
+            return Err(BincodeError(bincode::error::EncodeError::Other(
+                "Buffer too small",
+            )));
+        }
+        buf[..encoded.len()].copy_from_slice(&encoded);
+        Ok(encoded.len())
+    }
+}
+
+/// Bincode error wrapper
+#[derive(Debug)]
+pub struct BincodeError(bincode::error::EncodeError);
+
+impl std::fmt::Display for BincodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Bincode error: {:?}", self.0)
+    }
+}
+
+impl std::error::Error for BincodeError {}
+
+impl From<bincode::error::EncodeError> for BincodeError {
+    fn from(err: bincode::error::EncodeError) -> Self {
+        Self(err)
+    }
+}
+
+impl From<bincode::error::DecodeError> for BincodeError {
+    fn from(_err: bincode::error::DecodeError) -> Self {
+        // Convert decode error to encode error for simplicity
+        Self(bincode::error::EncodeError::Other("Decode error"))
     }
 }
 

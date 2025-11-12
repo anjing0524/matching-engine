@@ -9,7 +9,7 @@ bytes = "1"
 tokio-util = { version = "0.7", features = ["codec"] }
 parking_lot = "0.12"
 bumpalo = { version = "3.16.0", features = ["collections"] }
-bincode = "2.0.0-rc.3"
+bincode = { version = "2.0.0-rc.3", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tracing = "0.1"
@@ -71,4 +71,8 @@ harness = false
 
 [[bench]]
 name = "tick_orderbook_benchmark"
+harness = false
+
+[[bench]]
+name = "network_middleware_benchmark"
 harness = false

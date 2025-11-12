@@ -87,7 +87,7 @@ impl AlignedBuffer {
 
         // 分配额外空间以保证对齐
         let total_size = size + alignment - 1;
-        let mut data = vec![0u8; total_size];
+        let data = vec![0u8; total_size];
 
         // 计算对齐偏移
         let addr = data.as_ptr() as usize;
