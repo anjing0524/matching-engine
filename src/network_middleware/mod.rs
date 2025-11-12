@@ -11,6 +11,9 @@ pub mod codec;
 pub mod tokio_backend;
 pub mod metrics;
 
+#[cfg(feature = "io-uring")]
+pub mod io_uring_backend;
+
 #[cfg(feature = "dpdk")]
 pub mod dpdk_backend;
 
@@ -30,6 +33,8 @@ use std::sync::Arc;
 pub enum BackendType {
     /// Tokio异步I/O (默认)
     Tokio,
+    /// io_uring高性能异步I/O
+    IoUring,
     /// DPDK用户态网络栈
     Dpdk,
     /// FPGA硬件加速
@@ -95,9 +100,25 @@ impl<C: Codec> NetworkMiddleware<C> {
             BackendType::Tokio => {
                 Box::new(tokio_backend::TokioTransport::new()?) as Box<dyn NetworkTransport>
             }
+            #[cfg(feature = "io-uring")]
+            BackendType::IoUring => {
+                let io_uring_config = io_uring_backend::IoUringConfig {
+                    queue_depth: config.rx_queue_depth.max(config.tx_queue_depth) as u32,
+                    buffer_size: config.buffer_size,
+                    buffer_pool_size: config.rx_queue_depth,
+                    ..Default::default()
+                };
+                Box::new(io_uring_backend::IoUringTransport::new(io_uring_config)?)
+                    as Box<dyn NetworkTransport>
+            }
             #[cfg(feature = "dpdk")]
             BackendType::Dpdk => {
-                Box::new(dpdk_backend::DpdkTransport::new()?) as Box<dyn NetworkTransport>
+                let dpdk_config = dpdk_backend::DpdkConfig {
+                    rx_queues: (config.rx_queue_depth / 512).max(1) as u16,
+                    tx_queues: (config.tx_queue_depth / 512).max(1) as u16,
+                    ..Default::default()
+                };
+                Box::new(dpdk_backend::DpdkTransport::new(dpdk_config)?) as Box<dyn NetworkTransport>
             }
             #[cfg(feature = "fpga")]
             BackendType::Fpga => {

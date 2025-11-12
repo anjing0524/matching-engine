@@ -42,12 +42,6 @@ pub trait ZeroCopyBuffer: Send + Sync {
 /// 表示一个客户端连接，支持零拷贝收发
 #[async_trait]
 pub trait Connection: Send {
-    /// 连接ID（用于标识）
-    fn id(&self) -> u64;
-
-    /// 对端地址
-    fn peer_addr(&self) -> SocketAddr;
-
     /// 接收数据（零拷贝）
     ///
     /// 返回接收到的缓冲区，缓冲区可能来自：
@@ -61,8 +55,11 @@ pub trait Connection: Send {
     /// 接受任何实现了ZeroCopyBuffer的缓冲区
     async fn send(&mut self, buf: Box<dyn ZeroCopyBuffer>) -> std::io::Result<()>;
 
-    /// 关闭连接
-    async fn close(&mut self) -> std::io::Result<()>;
+    /// 对端地址
+    fn peer_addr(&self) -> std::io::Result<SocketAddr>;
+
+    /// 本地地址
+    fn local_addr(&self) -> std::io::Result<SocketAddr>;
 }
 
 /// 网络传输trait

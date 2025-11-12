@@ -28,14 +28,6 @@ impl TokioConnection {
 
 #[async_trait]
 impl Connection for TokioConnection {
-    fn id(&self) -> u64 {
-        self.id
-    }
-
-    fn peer_addr(&self) -> SocketAddr {
-        self.peer_addr
-    }
-
     async fn recv(&mut self) -> std::io::Result<Box<dyn ZeroCopyBuffer>> {
         // 先读取4字节长度前缀
         let len = self.stream.read_u32().await? as usize;
@@ -59,8 +51,12 @@ impl Connection for TokioConnection {
         Ok(())
     }
 
-    async fn close(&mut self) -> std::io::Result<()> {
-        self.stream.shutdown().await
+    fn peer_addr(&self) -> std::io::Result<SocketAddr> {
+        Ok(self.peer_addr)
+    }
+
+    fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.stream.local_addr()
     }
 }
 
@@ -131,6 +127,6 @@ mod tests {
 
         // 接受连接
         let conn = transport.accept().await.unwrap();
-        println!("Accepted connection from {}", conn.peer_addr());
+        println!("Accepted connection from {}", conn.peer_addr().unwrap());
     }
 }

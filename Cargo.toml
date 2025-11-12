@@ -26,10 +26,16 @@ thiserror = "1.0"
 
 # 可选依赖
 core_affinity = { version = "0.8", optional = true }
+tokio-uring = { version = "0.5", optional = true }
+libc = "0.2"
+socket2 = "0.5"
 
 [features]
 # CPU亲和性特性（需要平台支持）
 cpu-affinity = ["core_affinity"]
+
+# io_uring高性能网络
+io-uring = ["tokio-uring"]
 
 # DPDK网络加速（需要DPDK库）
 dpdk = []
@@ -75,4 +81,8 @@ harness = false
 
 [[bench]]
 name = "network_middleware_benchmark"
+harness = false
+
+[[bench]]
+name = "network_backend_comparison"
 harness = false
