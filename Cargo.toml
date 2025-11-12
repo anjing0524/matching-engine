@@ -21,6 +21,8 @@ rand = "0.8"
 num_cpus = "1.16"
 smallvec = "1.13"
 bit-vec = "0.6"
+async-trait = "0.1"
+thiserror = "1.0"
 
 # 可选依赖
 core_affinity = { version = "0.8", optional = true }
@@ -28,6 +30,12 @@ core_affinity = { version = "0.8", optional = true }
 [features]
 # CPU亲和性特性（需要平台支持）
 cpu-affinity = ["core_affinity"]
+
+# DPDK网络加速（需要DPDK库）
+dpdk = []
+
+# FPGA硬件加速（需要FPGA驱动）
+fpga = []
 
 [dev-dependencies]
 criterion = "0.5"

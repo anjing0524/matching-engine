@@ -19,3 +19,4 @@ pub mod partitioned_engine;
 pub mod timestamp;
 pub mod ringbuffer;
 pub mod fast_bitmap;
+pub mod network_middleware;
