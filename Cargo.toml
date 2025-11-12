@@ -86,3 +86,7 @@ harness = false
 [[bench]]
 name = "network_backend_comparison"
 harness = false
+
+[[bench]]
+name = "e2e_matching_engine_benchmark"
+harness = false
