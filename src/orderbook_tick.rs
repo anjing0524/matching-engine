@@ -15,7 +15,7 @@
 use crate::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
 use crate::ringbuffer::RingBuffer;
 use crate::symbol_pool::SymbolPool;
-use bit_vec::BitVec;
+use crate::fast_bitmap::FastBitmap;
 use smallvec::SmallVec;
 use std::sync::Arc;
 
@@ -86,10 +86,12 @@ pub struct TickBasedOrderBook {
 
     /// 买单价格层位图索引 - O(1)查找最优价
     /// bit=1表示该价格有订单，bit=0表示无订单
-    bid_bitmap: BitVec,
+    /// 使用硬件指令 leading_zeros 实现O(n/64)查找
+    bid_bitmap: FastBitmap,
 
     /// 卖单价格层位图索引 - O(1)查找最优价
-    ask_bitmap: BitVec,
+    /// 使用硬件指令 trailing_zeros 实现O(n/64)查找
+    ask_bitmap: FastBitmap,
 
     /// 最优买价索引（缓存）
     best_bid_idx: Option<usize>,
@@ -117,8 +119,8 @@ impl TickBasedOrderBook {
         Self {
             bid_levels: (0..num_levels).map(|_| None).collect(),
             ask_levels: (0..num_levels).map(|_| None).collect(),
-            bid_bitmap: BitVec::from_elem(num_levels, false),
-            ask_bitmap: BitVec::from_elem(num_levels, false),
+            bid_bitmap: FastBitmap::new(num_levels),
+            ask_bitmap: FastBitmap::new(num_levels),
             best_bid_idx: None,
             best_ask_idx: None,
             next_order_id: 1,
@@ -373,60 +375,38 @@ impl TickBasedOrderBook {
         }
     }
 
-    /// 查找最优买价 - O(1)位图索引
+    /// 查找最优买价 - O(n/64)位图索引 + 硬件指令
     ///
     /// 使用硬件指令快速查找最高有效位
     /// - 买单: 从高到低，需要找到最后一个设置的bit
-    /// - 时间复杂度: O(1) 硬件指令
+    /// - 时间复杂度: O(n/64) + 硬件指令 leading_zeros
+    /// - 对于6000个价格层: 最多94个u64块比较
     #[inline]
     fn find_best_bid(&self) -> Option<usize> {
-        // 从高到低查找第一个设置的bit
-        // BitVec没有直接的trailing_ones，需要手动遍历
-        for idx in (0..self.bid_bitmap.len()).rev() {
-            if self.bid_bitmap.get(idx).unwrap_or(false) {
-                return Some(idx);
-            }
-        }
-        None
+        self.bid_bitmap.find_last_one()
     }
 
-    /// 查找最优卖价 - O(1)位图索引
+    /// 查找最优卖价 - O(n/64)位图索引 + 硬件指令
     ///
     /// 使用硬件指令快速查找最低有效位
     /// - 卖单: 从低到高，需要找到第一个设置的bit
-    /// - 时间复杂度: O(1) 硬件指令
+    /// - 时间复杂度: O(n/64) + 硬件指令 trailing_zeros
+    /// - 对于6000个价格层: 最多94个u64块比较
     #[inline]
     fn find_best_ask(&self) -> Option<usize> {
-        // 从低到高查找第一个设置的bit
-        for idx in 0..self.ask_bitmap.len() {
-            if self.ask_bitmap.get(idx).unwrap_or(false) {
-                return Some(idx);
-            }
-        }
-        None
+        self.ask_bitmap.find_first_one()
     }
 
-    /// 查找下一个买价（向下）
+    /// 查找下一个买价（向下）- 使用位图硬件指令
+    #[inline]
     fn find_next_bid(&self, current_idx: usize) -> Option<usize> {
-        if current_idx == 0 {
-            return None;
-        }
-        for idx in (0..current_idx).rev() {
-            if self.bid_levels[idx].is_some() {
-                return Some(idx);
-            }
-        }
-        None
+        self.bid_bitmap.find_prev_one(current_idx)
     }
 
-    /// 查找下一个卖价（向上）
+    /// 查找下一个卖价（向上）- 使用位图硬件指令
+    #[inline]
     fn find_next_ask(&self, current_idx: usize) -> Option<usize> {
-        for idx in (current_idx + 1)..self.ask_levels.len() {
-            if self.ask_levels[idx].is_some() {
-                return Some(idx);
-            }
-        }
-        None
+        self.ask_bitmap.find_next_one(current_idx)
     }
 
     /// 获取买卖价差（最优买卖价之间的tick数）

@@ -76,6 +76,68 @@ fn bench_array_ringbuffer(c: &mut Criterion) {
     group.finish();
 }
 
+/// 真实期货盘口场景：价格集中分布
+/// 特点：90%订单集中在最优价±20tick内，符合真实交易特征
+fn bench_realistic_futures(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Realistic Futures Market (concentrated prices)");
+
+    let mid_price = 3500u64;
+    let tick_size = 10u64;
+
+    // 生成1000个订单，90%集中在±20tick内
+    let mut orders = Vec::new();
+    for i in 0..1000 {
+        let (order_type, price_offset) = if i % 2 == 0 {
+            // 买单
+            (OrderType::Buy, -(i as i64 % 20))
+        } else {
+            // 卖单
+            (OrderType::Sell, i as i64 % 20)
+        };
+
+        // 90%订单在±20tick内，10%在±50tick内
+        let offset = if i < 900 {
+            price_offset  // ±20 tick
+        } else {
+            price_offset * 2 + if i % 2 == 0 { -30 } else { 30 }  // ±50 tick
+        };
+
+        let price = (mid_price as i64 + offset * tick_size as i64) as u64;
+
+        orders.push(NewOrderRequest {
+            user_id: i as u64,
+            symbol: Arc::from("rb2501"),
+            order_type,
+            price,
+            quantity: 10,
+        });
+    }
+
+    group.throughput(Throughput::Elements(1000));
+
+    group.bench_function("BTreeMap", |b| {
+        b.iter(|| {
+            let mut book = OrderBookV2::new();
+            for order in &orders {
+                let _ = book.match_order(black_box(order.clone()));
+            }
+        });
+    });
+
+    group.bench_function("Array", |b| {
+        b.iter(|| {
+            // 价格范围覆盖±100tick
+            let spec = ContractSpec::new("rb2501", tick_size, mid_price - 1000, mid_price + 1000);
+            let mut book = TickBasedOrderBook::new(spec);
+            for order in &orders {
+                let _ = book.match_order(black_box(order.clone()));
+            }
+        });
+    });
+
+    group.finish();
+}
+
 /// 深度测试：大量价格层
 fn bench_deep_orderbook(c: &mut Criterion) {
     let mut group = c.benchmark_group("Deep OrderBook (1000 price levels)");
@@ -120,6 +182,7 @@ criterion_group!(
     bench_btreemap_linked_list,
     bench_btreemap_ringbuffer,
     bench_array_ringbuffer,
+    bench_realistic_futures,
     bench_deep_orderbook,
 );
 

@@ -18,3 +18,4 @@ pub mod symbol_pool;
 pub mod partitioned_engine;
 pub mod timestamp;
 pub mod ringbuffer;
+pub mod fast_bitmap;
