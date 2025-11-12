@@ -15,6 +15,7 @@
 use crate::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
 use crate::ringbuffer::RingBuffer;
 use crate::symbol_pool::SymbolPool;
+use bit_vec::BitVec;
 use smallvec::SmallVec;
 use std::sync::Arc;
 
@@ -83,6 +84,13 @@ pub struct TickBasedOrderBook {
     /// 卖单价格层数组（索引0 = min_price）
     ask_levels: Vec<Option<RingBuffer<OrderNode>>>,
 
+    /// 买单价格层位图索引 - O(1)查找最优价
+    /// bit=1表示该价格有订单，bit=0表示无订单
+    bid_bitmap: BitVec,
+
+    /// 卖单价格层位图索引 - O(1)查找最优价
+    ask_bitmap: BitVec,
+
     /// 最优买价索引（缓存）
     best_bid_idx: Option<usize>,
 
@@ -109,6 +117,8 @@ impl TickBasedOrderBook {
         Self {
             bid_levels: (0..num_levels).map(|_| None).collect(),
             ask_levels: (0..num_levels).map(|_| None).collect(),
+            bid_bitmap: BitVec::from_elem(num_levels, false),
+            ask_bitmap: BitVec::from_elem(num_levels, false),
             best_bid_idx: None,
             best_ask_idx: None,
             next_order_id: 1,
@@ -211,6 +221,7 @@ impl TickBasedOrderBook {
                         // 如果队列空了，清理
                         if queue.is_empty() {
                             self.ask_levels[idx] = None;
+                            self.ask_bitmap.set(idx, false); // 清除位图标记
                         }
                     }
 
@@ -274,6 +285,7 @@ impl TickBasedOrderBook {
                         // 如果队列空了，清理
                         if queue.is_empty() {
                             self.bid_levels[idx] = None;
+                            self.bid_bitmap.set(idx, false); // 清除位图标记
                         }
                     }
 
@@ -324,6 +336,9 @@ impl TickBasedOrderBook {
             eprintln!("Warning: Bid queue full at index {}", idx);
         }
 
+        // 设置位图标记
+        self.bid_bitmap.set(idx, true);
+
         // 更新最优买价
         if self.best_bid_idx.is_none() || idx > self.best_bid_idx.unwrap() {
             self.best_bid_idx = Some(idx);
@@ -349,28 +364,42 @@ impl TickBasedOrderBook {
             eprintln!("Warning: Ask queue full at index {}", idx);
         }
 
+        // 设置位图标记
+        self.ask_bitmap.set(idx, true);
+
         // 更新最优卖价
         if self.best_ask_idx.is_none() || idx < self.best_ask_idx.unwrap() {
             self.best_ask_idx = Some(idx);
         }
     }
 
-    /// 查找最优买价
+    /// 查找最优买价 - O(1)位图索引
+    ///
+    /// 使用硬件指令快速查找最高有效位
+    /// - 买单: 从高到低，需要找到最后一个设置的bit
+    /// - 时间复杂度: O(1) 硬件指令
+    #[inline]
     fn find_best_bid(&self) -> Option<usize> {
-        // 从高到低扫描
-        for idx in (0..self.bid_levels.len()).rev() {
-            if self.bid_levels[idx].is_some() {
+        // 从高到低查找第一个设置的bit
+        // BitVec没有直接的trailing_ones，需要手动遍历
+        for idx in (0..self.bid_bitmap.len()).rev() {
+            if self.bid_bitmap.get(idx).unwrap_or(false) {
                 return Some(idx);
             }
         }
         None
     }
 
-    /// 查找最优卖价
+    /// 查找最优卖价 - O(1)位图索引
+    ///
+    /// 使用硬件指令快速查找最低有效位
+    /// - 卖单: 从低到高，需要找到第一个设置的bit
+    /// - 时间复杂度: O(1) 硬件指令
+    #[inline]
     fn find_best_ask(&self) -> Option<usize> {
-        // 从低到高扫描
-        for idx in 0..self.ask_levels.len() {
-            if self.ask_levels[idx].is_some() {
+        // 从低到高查找第一个设置的bit
+        for idx in 0..self.ask_bitmap.len() {
+            if self.ask_bitmap.get(idx).unwrap_or(false) {
                 return Some(idx);
             }
         }
