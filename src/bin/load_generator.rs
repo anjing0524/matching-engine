@@ -1,5 +1,5 @@
 use futures::{SinkExt, StreamExt};
-use matching_engine::protocol::{ClientMessage, NewOrderRequest, OrderType, ServerMessage};
+use matching_engine::shared::protocol::{ClientMessage, NewOrderRequest, OrderType, ServerMessage};
 use rand::Rng;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
