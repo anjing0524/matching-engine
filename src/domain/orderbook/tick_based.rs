@@ -70,7 +70,7 @@ impl ContractSpec {
             tick_size,
             min_price,
             max_price,
-            queue_capacity: 1024,
+            queue_capacity: 2048,  // 增大容量以减少队列满的情况
         }
     }
 }
@@ -118,7 +118,7 @@ pub struct TickBasedOrderBook {
     symbol_pool: Arc<SymbolPool>,
 
     /// 订单ID到位置的映射（用于快速取消）
-    order_locations: HashMap<u64, OrderLocation>,
+    pub(crate) order_locations: HashMap<u64, OrderLocation>,
 }
 
 impl TickBasedOrderBook {
@@ -214,7 +214,10 @@ impl TickBasedOrderBook {
 
                             // 跳过已取消的订单
                             if counter_order.cancelled {
+                                let order_id_to_remove = counter_order.order_id;
                                 queue.pop();
+                                // 清理order_locations防止内存泄漏
+                                self.order_locations.remove(&order_id_to_remove);
                                 continue;
                             }
 
@@ -288,7 +291,10 @@ impl TickBasedOrderBook {
 
                             // 跳过已取消的订单
                             if counter_order.cancelled {
+                                let order_id_to_remove = counter_order.order_id;
                                 queue.pop();
+                                // 清理order_locations防止内存泄漏
+                                self.order_locations.remove(&order_id_to_remove);
                                 continue;
                             }
 
@@ -513,26 +519,27 @@ impl crate::domain::orderbook::traits::OrderBook for TickBasedOrderBook {
             .as_mut()
             .ok_or_else(|| format!("Price level not found for order {}", order_id))?;
 
-        // Step 3: 标记订单为已取消（标记删除法）
+        // Step 3: 从队列中移除订单（物理删除）
+        // 注意: 由于RingBuffer无iter_mut，需要重建队列
         let mut found = false;
         let capacity = queue.capacity();
         let mut temp_orders = Vec::with_capacity(capacity);
 
-        // 将队列中的订单取出并标记
-        while let Some(mut order) = queue.pop() {
+        // 将队列中的订单取出，过滤掉目标订单
+        while let Some(order) = queue.pop() {
             if order.order_id == order_id {
-                order.cancelled = true;
+                // 找到目标订单，标记但不放回（物理删除）
                 found = true;
+                // 不push到temp_orders，实现删除
+            } else {
+                // 保留其他订单
+                temp_orders.push(order);
             }
-            temp_orders.push(order);
         }
 
-        // 将订单放回队列（跳过已完全取消的订单）
+        // 将剩余订单放回队列
         for order in temp_orders {
-            // 只保留未取消且有数量的订单
-            if !order.cancelled || order.quantity > 0 {
-                let _ = queue.push(order);
-            }
+            let _ = queue.push(order);
         }
 
         if !found {
@@ -574,6 +581,7 @@ impl crate::domain::orderbook::traits::OrderBook for TickBasedOrderBook {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::orderbook::traits::OrderBook;
 
     #[test]
     fn test_price_to_index() {
@@ -649,5 +657,114 @@ mod tests {
         assert_eq!(book.best_bid(), Some(1490));
         assert_eq!(book.best_ask(), Some(1510));
         assert_eq!(book.spread_ticks(), Some(2)); // (1510 - 1490) / 10 = 2 ticks
+    }
+
+    #[test]
+    fn test_cancel_order_cleans_locations() {
+        // 测试订单取消后order_locations被正确清理（修复内存泄漏）
+        let spec = ContractSpec::new("TEST", 10, 1000, 2000);
+        let mut book = TickBasedOrderBook::new(spec);
+
+        // 添加买单（没有对手方，会挂单）
+        let buy = NewOrderRequest {
+            user_id: 1,
+            symbol: Arc::from("TEST"),
+            order_type: OrderType::Buy,
+            price: 1500,
+            quantity: 100,
+        };
+
+        let (trades, conf) = book.match_order(buy);
+        assert!(trades.is_empty(), "Should have no trades");
+        assert!(conf.is_some(), "Should have confirmation for pending order");
+
+        let order_id = conf.unwrap().order_id;
+
+        // 验证order_id在locations中（只有挂单才会被记录）
+        assert!(book.order_locations.contains_key(&order_id),
+                "Pending order should be in order_locations");
+
+        // 取消订单
+        book.cancel_order(order_id).unwrap();
+
+        // 验证order_locations已清理
+        assert!(!book.order_locations.contains_key(&order_id),
+                "order_locations should be cleaned after cancel");
+    }
+
+    #[test]
+    fn test_cancel_then_match_cleanup() {
+        // 测试取消订单后匹配时正确清理order_locations
+        let spec = ContractSpec::new("TEST", 10, 1000, 2000);
+        let mut book = TickBasedOrderBook::new(spec);
+
+        // 添加3个卖单在同一价格（没有对手方，都会挂单）
+        let mut order_ids = Vec::new();
+        for i in 1..=3 {
+            let sell = NewOrderRequest {
+                user_id: i,
+                symbol: Arc::from("TEST"),
+                order_type: OrderType::Sell,
+                price: 1500,
+                quantity: 50,
+            };
+            let (trades, conf) = book.match_order(sell);
+            assert!(trades.is_empty(), "Should have no trades initially");
+            assert!(conf.is_some(), "Should have confirmation for pending order");
+            order_ids.push(conf.unwrap().order_id);
+        }
+
+        // 验证3个订单都在locations中
+        assert_eq!(book.order_locations.len(), 3);
+        for &order_id in &order_ids {
+            assert!(book.order_locations.contains_key(&order_id));
+        }
+
+        // 取消中间的订单
+        book.cancel_order(order_ids[1]).unwrap();
+
+        // 验证第二个订单已从locations清理
+        assert!(!book.order_locations.contains_key(&order_ids[1]),
+                "Cancelled order should be removed from locations");
+        assert_eq!(book.order_locations.len(), 2, "Should have 2 orders left");
+
+        // 添加买单匹配剩余订单
+        let buy = NewOrderRequest {
+            user_id: 100,
+            symbol: Arc::from("TEST"),
+            order_type: OrderType::Buy,
+            price: 1500,
+            quantity: 150,  // 足够匹配所有剩余订单
+        };
+
+        let (trades, _) = book.match_order(buy);
+
+        // 应该只有2笔成交（第1和第3个订单，第2个已取消）
+        assert_eq!(trades.len(), 2, "Should have 2 trades (orders 1 and 3)");
+        assert_eq!(trades[0].matched_quantity, 50);
+        assert_eq!(trades[1].matched_quantity, 50);
+
+        // 验证所有订单的locations都被清理
+        assert!(!book.order_locations.contains_key(&order_ids[0]),
+                "Matched order 1 should be removed");
+        assert!(!book.order_locations.contains_key(&order_ids[1]),
+                "Cancelled order 2 should still be removed");
+        assert!(!book.order_locations.contains_key(&order_ids[2]),
+                "Matched order 3 should be removed");
+
+        // 验证order_locations为空（无内存泄漏）
+        assert!(book.order_locations.is_empty(),
+                "order_locations should be empty after all orders matched/cancelled");
+    }
+
+    #[test]
+    fn test_cancel_nonexistent_order() {
+        // 测试取消不存在的订单返回错误
+        let spec = ContractSpec::new("TEST", 10, 1000, 2000);
+        let mut book = TickBasedOrderBook::new(spec);
+
+        let result = book.cancel_order(999);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not found"));
     }
 }
