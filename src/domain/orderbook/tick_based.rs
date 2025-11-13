@@ -434,6 +434,40 @@ impl TickBasedOrderBook {
     }
 }
 
+// ============================================================================
+// OrderBook Trait Implementation
+// ============================================================================
+
+impl crate::domain::orderbook::traits::OrderBook for TickBasedOrderBook {
+    fn match_order(
+        &mut self,
+        request: NewOrderRequest,
+    ) -> (SmallVec<[TradeNotification; 8]>, Option<OrderConfirmation>) {
+        // Delegate to the existing implementation
+        self.match_order(request)
+    }
+
+    fn cancel_order(&mut self, order_id: u64) -> Result<(), String> {
+        // TODO: Implement order cancellation
+        // This will require:
+        // 1. Maintaining an order_id -> (price, position) mapping
+        // 2. Removing the order from the appropriate RingBuffer
+        // 3. Updating the bitmap if the price level becomes empty
+        Err(format!(
+            "Order cancellation not yet implemented for order_id: {}",
+            order_id
+        ))
+    }
+
+    fn get_best_bid(&self) -> Option<u64> {
+        self.best_bid()
+    }
+
+    fn get_best_ask(&self) -> Option<u64> {
+        self.best_ask()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

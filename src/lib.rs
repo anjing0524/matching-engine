@@ -82,10 +82,11 @@ pub mod network_middleware;
 // 便捷的重新导出 (Convenience Re-exports)
 // ===================================================================
 
-// 域层核心类型
-pub use domain::orderbook::{TickBasedOrderBook, ContractSpec};
+// 域层核心类型和 trait
+pub use domain::orderbook::{OrderBook, TickBasedOrderBook, ContractSpec};
 
 // 应用层服务
+// Note: MatchingService is now generic over OrderBook implementation
 pub use application::services::{MatchingService, PartitionedService};
 
 // 基础设施
