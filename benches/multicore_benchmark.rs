@@ -14,7 +14,7 @@
 //! ```
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
-use matching_engine::domain::orderbook::{OrderBook as OrderBookTrait, TickBasedOrderBook, ContractSpec};
+use matching_engine::domain::orderbook::{TickBasedOrderBook, ContractSpec};
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use matching_engine::shared::metrics::METRICS;
 use std::sync::{Arc, Barrier};
@@ -30,8 +30,10 @@ fn generate_random_order(symbol: &str, rng: &mut impl Rng) -> NewOrderRequest {
         OrderType::Sell
     };
 
-    let base_price = 50000;
-    let price = base_price + (rng.gen_range(-100..100) * 10);
+    // Generate price aligned to tick size (10) within range
+    // Range: 49000-51000 with tick size 10 (e.g., 49000, 49010, 49020...)
+    let price_ticks = rng.gen_range(4900..5100); // Tick count
+    let price = price_ticks * 10; // Actual price
     let quantity = rng.gen_range(1..100);
 
     NewOrderRequest {
