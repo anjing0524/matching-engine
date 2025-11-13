@@ -13,6 +13,7 @@
 
 pub mod network;
 pub mod telemetry;
+pub mod observability;
 
 // Re-export key types
 pub use network::{NetworkTransport, Connection, ZeroCopyBuffer};

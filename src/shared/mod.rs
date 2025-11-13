@@ -10,6 +10,7 @@ pub mod protocol;
 pub mod symbol_pool;
 pub mod timestamp;
 pub mod collections;
+pub mod metrics;
 
 // Re-export commonly used types
 pub use protocol::{

@@ -24,6 +24,14 @@ bit-vec = "0.6"
 async-trait = "0.1"
 thiserror = "1.0"
 clap = { version = "4.5", features = ["derive"] }
+prometheus = "0.13"
+lazy_static = "1.4"
+axum = "0.7"
+tower = "0.4"
+hyper = "1.0"
+tracing-opentelemetry = { version = "0.23", optional = true }
+opentelemetry = { version = "0.22", optional = true }
+opentelemetry-otlp = { version = "0.15", optional = true }
 
 # 可选依赖
 core_affinity = { version = "0.8", optional = true }
@@ -90,4 +98,8 @@ harness = false
 
 [[bench]]
 name = "e2e_matching_engine_benchmark"
+harness = false
+
+[[bench]]
+name = "multicore_benchmark"
 harness = false
