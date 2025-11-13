@@ -18,6 +18,8 @@
 pub mod orderbook;
 pub mod matching;
 pub mod entities;
+pub mod validation;
 
 // Re-export key types
-pub use orderbook::{TickBasedOrderBook, ContractSpec, OrderNode};
+pub use orderbook::{OrderBook, TickBasedOrderBook, ContractSpec, OrderNode};
+pub use validation::{OrderValidator, ValidationConfig, ValidationError};
