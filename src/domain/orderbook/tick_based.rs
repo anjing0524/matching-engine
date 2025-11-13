@@ -18,6 +18,7 @@ use crate::shared::symbol_pool::SymbolPool;
 use crate::shared::collections::fast_bitmap::FastBitmap;
 use smallvec::SmallVec;
 use std::sync::Arc;
+use std::collections::HashMap;
 
 /// 订单节点
 #[derive(Clone, Debug)]
@@ -26,6 +27,8 @@ pub struct OrderNode {
     pub order_id: u64,
     pub price: u64,
     pub quantity: u64,
+    /// 是否已取消（标记删除法）
+    pub cancelled: bool,
 }
 
 /// 合约配置
@@ -72,6 +75,15 @@ impl ContractSpec {
     }
 }
 
+/// 订单位置信息（用于快速取消）
+#[derive(Clone, Debug)]
+struct OrderLocation {
+    /// 价格索引
+    price_idx: usize,
+    /// 订单类型（买/卖）
+    is_bid: bool,
+}
+
 /// 基于Tick的订单簿
 pub struct TickBasedOrderBook {
     /// 合约规格
@@ -104,6 +116,9 @@ pub struct TickBasedOrderBook {
 
     /// 符号池
     symbol_pool: Arc<SymbolPool>,
+
+    /// 订单ID到位置的映射（用于快速取消）
+    order_locations: HashMap<u64, OrderLocation>,
 }
 
 impl TickBasedOrderBook {
@@ -126,6 +141,7 @@ impl TickBasedOrderBook {
             next_order_id: 1,
             spec,
             symbol_pool,
+            order_locations: HashMap::new(),
         }
     }
 
@@ -196,6 +212,12 @@ impl TickBasedOrderBook {
                                 break;
                             }
 
+                            // 跳过已取消的订单
+                            if counter_order.cancelled {
+                                queue.pop();
+                                continue;
+                            }
+
                             let trade_qty = std::cmp::min(remaining_quantity, counter_order.quantity);
 
                             trades.push(TradeNotification {
@@ -214,7 +236,11 @@ impl TickBasedOrderBook {
                             counter_order.quantity -= trade_qty;
 
                             if counter_order.quantity == 0 {
+                                // 保存order_id后再pop
+                                let order_id_to_remove = counter_order.order_id;
                                 queue.pop();
+                                // 从位置映射中删除已成交订单
+                                self.order_locations.remove(&order_id_to_remove);
                             } else {
                                 break;
                             }
@@ -260,6 +286,12 @@ impl TickBasedOrderBook {
                                 break;
                             }
 
+                            // 跳过已取消的订单
+                            if counter_order.cancelled {
+                                queue.pop();
+                                continue;
+                            }
+
                             let trade_qty = std::cmp::min(remaining_quantity, counter_order.quantity);
 
                             trades.push(TradeNotification {
@@ -278,7 +310,11 @@ impl TickBasedOrderBook {
                             counter_order.quantity -= trade_qty;
 
                             if counter_order.quantity == 0 {
+                                // 保存order_id后再pop
+                                let order_id_to_remove = counter_order.order_id;
                                 queue.pop();
+                                // 从位置映射中删除已成交订单
+                                self.order_locations.remove(&order_id_to_remove);
                             } else {
                                 break;
                             }
@@ -329,6 +365,7 @@ impl TickBasedOrderBook {
             order_id,
             price: self.index_to_price(idx),
             quantity,
+            cancelled: false,
         };
 
         let queue = self.bid_levels[idx]
@@ -336,6 +373,12 @@ impl TickBasedOrderBook {
 
         if queue.push(order).is_err() {
             eprintln!("Warning: Bid queue full at index {}", idx);
+        } else {
+            // 记录订单位置
+            self.order_locations.insert(order_id, OrderLocation {
+                price_idx: idx,
+                is_bid: true,
+            });
         }
 
         // 设置位图标记
@@ -357,6 +400,7 @@ impl TickBasedOrderBook {
             order_id,
             price: self.index_to_price(idx),
             quantity,
+            cancelled: false,
         };
 
         let queue = self.ask_levels[idx]
@@ -364,6 +408,12 @@ impl TickBasedOrderBook {
 
         if queue.push(order).is_err() {
             eprintln!("Warning: Ask queue full at index {}", idx);
+        } else {
+            // 记录订单位置
+            self.order_locations.insert(order_id, OrderLocation {
+                price_idx: idx,
+                is_bid: false,
+            });
         }
 
         // 设置位图标记
@@ -448,15 +498,68 @@ impl crate::domain::orderbook::traits::OrderBook for TickBasedOrderBook {
     }
 
     fn cancel_order(&mut self, order_id: u64) -> Result<(), String> {
-        // TODO: Implement order cancellation
-        // This will require:
-        // 1. Maintaining an order_id -> (price, position) mapping
-        // 2. Removing the order from the appropriate RingBuffer
-        // 3. Updating the bitmap if the price level becomes empty
-        Err(format!(
-            "Order cancellation not yet implemented for order_id: {}",
-            order_id
-        ))
+        // Step 1: 查找订单位置
+        let location = self.order_locations.get(&order_id).cloned()
+            .ok_or_else(|| format!("Order {} not found", order_id))?;
+
+        // Step 2: 获取对应的价格层队列
+        let levels = if location.is_bid {
+            &mut self.bid_levels
+        } else {
+            &mut self.ask_levels
+        };
+
+        let queue = levels[location.price_idx]
+            .as_mut()
+            .ok_or_else(|| format!("Price level not found for order {}", order_id))?;
+
+        // Step 3: 标记订单为已取消（标记删除法）
+        let mut found = false;
+        let capacity = queue.capacity();
+        let mut temp_orders = Vec::with_capacity(capacity);
+
+        // 将队列中的订单取出并标记
+        while let Some(mut order) = queue.pop() {
+            if order.order_id == order_id {
+                order.cancelled = true;
+                found = true;
+            }
+            temp_orders.push(order);
+        }
+
+        // 将订单放回队列（跳过已完全取消的订单）
+        for order in temp_orders {
+            // 只保留未取消且有数量的订单
+            if !order.cancelled || order.quantity > 0 {
+                let _ = queue.push(order);
+            }
+        }
+
+        if !found {
+            return Err(format!("Order {} not found in queue", order_id));
+        }
+
+        // Step 4: 如果价格层变空，更新位图
+        if queue.is_empty() {
+            if location.is_bid {
+                self.bid_bitmap.set(location.price_idx, false);
+                // 如果这是最优买价，需要重新查找
+                if self.best_bid_idx == Some(location.price_idx) {
+                    self.best_bid_idx = self.find_best_bid();
+                }
+            } else {
+                self.ask_bitmap.set(location.price_idx, false);
+                // 如果这是最优卖价，需要重新查找
+                if self.best_ask_idx == Some(location.price_idx) {
+                    self.best_ask_idx = self.find_best_ask();
+                }
+            }
+        }
+
+        // Step 5: 从位置映射中删除
+        self.order_locations.remove(&order_id);
+
+        Ok(())
     }
 
     fn get_best_bid(&self) -> Option<u64> {

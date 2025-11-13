@@ -200,7 +200,11 @@ impl FastBitmap {
         let start_bit = prev_index % 64;
 
         // 检查起始块的前面部分
-        let mask = (1u64 << (start_bit + 1)) - 1; // 掩码：到start_bit的所有位
+        let mask = if start_bit == 63 {
+            u64::MAX // 全部bit都设置
+        } else {
+            (1u64 << (start_bit + 1)) - 1 // 掩码：到start_bit的所有位
+        };
         let masked = self.blocks[start_block] & mask;
         if masked != 0 {
             let bit_offset = 63 - masked.leading_zeros() as usize;

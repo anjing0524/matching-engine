@@ -170,7 +170,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix test - requires proper orderbook initialization
     fn test_matching_service_basic_match() {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (out_tx, mut out_rx) = mpsc::unbounded_channel();
