@@ -190,6 +190,11 @@ impl TickBasedOrderBook {
             }
         };
 
+        // 预先为新订单分配order_id（如果订单可能挂单）
+        // 这样可以确保TradeNotification和OrderConfirmation使用同一个ID
+        let new_order_id = self.next_order_id;
+        self.next_order_id += 1;
+
         match request.order_type {
             OrderType::Buy => {
                 // 匹配卖单：从最优卖价开始
@@ -229,7 +234,7 @@ impl TickBasedOrderBook {
                                 matched_price: price,
                                 matched_quantity: trade_qty,
                                 buyer_user_id: request.user_id,
-                                buyer_order_id: self.next_order_id,
+                                buyer_order_id: new_order_id,  // 使用预先分配的order_id
                                 seller_user_id: counter_order.user_id,
                                 seller_order_id: counter_order.order_id,
                                 timestamp: 0,
@@ -265,7 +270,7 @@ impl TickBasedOrderBook {
 
                 // 添加剩余订单到买单
                 if remaining_quantity > 0 {
-                    self.add_bid_order(request_idx, request.user_id, remaining_quantity);
+                    self.add_bid_order(request_idx, request.user_id, remaining_quantity, new_order_id);
                 }
             }
             OrderType::Sell => {
@@ -308,7 +313,7 @@ impl TickBasedOrderBook {
                                 buyer_user_id: counter_order.user_id,
                                 buyer_order_id: counter_order.order_id,
                                 seller_user_id: request.user_id,
-                                seller_order_id: self.next_order_id,
+                                seller_order_id: new_order_id,  // 使用预先分配的order_id
                                 timestamp: 0,
                             });
 
@@ -342,17 +347,16 @@ impl TickBasedOrderBook {
 
                 // 添加剩余订单到卖单
                 if remaining_quantity > 0 {
-                    self.add_ask_order(request_idx, request.user_id, remaining_quantity);
+                    self.add_ask_order(request_idx, request.user_id, remaining_quantity, new_order_id);
                 }
             }
         }
 
+        // 返回订单确认（如果有剩余数量挂单）
         let confirmation = if remaining_quantity > 0 {
-            let order_id = self.next_order_id;
-            self.next_order_id += 1;
             Some(OrderConfirmation {
                 user_id: request.user_id,
-                order_id,
+                order_id: new_order_id,  // 使用预先分配的order_id
             })
         } else {
             None
@@ -362,10 +366,13 @@ impl TickBasedOrderBook {
     }
 
     /// 添加买单
-    fn add_bid_order(&mut self, idx: usize, user_id: u64, quantity: u64) {
-        let order_id = self.next_order_id;
-        self.next_order_id += 1;
-
+    ///
+    /// # 参数
+    /// - `idx`: 价格索引
+    /// - `user_id`: 用户ID
+    /// - `quantity`: 数量
+    /// - `order_id`: 订单ID（由调用方预先生成）
+    fn add_bid_order(&mut self, idx: usize, user_id: u64, quantity: u64, order_id: u64) {
         let order = OrderNode {
             user_id,
             order_id,
@@ -397,10 +404,13 @@ impl TickBasedOrderBook {
     }
 
     /// 添加卖单
-    fn add_ask_order(&mut self, idx: usize, user_id: u64, quantity: u64) {
-        let order_id = self.next_order_id;
-        self.next_order_id += 1;
-
+    ///
+    /// # 参数
+    /// - `idx`: 价格索引
+    /// - `user_id`: 用户ID
+    /// - `quantity`: 数量
+    /// - `order_id`: 订单ID（由调用方预先生成）
+    fn add_ask_order(&mut self, idx: usize, user_id: u64, quantity: u64, order_id: u64) {
         let order = OrderNode {
             user_id,
             order_id,
@@ -734,10 +744,13 @@ mod tests {
             symbol: Arc::from("TEST"),
             order_type: OrderType::Buy,
             price: 1500,
-            quantity: 150,  // 足够匹配所有剩余订单
+            quantity: 100,  // 正好匹配所有剩余订单（2个卖单 x 50 = 100）
         };
 
-        let (trades, _) = book.match_order(buy);
+        let (trades, conf) = book.match_order(buy);
+
+        // 买单应该完全成交，无剩余挂单
+        assert!(conf.is_none(), "Buy order should be fully matched with no remainder");
 
         // 应该只有2笔成交（第1和第3个订单，第2个已取消）
         assert_eq!(trades.len(), 2, "Should have 2 trades (orders 1 and 3)");
