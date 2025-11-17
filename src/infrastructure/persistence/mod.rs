@@ -12,11 +12,13 @@
 /// - **效率**: 使用二进制格式和批量刷盘
 
 pub mod wal;
+pub mod async_wal;
 pub mod snapshot;
 pub mod recovery;
 pub mod types;
 
 pub use wal::{WalWriter, WalReader};
+pub use async_wal::AsyncWalWriter;
 pub use snapshot::{SnapshotWriter, SnapshotReader};
 pub use recovery::RecoveryManager;
 pub use types::{WalEntry, SnapshotData, PersistenceConfig, SnapshotMetadata, WalMetadata};
