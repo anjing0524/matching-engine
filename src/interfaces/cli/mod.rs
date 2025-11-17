@@ -196,27 +196,73 @@ async fn run_persistent_server(config: CliConfig) -> Result<(), Box<dyn std::err
     println!("✅ 服务器已启动");
     println!("📡 监听地址: {}", addr);
     println!("\n等待客户端连接...\n");
+    println!("💡 按 Ctrl+C 优雅关闭服务器\n");
 
-    // 接受连接循环
-    loop {
-        match transport.accept().await {
-            Ok(conn) => {
-                let peer_addr = conn.peer_addr().ok();
-                tracing::info!("接受新连接: {:?}", peer_addr);
-                println!("🔗 新连接: {:?}", peer_addr);
+    // 设置信号处理
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let service_for_shutdown = Arc::clone(&service);
 
-                let service_clone = Arc::clone(&service);
-                tokio::spawn(async move {
-                    if let Err(e) = handle_connection(conn, service_clone).await {
-                        tracing::error!("连接处理错误: {}", e);
+    tokio::spawn(async move {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                println!("\n🛑 收到关闭信号 (Ctrl+C)，正在优雅关闭...");
+                tracing::info!("收到 Ctrl+C 信号，开始优雅关闭");
+
+                // 刷新所有WAL数据
+                let mut svc = service_for_shutdown.write().await;
+                match svc.flush() {
+                    Ok(()) => {
+                        println!("✅ 所有数据已安全刷盘");
+                        tracing::info!("WAL数据已刷盘");
                     }
-                });
+                    Err(e) => {
+                        println!("❌ 刷盘失败: {}", e);
+                        tracing::error!("刷盘失败: {}", e);
+                    }
+                }
+
+                let _ = shutdown_tx.send(());
             }
-            Err(e) => {
-                tracing::error!("接受连接失败: {}", e);
+            Err(err) => {
+                tracing::error!("监听 Ctrl+C 失败: {}", err);
+            }
+        }
+    });
+
+    // 接受连接循环（支持优雅关闭）
+    loop {
+        tokio::select! {
+            // 等待新连接
+            result = transport.accept() => {
+                match result {
+                    Ok(conn) => {
+                        let peer_addr = conn.peer_addr().ok();
+                        tracing::info!("接受新连接: {:?}", peer_addr);
+                        println!("🔗 新连接: {:?}", peer_addr);
+
+                        let service_clone = Arc::clone(&service);
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_connection(conn, service_clone).await {
+                                tracing::error!("连接处理错误: {}", e);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!("接受连接失败: {}", e);
+                    }
+                }
+            }
+
+            // 等待关闭信号
+            _ = &mut shutdown_rx => {
+                println!("👋 服务器已停止");
+                tracing::info!("服务器已停止");
+                break;
             }
         }
     }
+
+    Ok(())
 }
 
 /// 处理单个客户端连接
