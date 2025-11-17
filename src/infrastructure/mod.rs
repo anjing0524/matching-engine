@@ -9,12 +9,16 @@
 /// ## Modules
 /// - `network`: High-performance network middleware with multiple backends
 /// - `telemetry`: Metrics, tracing, logging
-/// - `persistence`: Database, message queue (future)
+/// - `persistence`: WAL, snapshots, and crash recovery
+/// - `observability`: HTTP metrics server and health checks
 
 pub mod network;
 pub mod telemetry;
 pub mod observability;
+pub mod persistence;
 
 // Re-export key types
 pub use network::{NetworkTransport, Connection, ZeroCopyBuffer};
 pub use network::{BackendType, MiddlewareConfig, NetworkMiddleware};
+pub use persistence::{WalWriter, SnapshotWriter, SnapshotReader, RecoveryManager};
+pub use persistence::{WalEntry, SnapshotData, PersistenceConfig};

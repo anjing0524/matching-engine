@@ -75,8 +75,8 @@ pub use shared::collections::ringbuffer;
 #[deprecated(note = "使用 crate::shared::collections::fast_bitmap 代替")]
 pub use shared::collections::fast_bitmap;
 
-#[deprecated(note = "使用 crate::infrastructure::network 代替")]
-pub mod network_middleware;
+// #[deprecated(note = "使用 crate::infrastructure::network 代替")]
+// pub mod network_middleware;  // 已删除 - 使用 crate::infrastructure::network 代替
 
 // ===================================================================
 // 便捷的重新导出 (Convenience Re-exports)

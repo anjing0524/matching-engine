@@ -9,10 +9,10 @@
 /// 4. 并发连接数 (concurrent connections)
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matching_engine::network_middleware::buffer::SharedBuffer;
-use matching_engine::network_middleware::codec::{BincodeCodec, Codec, LengthDelimitedCodec};
-use matching_engine::network_middleware::traits::{Connection, NetworkTransport, ZeroCopyBuffer};
-use matching_engine::network_middleware::tokio_backend::TokioTransport;
+use matching_engine::infrastructure::network::buffer::SharedBuffer;
+use matching_engine::infrastructure::network::codec::{BincodeCodec, Codec, LengthDelimitedCodec};
+use matching_engine::infrastructure::network::traits::{Connection, NetworkTransport, ZeroCopyBuffer};
+use matching_engine::infrastructure::network::backends::TokioTransport;
 use matching_engine::protocol::{ClientMessage, NewOrderRequest, OrderType};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

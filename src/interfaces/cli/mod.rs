@@ -11,6 +11,7 @@
 
 use clap::Parser;
 use std::net::IpAddr;
+use std::path::PathBuf;
 
 /// 撮合引擎命令行配置
 #[derive(Parser, Debug, Clone)]
@@ -50,6 +51,30 @@ pub struct CliConfig {
     /// 仅显示配置不启动服务器（用于调试）
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
+
+    /// 数据目录（用于持久化）
+    #[arg(short = 'd', long, default_value = "./data")]
+    pub data_dir: PathBuf,
+
+    /// 是否启用持久化
+    #[arg(long, default_value_t = true)]
+    pub persistence: bool,
+
+    /// 合约代码
+    #[arg(short = 's', long, default_value = "BTCUSDT")]
+    pub symbol: String,
+
+    /// 最小价格
+    #[arg(long, default_value_t = 40000)]
+    pub min_price: u64,
+
+    /// 最大价格
+    #[arg(long, default_value_t = 70000)]
+    pub max_price: u64,
+
+    /// Tick大小
+    #[arg(long, default_value_t = 1)]
+    pub tick_size: u64,
 }
 
 /// Runs the CLI application
@@ -85,6 +110,9 @@ pub async fn run() {
     println!("队列容量:     {}", config.queue_capacity);
     println!("CPU亲和性:    {}", if config.cpu_affinity { "启用" } else { "禁用" });
     println!("日志级别:     {}", config.log_level);
+    println!("持久化:       {}", if config.persistence { "启用" } else { "禁用" });
+    println!("数据目录:     {}", config.data_dir.display());
+    println!("合约:         {} ({}-{})", config.symbol, config.min_price, config.max_price);
     println!("========================================");
 
     // 如果是dry-run模式，仅显示配置
@@ -93,19 +121,207 @@ pub async fn run() {
         return;
     }
 
-    // TODO: 初始化应用服务
-    // - 创建 MatchingService 或 PartitionedService
-    // - 启动网络服务器
-    // - 处理优雅关闭
-
+    // 初始化应用服务
     println!("\n服务器初始化中...");
-    println!("(当前为演示实现，实际服务器功能待集成)");
 
-    // 占位符：模拟服务器运行
-    tracing::info!("服务器已准备就绪");
+    if config.persistence {
+        // 使用持久化匹配服务
+        if let Err(e) = run_persistent_server(config).await {
+            tracing::error!("服务器错误: {}", e);
+            std::process::exit(1);
+        }
+    } else {
+        println!("⚠️ 非持久化模式尚未实现");
+        println!("请使用 --persistence 启用持久化模式");
+    }
+}
 
-    // TODO: 实际实现应该启动异步服务器并等待
-    // server.run().await.unwrap();
+/// 运行持久化服务器
+async fn run_persistent_server(config: CliConfig) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::application::services::PersistentMatchingService;
+    use crate::domain::orderbook::ContractSpec;
+    use crate::infrastructure::persistence::PersistenceConfig;
+    use crate::infrastructure::network::backends::TokioTransport;
+    use crate::infrastructure::network::traits::{NetworkTransport, Connection};
+    use crate::infrastructure::network::codec::{Codec, BincodeCodec, LengthDelimitedCodec};
+    use crate::shared::protocol::ClientMessage;
+    use futures::StreamExt;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    // 创建合约规格
+    let spec = ContractSpec::new(
+        &config.symbol,
+        config.tick_size,
+        config.min_price,
+        config.max_price,
+    );
+
+    // 创建持久化配置
+    let persistence_config = PersistenceConfig {
+        data_dir: config.data_dir.clone(),
+        wal_sync: true,
+        ..Default::default()
+    };
+
+    // 尝试恢复或创建新服务
+    let service = if persistence_config.data_dir.exists() {
+        tracing::info!("检测到数据目录，尝试恢复状态...");
+        match PersistentMatchingService::recover(spec.clone(), persistence_config.clone()) {
+            Ok(svc) => {
+                tracing::info!("✅ 状态恢复成功");
+                println!("✅ 从持久化状态恢复成功");
+                svc
+            }
+            Err(e) => {
+                tracing::warn!("恢复失败: {}, 创建新服务", e);
+                println!("⚠️ 恢复失败，创建新服务");
+                PersistentMatchingService::new(spec, persistence_config)?
+            }
+        }
+    } else {
+        tracing::info!("创建新的持久化服务");
+        println!("创建新的持久化服务");
+        PersistentMatchingService::new(spec, persistence_config)?
+    };
+
+    let service = Arc::new(RwLock::new(service));
+
+    // 创建网络传输层
+    let mut transport = TokioTransport::new()?;
+    let addr = format!("{}:{}", config.host, config.port).parse()?;
+    transport.bind(addr).await?;
+
+    tracing::info!("服务器已启动，监听 {}", addr);
+    println!("✅ 服务器已启动");
+    println!("📡 监听地址: {}", addr);
+    println!("\n等待客户端连接...\n");
+    println!("💡 按 Ctrl+C 优雅关闭服务器\n");
+
+    // 设置信号处理
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let service_for_shutdown = Arc::clone(&service);
+
+    tokio::spawn(async move {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                println!("\n🛑 收到关闭信号 (Ctrl+C)，正在优雅关闭...");
+                tracing::info!("收到 Ctrl+C 信号，开始优雅关闭");
+
+                // 刷新所有WAL数据
+                let mut svc = service_for_shutdown.write().await;
+                match svc.flush() {
+                    Ok(()) => {
+                        println!("✅ 所有数据已安全刷盘");
+                        tracing::info!("WAL数据已刷盘");
+                    }
+                    Err(e) => {
+                        println!("❌ 刷盘失败: {}", e);
+                        tracing::error!("刷盘失败: {}", e);
+                    }
+                }
+
+                let _ = shutdown_tx.send(());
+            }
+            Err(err) => {
+                tracing::error!("监听 Ctrl+C 失败: {}", err);
+            }
+        }
+    });
+
+    // 接受连接循环（支持优雅关闭）
+    loop {
+        tokio::select! {
+            // 等待新连接
+            result = transport.accept() => {
+                match result {
+                    Ok(conn) => {
+                        let peer_addr = conn.peer_addr().ok();
+                        tracing::info!("接受新连接: {:?}", peer_addr);
+                        println!("🔗 新连接: {:?}", peer_addr);
+
+                        let service_clone = Arc::clone(&service);
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_connection(conn, service_clone).await {
+                                tracing::error!("连接处理错误: {}", e);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!("接受连接失败: {}", e);
+                    }
+                }
+            }
+
+            // 等待关闭信号
+            _ = &mut shutdown_rx => {
+                println!("👋 服务器已停止");
+                tracing::info!("服务器已停止");
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// 处理单个客户端连接
+async fn handle_connection(
+    mut conn: Box<dyn crate::infrastructure::network::traits::Connection>,
+    service: std::sync::Arc<tokio::sync::RwLock<crate::application::services::PersistentMatchingService>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::infrastructure::network::codec::{Codec, BincodeCodec, LengthDelimitedCodec};
+    use crate::shared::protocol::ClientMessage;
+
+    let peer_addr = conn.peer_addr().ok();
+    tracing::info!("开始处理连接: {:?}", peer_addr);
+
+    let mut codec = LengthDelimitedCodec::new(BincodeCodec::<ClientMessage>::new());
+
+    loop {
+        // 接收数据（零拷贝）
+        let buf = conn.recv().await?;
+        let data = buf.as_slice();
+
+        // 解码消息
+        match codec.decode(data)? {
+            Some(ClientMessage::NewOrder(order)) => {
+                tracing::debug!(
+                    "收到订单: symbol={}, type={:?}, price={}, qty={}",
+                    order.symbol,
+                    order.order_type,
+                    order.price,
+                    order.quantity
+                );
+
+                // 提交到持久化服务
+                let mut svc = service.write().await;
+                match svc.match_order(order.clone()) {
+                    Ok((trades, _confirmation)) => {
+                        if !trades.is_empty() {
+                            tracing::info!("订单撮合成功，产生 {} 笔成交", trades.len());
+                            println!("  ✅ 订单撮合成功，产生 {} 笔成交", trades.len());
+                        } else {
+                            tracing::info!("订单已挂单");
+                            println!("  📋 订单已挂单");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("订单处理失败: {}", e);
+                        println!("  ❌ 订单处理失败: {}", e);
+                    }
+                }
+            }
+            Some(ClientMessage::CancelOrder(_cancel)) => {
+                tracing::warn!("取消订单功能当前不支持");
+                println!("  ⚠️ 取消订单功能当前不支持");
+            }
+            None => {
+                // 不完整的消息，继续接收
+                continue;
+            }
+        }
+    }
 }
 
 /// 初始化日志系统

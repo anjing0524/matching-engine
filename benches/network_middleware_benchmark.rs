@@ -7,10 +7,10 @@
 /// 4. 缓冲区池性能
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matching_engine::network_middleware::buffer::{BufferPool, SharedBuffer};
-use matching_engine::network_middleware::codec::{BincodeCodec, Codec, LengthDelimitedCodec};
-use matching_engine::network_middleware::metrics::NetworkMetrics;
-use matching_engine::network_middleware::traits::ZeroCopyBuffer;
+use matching_engine::infrastructure::network::buffer::{BufferPool, SharedBuffer};
+use matching_engine::infrastructure::network::codec::{BincodeCodec, Codec, LengthDelimitedCodec};
+use matching_engine::infrastructure::network::metrics::NetworkMetrics;
+use matching_engine::infrastructure::network::traits::ZeroCopyBuffer;
 use matching_engine::protocol::{ClientMessage, NewOrderRequest, OrderType};
 use std::sync::Arc;
 use std::time::Duration;

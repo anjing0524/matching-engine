@@ -3,7 +3,7 @@
 /// 演示如何将网络中间件与高性能匹配引擎集成
 /// 支持多种后端：Tokio、io_uring、DPDK
 
-use matching_engine::network_middleware::{
+use matching_engine::infrastructure::network::{
     BackendType, BincodeCodec, Codec, Connection, LengthDelimitedCodec, MiddlewareConfig,
     NetworkTransport,
 };
@@ -61,22 +61,22 @@ async fn main() {
     // 创建传输层（手动实现，因为我们需要自定义服务逻辑）
     let mut transport: Box<dyn NetworkTransport> = match backend {
         BackendType::Tokio => {
-            Box::new(matching_engine::network_middleware::tokio_backend::TokioTransport::new().unwrap())
+            Box::new(matching_engine::infrastructure::network::backends::TokioTransport::new().unwrap())
         }
         #[cfg(feature = "io-uring")]
         BackendType::IoUring => {
-            let io_uring_config = matching_engine::network_middleware::io_uring_backend::IoUringConfig {
+            let io_uring_config = matching_engine::infrastructure::network::backends::IoUringConfig {
                 queue_depth: middleware_config.rx_queue_depth as u32,
                 buffer_size: middleware_config.buffer_size,
                 buffer_pool_size: middleware_config.rx_queue_depth,
                 ..Default::default()
             };
-            Box::new(matching_engine::network_middleware::io_uring_backend::IoUringTransport::new(io_uring_config).unwrap())
+            Box::new(matching_engine::infrastructure::network::backends::IoUringTransport::new(io_uring_config).unwrap())
         }
         #[cfg(feature = "dpdk")]
         BackendType::Dpdk => {
-            let dpdk_config = matching_engine::network_middleware::dpdk_backend::DpdkConfig::default();
-            Box::new(matching_engine::network_middleware::dpdk_backend::DpdkTransport::new(dpdk_config).unwrap())
+            let dpdk_config = matching_engine::infrastructure::network::backends::DpdkConfig::default();
+            Box::new(matching_engine::infrastructure::network::backends::DpdkTransport::new(dpdk_config).unwrap())
         }
         _ => panic!("Unsupported backend"),
     };
