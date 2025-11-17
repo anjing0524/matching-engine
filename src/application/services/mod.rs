@@ -9,7 +9,9 @@
 
 pub mod matching_service;
 pub mod partitioned_service;
+pub mod persistent_service;
 
 // Re-export main types
 pub use matching_service::{MatchingService, EngineCommand, EngineOutput};
 pub use partitioned_service::{PartitionedService, PartitionConfig, OrderRequest, OrderResponse, PartitionStats};
+pub use persistent_service::PersistentMatchingService;
