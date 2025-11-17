@@ -5,6 +5,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughpu
 use matching_engine::protocol::{NewOrderRequest, OrderType, TradeNotification};
 use serde_json;
 use bytes::{BytesMut, BufMut};
+use std::sync::Arc;
 
 /// ============================================================================
 /// 1. JSON SERIALIZATION COST
@@ -17,7 +18,7 @@ fn bench_json_encode_order_request(c: &mut Criterion) {
     group.bench_function("new_order_request", |b| {
         let order = NewOrderRequest {
             user_id: 12345,
-            symbol: "BTC/USD".to_string(),
+            symbol: Arc::from("BTC/USD"),
             order_type: OrderType::Buy,
             price: 50000,
             quantity: 100,
@@ -53,7 +54,7 @@ fn bench_json_encode_trade_notification(c: &mut Criterion) {
     group.bench_function("trade_notification", |b| {
         let trade = TradeNotification {
             trade_id: 1,
-            symbol: "BTC/USD".to_string(),
+            symbol: Arc::from("BTC/USD"),
             matched_price: 50000,
             matched_quantity: 100,
             buyer_user_id: 1,
@@ -123,7 +124,7 @@ fn bench_full_request_pipeline(c: &mut Criterion) {
     group.bench_function("order_to_json_to_bytes", |b| {
         let order = NewOrderRequest {
             user_id: 12345,
-            symbol: "BTC/USD".to_string(),
+            symbol: Arc::from("BTC/USD"),
             order_type: OrderType::Buy,
             price: 50000,
             quantity: 100,
@@ -152,7 +153,7 @@ fn bench_full_response_pipeline(c: &mut Criterion) {
     group.bench_function("trade_to_json_to_bytes", |b| {
         let trade = TradeNotification {
             trade_id: 1,
-            symbol: "BTC/USD".to_string(),
+            symbol: Arc::from("BTC/USD"),
             matched_price: 50000,
             matched_quantity: 100,
             buyer_user_id: 1,

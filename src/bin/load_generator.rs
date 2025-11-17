@@ -1,5 +1,5 @@
 use futures::{SinkExt, StreamExt};
-use matching_engine::protocol::{ClientMessage, NewOrderRequest, OrderType, ServerMessage};
+use matching_engine::shared::protocol::{ClientMessage, NewOrderRequest, OrderType, ServerMessage};
 use rand::Rng;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -132,7 +132,7 @@ async fn run_client(
             };
             let order = NewOrderRequest {
                 user_id: client_id as u64,
-                symbol: "BTC/USD".to_string(),
+                symbol: Arc::from("BTC/USD"),
                 order_type,
                 price,
                 quantity: rng.gen_range(1..=5),

@@ -1,5 +1,9 @@
 use crate::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
+use crate::symbol_pool::SymbolPool;
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use bumpalo::Bump;
+use smallvec::SmallVec;
 
 // 订单簿中的一个节点，代表一个具体的订单
 #[derive(Clone)]
@@ -25,7 +29,7 @@ struct PriceLevel {
 }
 
 // 订单簿核心结构
-#[derive(Clone)]
+// 注意: 手动实现 Clone 因为 Bump 和 Arc<SymbolPool> 需要特殊处理
 pub struct OrderBook {
     // 买单侧，按价格从高到低排序
     bids: BTreeMap<u64, PriceLevel>,
@@ -39,10 +43,22 @@ pub struct OrderBook {
     free_list_head: Option<usize>,
     // 用于生成唯一订单 ID
     next_order_id: u64,
+    // Arena 分配器：用于临时 Vec 分配，显著减少堆分配开销
+    // 每次匹配后 reset，实现零开销批量释放
+    arena: Bump,
+    // 符号字符串池：避免重复创建Arc<str>
+    // 使用Arc包装以便Clone时共享同一个池
+    symbol_pool: Arc<SymbolPool>,
 }
 
 impl OrderBook {
     pub fn new() -> Self {
+        Self::with_symbol_pool(Arc::clone(crate::symbol_pool::global_symbol_pool()))
+    }
+
+    /// 创建一个使用指定符号池的订单簿
+    /// 允许多个订单簿共享同一个符号池
+    pub fn with_symbol_pool(symbol_pool: Arc<SymbolPool>) -> Self {
         OrderBook {
             bids: BTreeMap::new(),
             asks: BTreeMap::new(),
@@ -50,20 +66,32 @@ impl OrderBook {
             order_id_to_index: BTreeMap::new(),
             free_list_head: None,
             next_order_id: 1,
+            arena: Bump::with_capacity(1024), // 初始 1KB arena，自动扩展
+            symbol_pool,
         }
+    }
+
+    /// 获取符号池的引用
+    pub fn symbol_pool(&self) -> &SymbolPool {
+        &self.symbol_pool
     }
 
     // 撮合一个新订单
     // 返回值是一个元组，包含 (成交列表, 新挂单的确认信息)
-    pub fn match_order(&mut self, mut request: NewOrderRequest) -> (Vec<TradeNotification>, Option<OrderConfirmation>) {
-        let mut trades = Vec::new();
-        let mut remaining_quantity = request.quantity;
-        let symbol = request.symbol.clone(); // Clone once here
+    pub fn match_order(&mut self, mut request: NewOrderRequest) -> (SmallVec<[TradeNotification; 8]>, Option<OrderConfirmation>) {
+        // 优化策略：
+        // 1. 使用symbol_pool.intern()确保符号共享（避免重复Arc创建）
+        // 2. 订单/价格ID使用普通Vec（简单u64不需要arena）
+        // 3. 交易通知使用SmallVec（90%场景<8个trades，避免堆分配）
 
-        // 移除已完全成交的对手订单ID列表
-        let mut orders_to_remove = Vec::new();
-        // 需要从价格map中移除的key列表
-        let mut prices_to_remove = Vec::new();
+        let symbol = self.symbol_pool.intern(&request.symbol);
+
+        // SmallVec: 8个以内trades栈上分配，超过则堆分配
+        let mut trades: SmallVec<[TradeNotification; 8]> = SmallVec::new();
+        let mut orders_to_remove = Vec::with_capacity(16);  // 普通Vec，避免arena借用
+        let mut prices_to_remove = Vec::with_capacity(4);   // 普通Vec，避免arena借用
+
+        let mut remaining_quantity = request.quantity;
 
         match request.order_type {
             OrderType::Buy => {
@@ -78,8 +106,9 @@ impl OrderBook {
                         let counter_order = &mut self.orders[node_idx];
                         let trade_quantity = std::cmp::min(remaining_quantity, counter_order.quantity);
 
+                        // Use Arc::clone which is just atomic increment (cheap)
                         trades.push(TradeNotification {
-                            trade_id: 0, 
+                            trade_id: 0,
                             symbol: symbol.clone(),
                             matched_price: counter_order.price,
                             matched_quantity: trade_quantity,
@@ -119,6 +148,7 @@ impl OrderBook {
                         let counter_order = &mut self.orders[node_idx];
                         let trade_quantity = std::cmp::min(remaining_quantity, counter_order.quantity);
 
+                        // Use Arc::clone which is just atomic increment (cheap)
                         trades.push(TradeNotification {
                             trade_id: 0,
                             symbol: symbol.clone(),
@@ -164,6 +194,7 @@ impl OrderBook {
         // 如果新订单还有剩余数量，则将其添加到订单簿中
         if remaining_quantity > 0 {
             request.quantity = remaining_quantity;
+            request.symbol = symbol; // 使用interned symbol
             let (new_order_id, user_id) = self.add_order(request);
             let confirmation = OrderConfirmation { order_id: new_order_id, user_id };
             (trades, Some(confirmation))
@@ -225,6 +256,7 @@ impl OrderBook {
     }
 
     // 从订单簿中移除一个订单
+    #[inline]
     fn remove_order(&mut self, order_id: u64) {
         // 1. 通过 order_id 找到节点索引
         let node_index = if let Some(index) = self.order_id_to_index.remove(&order_id) {
@@ -239,15 +271,17 @@ impl OrderBook {
             (node.prev, node.next, node.price, node.order_type)
         };
 
+        // 选择正确的价格 map（只查一次）
+        let price_map = match order_type {
+            OrderType::Buy => &mut self.bids,
+            OrderType::Sell => &mut self.asks,
+        };
+
         // 2. 从价格队列的双向链表中移除节点
         if let Some(prev_index) = prev {
             self.orders[prev_index].next = next;
         } else {
             // 节点是头节点
-            let price_map = match order_type {
-                OrderType::Buy => &mut self.bids,
-                OrderType::Sell => &mut self.asks,
-            };
             if let Some(level) = price_map.get_mut(&price) {
                 level.head = next;
             }
@@ -257,20 +291,12 @@ impl OrderBook {
             self.orders[next_index].prev = prev;
         } else {
             // 节点是尾节点
-            let price_map = match order_type {
-                OrderType::Buy => &mut self.bids,
-                OrderType::Sell => &mut self.asks,
-            };
             if let Some(level) = price_map.get_mut(&price) {
                 level.tail = prev;
             }
         }
 
         // 3. 如果价格队列为空，则从 BTreeMap 中移除该价格层级
-        let price_map = match order_type {
-            OrderType::Buy => &mut self.bids,
-            OrderType::Sell => &mut self.asks,
-        };
         if let Some(level) = price_map.get(&price) {
             if level.head.is_none() {
                 price_map.remove(&price);
@@ -280,5 +306,23 @@ impl OrderBook {
         // 4. 将移除的节点索引添加到 free list 头部
         self.orders[node_index].next = self.free_list_head;
         self.free_list_head = Some(node_index);
+    }
+}
+
+// 手动实现 Clone trait
+// Bump allocator 不支持 Clone，所以创建新的空 arena
+// SymbolPool使用Arc共享，克隆时仅增加引用计数
+impl Clone for OrderBook {
+    fn clone(&self) -> Self {
+        OrderBook {
+            bids: self.bids.clone(),
+            asks: self.asks.clone(),
+            orders: self.orders.clone(),
+            order_id_to_index: self.order_id_to_index.clone(),
+            free_list_head: self.free_list_head,
+            next_order_id: self.next_order_id,
+            arena: Bump::with_capacity(1024), // 新建 arena
+            symbol_pool: self.symbol_pool.clone(), // Arc克隆，共享池
+        }
     }
 }

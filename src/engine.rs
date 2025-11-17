@@ -1,5 +1,6 @@
 use crate::orderbook::OrderBook;
 use crate::protocol::{CancelOrderRequest, NewOrderRequest, OrderConfirmation, TradeNotification};
+use crate::timestamp::get_fast_timestamp;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 // 定义引擎可以接收的命令
@@ -43,12 +44,12 @@ impl MatchingEngine {
                 EngineCommand::NewOrder(request) => {
                     let (trades, confirmation_opt) = self.orderbook.match_order(request);
 
+                    // Batch timestamp generation - use cached timestamp for performance
+                    let timestamp = get_fast_timestamp();
+
                     for mut trade in trades {
                         trade.trade_id = self.next_trade_id;
-                        trade.timestamp = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_nanos() as u64;
+                        trade.timestamp = timestamp;
                         self.next_trade_id += 1;
                         // 将成交结果发送出去
                         if self.output_sender.send(EngineOutput::Trade(trade)).is_err() {
