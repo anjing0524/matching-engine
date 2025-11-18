@@ -16,6 +16,7 @@
 
 use crate::shared::metrics::METRICS;
 use super::health::{HealthChecker, HealthDetails};
+use super::metrics_collector::GLOBAL_METRICS;
 use axum::{
     extract::State,
     http::StatusCode,
@@ -78,12 +79,12 @@ async fn metrics_handler() -> Response {
 async fn health_handler(State(checker): State<Arc<HealthChecker>>) -> Response {
     // 收集详细健康信息
     let details = HealthDetails {
-        memory_usage_percent: get_memory_usage(),
-        active_connections: 0, // TODO: 从全局状态获取
+        memory_usage_percent: GLOBAL_METRICS.memory_usage_percent(),
+        active_connections: GLOBAL_METRICS.active_connections(),
         total_orders: METRICS.orders_total.with_label_values(&["buy", "*"]).get() as u64
             + METRICS.orders_total.with_label_values(&["sell", "*"]).get() as u64,
         total_trades: METRICS.trades_total.with_label_values(&["*"]).get() as u64,
-        avg_latency_us: 0.0, // TODO: 计算平均延迟
+        avg_latency_us: GLOBAL_METRICS.avg_latency_us(),
     };
 
     let response = checker.check_health_detailed(details);
@@ -113,13 +114,6 @@ async fn liveness_handler(State(checker): State<Arc<HealthChecker>>) -> Response
     } else {
         StatusCode::SERVICE_UNAVAILABLE.into_response()
     }
-}
-
-/// 获取内存使用率（简化版）
-fn get_memory_usage() -> f64 {
-    // TODO: 实现真实的内存使用率检查
-    // 可以使用 sysinfo crate
-    0.0
 }
 
 #[cfg(test)]
