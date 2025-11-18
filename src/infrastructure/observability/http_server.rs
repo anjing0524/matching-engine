@@ -25,7 +25,7 @@ use axum::{
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::info;
 
 /// 可观测性服务器
 pub struct ObservabilityServer {

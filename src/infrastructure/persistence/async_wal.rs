@@ -21,7 +21,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time;
@@ -246,7 +246,7 @@ impl AsyncWalWriter {
     }
 
     /// 关闭WAL（同步等待刷盘完成）
-    pub async fn close(mut self) -> Result<()> {
+    pub async fn close(self) -> Result<()> {
         self.closed.store(true, Ordering::SeqCst);
         let _ = self.tx.send(WalMessage::Shutdown);
         // 注意：task_handle会在drop时自动等待

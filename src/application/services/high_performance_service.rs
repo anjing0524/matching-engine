@@ -17,13 +17,12 @@
 
 use crate::domain::orderbook::{TickBasedOrderBook, ContractSpec};
 use crate::infrastructure::persistence::{
-    AsyncWalWriter, WalEntry, SnapshotWriter, SnapshotReader, RecoveryManager,
-    PersistenceConfig, PersistenceError,
+    AsyncWalWriter, WalEntry, SnapshotWriter, RecoveryManager, PersistenceError,
 };
 use crate::infrastructure::persistence::snapshot::create_snapshot;
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
-use tracing::{info, warn, error};
+use tracing::{info, warn};
 
 /// 高性能匹配服务配置
 #[derive(Debug, Clone)]

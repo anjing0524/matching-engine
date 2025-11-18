@@ -10,7 +10,7 @@
 /// 5. 恢复完成
 
 use super::{
-    PersistenceError, Result, SnapshotData, SnapshotReader, WalEntry, WalReader,
+    Result, SnapshotData, SnapshotReader, WalEntry, WalReader,
 };
 use std::path::PathBuf;
 use tracing::{info, warn};

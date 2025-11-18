@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// 时间戳缓存
 static TIMESTAMP_CACHE: AtomicU64 = AtomicU64::new(0);
 
-/// 更新计数器（线程本地）
+// 更新计数器（线程本地）
 thread_local! {
     static UPDATE_COUNTER: std::cell::Cell<u32> = std::cell::Cell::new(0);
 }

@@ -11,6 +11,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 /// Tokio TCP连接
 pub struct TokioConnection {
+    #[allow(dead_code)]
     id: u64,
     stream: TcpStream,
     peer_addr: SocketAddr,

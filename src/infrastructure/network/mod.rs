@@ -78,6 +78,7 @@ pub struct NetworkMiddleware<C: Codec> {
     backend: Box<dyn NetworkTransport>,
 
     /// 编解码器
+    #[allow(dead_code)]
     codec: C,
 
     /// 性能指标

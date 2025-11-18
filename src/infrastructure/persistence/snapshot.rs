@@ -11,7 +11,6 @@
 use super::{PersistenceError, Result, SnapshotData};
 use crate::infrastructure::persistence::types::SnapshotMetadata;
 use bincode::config::standard;
-use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;

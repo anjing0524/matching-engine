@@ -77,7 +77,7 @@ impl ContractSpec {
 
 /// 订单位置信息（用于快速取消）
 #[derive(Clone, Debug)]
-struct OrderLocation {
+pub(crate) struct OrderLocation {
     /// 价格索引
     price_idx: usize,
     /// 订单类型（买/卖）

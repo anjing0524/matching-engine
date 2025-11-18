@@ -7,12 +7,11 @@
 
 use crate::domain::orderbook::{TickBasedOrderBook, ContractSpec};
 use crate::infrastructure::persistence::{
-    WalWriter, WalEntry, SnapshotWriter, SnapshotReader, RecoveryManager,
+    WalWriter, WalEntry, SnapshotWriter, RecoveryManager,
     PersistenceConfig, PersistenceError,
 };
 use crate::infrastructure::persistence::snapshot::create_snapshot;
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
-use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use tracing::{info, warn, error};
 

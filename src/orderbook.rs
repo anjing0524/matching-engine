@@ -45,6 +45,7 @@ pub struct OrderBook {
     next_order_id: u64,
     // Arena 分配器：用于临时 Vec 分配，显著减少堆分配开销
     // 每次匹配后 reset，实现零开销批量释放
+    #[allow(dead_code)]
     arena: Bump,
     // 符号字符串池：避免重复创建Arc<str>
     // 使用Arc包装以便Clone时共享同一个池
