@@ -5,10 +5,9 @@
 /// 2. 极端吞吐量压测 (百万级TPS)
 /// 3. 订单簿深度压力测试
 /// 4. 市场微观结构模拟 (真实交易模式)
-
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use matching_engine::domain::orderbook::traits::OrderBook;
+use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use std::sync::Arc;
 use std::time::Duration;

@@ -5,10 +5,11 @@
 /// 3. Network framing overhead (LengthDelimitedCodec)
 /// 4. Serialization costs (serde_json)
 /// 5. Price level lookups (BTreeMap performance)
-
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput, BenchmarkId};
+use criterion::{
+    black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
+};
 use matching_engine::orderbook::OrderBook;
-use matching_engine::protocol::{NewOrderRequest, OrderType, TradeNotification, OrderConfirmation};
+use matching_engine::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
 use std::sync::Arc;
 
 /// ============================================================================
@@ -326,9 +327,7 @@ fn bench_json_serialization(c: &mut Criterion) {
             timestamp: 1234567890,
         };
 
-        b.iter(|| {
-            serde_json::to_string(&black_box(&trade)).unwrap()
-        });
+        b.iter(|| serde_json::to_string(&black_box(&trade)).unwrap());
     });
 
     group.bench_function("order_confirmation_serialize", |b| {
@@ -337,9 +336,7 @@ fn bench_json_serialization(c: &mut Criterion) {
             user_id: 1,
         };
 
-        b.iter(|| {
-            serde_json::to_string(&black_box(&confirmation)).unwrap()
-        });
+        b.iter(|| serde_json::to_string(&black_box(&confirmation)).unwrap());
     });
 
     group.finish();

@@ -2,7 +2,6 @@
 ///
 /// This serves as a thin wrapper that delegates to the interfaces layer.
 /// The actual application logic is implemented in `interfaces::cli`.
-
 use matching_engine::interfaces::cli;
 
 #[tokio::main]

@@ -231,7 +231,7 @@ impl HighPerformanceService {
         self.check_snapshot()?;
 
         // 返回结果
-        let confirmation = confirmation_opt.unwrap_or_else(|| OrderConfirmation {
+        let confirmation = confirmation_opt.unwrap_or(OrderConfirmation {
             user_id: 0,
             order_id: 0,
         });

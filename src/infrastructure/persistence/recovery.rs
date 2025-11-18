@@ -155,20 +155,17 @@ impl RecoveryManager {
 
 /// 恢复策略
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum RecoveryStrategy {
     /// 快速恢复：仅使用快照
     Fast,
     /// 完整恢复：快照 + WAL重放
+    #[default]
     Full,
     /// 验证恢复：完整恢复 + 数据验证
     Verified,
 }
 
-impl Default for RecoveryStrategy {
-    fn default() -> Self {
-        RecoveryStrategy::Full
-    }
-}
 
 /// 恢复选项
 #[derive(Debug, Clone)]

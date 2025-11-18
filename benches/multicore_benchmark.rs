@@ -13,14 +13,14 @@
 //! cargo bench --bench multicore_benchmark
 //! ```
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
-use matching_engine::domain::orderbook::{TickBasedOrderBook, ContractSpec};
-use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use matching_engine::shared::metrics::METRICS;
+use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
+use rand::Rng;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
-use rand::Rng;
 
 /// 生成随机订单
 fn generate_random_order(symbol: &str, rng: &mut impl Rng) -> NewOrderRequest {
@@ -63,7 +63,8 @@ fn single_core_benchmark(c: &mut Criterion) {
                 let duration = start.elapsed();
 
                 // 记录metrics
-                METRICS.matching_duration
+                METRICS
+                    .matching_duration
                     .with_label_values(&["BTC/USD"])
                     .observe(duration.as_micros() as f64);
             }

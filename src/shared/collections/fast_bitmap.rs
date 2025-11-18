@@ -27,7 +27,7 @@ impl FastBitmap {
     /// # 参数
     /// * `len` - bit总数
     pub fn new(len: usize) -> Self {
-        let num_blocks = (len + 63) / 64; // 向上取整
+        let num_blocks = len.div_ceil(64); // 向上取整
         Self {
             blocks: vec![0u64; num_blocks],
             len,

@@ -61,7 +61,7 @@ impl ContractSpec {
         assert!(tick_size > 0, "Tick size must be positive");
         assert!(max_price > min_price, "Max price must be greater than min");
         assert!(
-            (max_price - min_price) % tick_size == 0,
+            (max_price - min_price).is_multiple_of(tick_size),
             "Price range must be divisible by tick size"
         );
 
@@ -157,7 +157,7 @@ impl TickBasedOrderBook {
         if price < self.spec.min_price || price > self.spec.max_price {
             return None;
         }
-        if (price - self.spec.min_price) % self.spec.tick_size != 0 {
+        if !(price - self.spec.min_price).is_multiple_of(self.spec.tick_size) {
             return None; // 非法价格（不在tick上）
         }
         Some(((price - self.spec.min_price) / self.spec.tick_size) as usize)

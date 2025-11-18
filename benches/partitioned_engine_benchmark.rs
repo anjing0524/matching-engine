@@ -1,8 +1,7 @@
 /// 分区引擎性能基准测试
 /// 验证并行架构的性能提升
-
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
-use matching_engine::partitioned_engine::{PartitionedEngine, PartitionConfig};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use matching_engine::partitioned_engine::{PartitionConfig, PartitionedEngine};
 use matching_engine::protocol::{NewOrderRequest, OrderType};
 use std::sync::Arc;
 
@@ -32,7 +31,11 @@ fn bench_partition_count(c: &mut Criterion) {
                         let order = NewOrderRequest {
                             user_id: i as u64,
                             symbol: Arc::from("BTC/USD"),
-                            order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+                            order_type: if i % 2 == 0 {
+                                OrderType::Buy
+                            } else {
+                                OrderType::Sell
+                            },
                             price: 50000 + (i % 100) as u64,
                             quantity: 10,
                         };
@@ -72,7 +75,11 @@ fn bench_batch_size(c: &mut Criterion) {
                         let order = NewOrderRequest {
                             user_id: i as u64,
                             symbol: Arc::from("BTC/USD"),
-                            order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+                            order_type: if i % 2 == 0 {
+                                OrderType::Buy
+                            } else {
+                                OrderType::Sell
+                            },
                             price: 50000,
                             quantity: 10,
                         };
@@ -93,8 +100,14 @@ fn bench_multi_symbol(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1000));
 
     let symbols = vec![
-        "BTC/USD", "ETH/USD", "BNB/USD", "SOL/USD",
-        "ADA/USD", "XRP/USD", "DOT/USD", "MATIC/USD",
+        "BTC/USD",
+        "ETH/USD",
+        "BNB/USD",
+        "SOL/USD",
+        "ADA/USD",
+        "XRP/USD",
+        "DOT/USD",
+        "MATIC/USD",
     ];
 
     group.bench_function("8_symbols_distributed", |b| {
@@ -113,7 +126,11 @@ fn bench_multi_symbol(c: &mut Criterion) {
                 let order = NewOrderRequest {
                     user_id: i as u64,
                     symbol: Arc::from(symbol),
-                    order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+                    order_type: if i % 2 == 0 {
+                        OrderType::Buy
+                    } else {
+                        OrderType::Sell
+                    },
                     price: 50000,
                     quantity: 10,
                 };

@@ -197,16 +197,14 @@ impl AsyncWalWriter {
     /// 写入WAL条目（异步，不阻塞）
     pub fn write(&mut self, entry: WalEntry) -> Result<u64> {
         if self.closed.load(Ordering::SeqCst) {
-            return Err(PersistenceError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(PersistenceError::Io(std::io::Error::other(
                 "WAL已关闭",
             )));
         }
 
         self.tx
             .send(WalMessage::Write(entry))
-            .map_err(|_| PersistenceError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            .map_err(|_| PersistenceError::Io(std::io::Error::other(
                 "后台任务已停止",
             )))?;
 
@@ -221,8 +219,7 @@ impl AsyncWalWriter {
 
         self.tx
             .send(WalMessage::Flush)
-            .map_err(|_| PersistenceError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            .map_err(|_| PersistenceError::Io(std::io::Error::other(
                 "后台任务已停止",
             )))?;
 

@@ -7,12 +7,13 @@
 /// 2. 吞吐量 (throughput)
 /// 3. CPU使用率 (cpu usage)
 /// 4. 并发连接数 (concurrent connections)
-
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use matching_engine::infrastructure::network::backends::TokioTransport;
 use matching_engine::infrastructure::network::buffer::SharedBuffer;
 use matching_engine::infrastructure::network::codec::{BincodeCodec, Codec, LengthDelimitedCodec};
-use matching_engine::infrastructure::network::traits::{Connection, NetworkTransport, ZeroCopyBuffer};
-use matching_engine::infrastructure::network::backends::TokioTransport;
+use matching_engine::infrastructure::network::traits::{
+    Connection, NetworkTransport, ZeroCopyBuffer,
+};
 use matching_engine::protocol::{ClientMessage, NewOrderRequest, OrderType};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -53,10 +54,7 @@ fn bench_tokio_latency(c: &mut Criterion) {
             rt.block_on(async {
                 // 启动服务器
                 let mut server = TokioTransport::new().unwrap();
-                server
-                    .bind("127.0.0.1:0".parse().unwrap())
-                    .await
-                    .unwrap();
+                server.bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
                 let server_addr = server.local_addr().unwrap();
 
                 // 服务器任务（回显）
@@ -131,10 +129,7 @@ fn bench_tokio_throughput(c: &mut Criterion) {
                     rt.block_on(async {
                         // 启动服务器
                         let mut server = TokioTransport::new().unwrap();
-                        server
-                            .bind("127.0.0.1:0".parse().unwrap())
-                            .await
-                            .unwrap();
+                        server.bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
                         let server_addr = server.local_addr().unwrap();
 
                         // 服务器任务（丢弃消息）
@@ -282,10 +277,7 @@ fn bench_concurrent_connections(c: &mut Criterion) {
                     rt.block_on(async {
                         // 启动服务器
                         let mut server = TokioTransport::new().unwrap();
-                        server
-                            .bind("127.0.0.1:0".parse().unwrap())
-                            .await
-                            .unwrap();
+                        server.bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
                         let server_addr = server.local_addr().unwrap();
 
                         // 服务器任务
@@ -316,7 +308,8 @@ fn bench_concurrent_connections(c: &mut Criterion) {
                                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
                                 use tokio::net::TcpStream;
 
-                                let mut client = TcpStream::connect(server_addr_clone).await.unwrap();
+                                let mut client =
+                                    TcpStream::connect(server_addr_clone).await.unwrap();
 
                                 // 发送10个消息
                                 for _ in 0..10 {

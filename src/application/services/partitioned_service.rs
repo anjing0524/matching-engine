@@ -72,7 +72,7 @@ pub struct OrderRequest {
 #[derive(Debug)]
 pub enum OrderResponse {
     Matched {
-        trades: SmallVec<[TradeNotification; 8]>,
+        trades: Box<SmallVec<[TradeNotification; 8]>>,
         confirmation: Option<OrderConfirmation>,
     },
     Error(String),
@@ -168,7 +168,7 @@ impl PartitionWorker {
 
         // Send response if requested
         if let Some(response_tx) = order_req.response_tx {
-            let response = OrderResponse::Matched { trades, confirmation };
+            let response = OrderResponse::Matched { trades: Box::new(trades), confirmation };
             let _ = response_tx.send(response);
         }
     }

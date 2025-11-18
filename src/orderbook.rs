@@ -52,6 +52,12 @@ pub struct OrderBook {
     symbol_pool: Arc<SymbolPool>,
 }
 
+impl Default for OrderBook {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OrderBook {
     pub fn new() -> Self {
         Self::with_symbol_pool(Arc::clone(crate::symbol_pool::global_symbol_pool()))

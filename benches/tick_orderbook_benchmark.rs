@@ -1,9 +1,9 @@
 //! Tick-based Array OrderBook vs BTreeMap性能对比
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use matching_engine::orderbook::OrderBook;
+use matching_engine::orderbook_tick::{ContractSpec, TickBasedOrderBook};
 use matching_engine::orderbook_v2::OrderBookV2;
-use matching_engine::orderbook_tick::{TickBasedOrderBook, ContractSpec};
 use matching_engine::protocol::{NewOrderRequest, OrderType};
 use std::sync::Arc;
 
@@ -12,7 +12,11 @@ fn generate_orders(count: usize, tick_size: u64, base_price: u64) -> Vec<NewOrde
         .map(|i| NewOrderRequest {
             user_id: (i as u64) % 100,
             symbol: Arc::from("rb2501"),
-            order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+            order_type: if i % 2 == 0 {
+                OrderType::Buy
+            } else {
+                OrderType::Sell
+            },
             // 确保价格在tick上
             price: base_price + ((i % 100) as u64) * tick_size,
             quantity: 10,
@@ -22,7 +26,7 @@ fn generate_orders(count: usize, tick_size: u64, base_price: u64) -> Vec<NewOrde
 
 fn bench_btreemap_linked_list(c: &mut Criterion) {
     let mut group = c.benchmark_group("BTreeMap + Linked List");
-    
+
     for count in [100, 500, 1000] {
         let orders = generate_orders(count, 10, 3000);
         group.throughput(Throughput::Elements(count as u64));
@@ -40,7 +44,7 @@ fn bench_btreemap_linked_list(c: &mut Criterion) {
 
 fn bench_btreemap_ringbuffer(c: &mut Criterion) {
     let mut group = c.benchmark_group("BTreeMap + RingBuffer");
-    
+
     for count in [100, 500, 1000] {
         let orders = generate_orders(count, 10, 3000);
         group.throughput(Throughput::Elements(count as u64));
@@ -58,7 +62,7 @@ fn bench_btreemap_ringbuffer(c: &mut Criterion) {
 
 fn bench_array_ringbuffer(c: &mut Criterion) {
     let mut group = c.benchmark_group("Array + RingBuffer (Tick-based)");
-    
+
     for count in [100, 500, 1000] {
         let orders = generate_orders(count, 10, 3000);
         group.throughput(Throughput::Elements(count as u64));
@@ -97,9 +101,9 @@ fn bench_realistic_futures(c: &mut Criterion) {
 
         // 90%订单在±20tick内，10%在±50tick内
         let offset = if i < 900 {
-            price_offset  // ±20 tick
+            price_offset // ±20 tick
         } else {
-            price_offset * 2 + if i % 2 == 0 { -30 } else { 30 }  // ±50 tick
+            price_offset * 2 + if i % 2 == 0 { -30 } else { 30 } // ±50 tick
         };
 
         let price = (mid_price as i64 + offset * tick_size as i64) as u64;
@@ -141,20 +145,24 @@ fn bench_realistic_futures(c: &mut Criterion) {
 /// 深度测试：大量价格层
 fn bench_deep_orderbook(c: &mut Criterion) {
     let mut group = c.benchmark_group("Deep OrderBook (1000 price levels)");
-    
+
     // 生成分散在1000个价格层的订单
     let orders: Vec<_> = (0..1000)
         .map(|i| NewOrderRequest {
             user_id: i as u64,
             symbol: Arc::from("rb2501"),
-            order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+            order_type: if i % 2 == 0 {
+                OrderType::Buy
+            } else {
+                OrderType::Sell
+            },
             price: 2000 + (i as u64) * 10, // 每个价格一个订单
             quantity: 10,
         })
         .collect();
-    
+
     group.throughput(Throughput::Elements(1000));
-    
+
     group.bench_function("BTreeMap", |b| {
         b.iter(|| {
             let mut book = OrderBook::new();
@@ -163,7 +171,7 @@ fn bench_deep_orderbook(c: &mut Criterion) {
             }
         });
     });
-    
+
     group.bench_function("Array", |b| {
         b.iter(|| {
             let spec = ContractSpec::new("rb2501", 10, 2000, 12000);
@@ -173,7 +181,7 @@ fn bench_deep_orderbook(c: &mut Criterion) {
             }
         });
     });
-    
+
     group.finish();
 }
 

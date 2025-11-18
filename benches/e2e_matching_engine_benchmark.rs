@@ -9,10 +9,7 @@
 /// 3. 不同订单类型性能
 /// 4. 并发连接处理能力
 /// 5. 内存使用效率
-
-use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use matching_engine::infrastructure::network::buffer::SharedBuffer;
 use matching_engine::infrastructure::network::codec::{BincodeCodec, Codec, LengthDelimitedCodec};
 use matching_engine::infrastructure::network::traits::ZeroCopyBuffer;
@@ -34,7 +31,12 @@ fn create_test_orderbook() -> TickBasedOrderBook {
 }
 
 /// 创建测试订单
-fn create_test_order(user_id: u64, order_type: OrderType, price: u64, quantity: u64) -> NewOrderRequest {
+fn create_test_order(
+    user_id: u64,
+    order_type: OrderType,
+    price: u64,
+    quantity: u64,
+) -> NewOrderRequest {
     NewOrderRequest {
         user_id,
         symbol: Arc::from("BTCUSDT"),
@@ -195,27 +197,27 @@ fn bench_order_volumes(c: &mut Criterion) {
     for qty in [10, 100, 1000, 10000].iter() {
         group.throughput(Throughput::Elements(*qty as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("batch_orders", qty),
-            qty,
-            |b, &qty| {
-                b.iter(|| {
-                    let mut ob = create_test_orderbook();
+        group.bench_with_input(BenchmarkId::new("batch_orders", qty), qty, |b, &qty| {
+            b.iter(|| {
+                let mut ob = create_test_orderbook();
 
-                    // 批量处理订单
-                    for i in 0..qty {
-                        let order = create_test_order(
-                            1000 + i as u64,
-                            if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
-                            50000 + (i % 10) as u64,
-                            100,
-                        );
-                        let result = ob.match_order(order);
-                        black_box(result);
-                    }
-                });
-            },
-        );
+                // 批量处理订单
+                for i in 0..qty {
+                    let order = create_test_order(
+                        1000 + i as u64,
+                        if i % 2 == 0 {
+                            OrderType::Buy
+                        } else {
+                            OrderType::Sell
+                        },
+                        50000 + (i % 10) as u64,
+                        100,
+                    );
+                    let result = ob.match_order(order);
+                    black_box(result);
+                }
+            });
+        });
     }
 
     group.finish();
@@ -273,10 +275,20 @@ fn bench_price_depth(c: &mut Criterion) {
 
                     // 构建买卖盘深度
                     for i in 0..depth {
-                        let buy = create_test_order(1000 + i as u64, OrderType::Buy, 50000 - i as u64, 100);
+                        let buy = create_test_order(
+                            1000 + i as u64,
+                            OrderType::Buy,
+                            50000 - i as u64,
+                            100,
+                        );
                         ob.match_order(buy);
 
-                        let sell = create_test_order(2000 + i as u64, OrderType::Sell, 50100 + i as u64, 100);
+                        let sell = create_test_order(
+                            2000 + i as u64,
+                            OrderType::Sell,
+                            50100 + i as u64,
+                            100,
+                        );
                         ob.match_order(sell);
                     }
 
@@ -347,10 +359,20 @@ fn bench_concurrent_simulation(c: &mut Criterion) {
             // 模拟交替的买卖单
             for i in 0..1000 {
                 if i % 2 == 0 {
-                    let buy = create_test_order(1000 + i as u64, OrderType::Buy, 49900 + (i % 100) as u64, 100);
+                    let buy = create_test_order(
+                        1000 + i as u64,
+                        OrderType::Buy,
+                        49900 + (i % 100) as u64,
+                        100,
+                    );
                     ob.match_order(buy);
                 } else {
-                    let sell = create_test_order(2000 + i as u64, OrderType::Sell, 50100 - (i % 100) as u64, 100);
+                    let sell = create_test_order(
+                        2000 + i as u64,
+                        OrderType::Sell,
+                        50100 - (i % 100) as u64,
+                        100,
+                    );
                     ob.match_order(sell);
                 }
             }

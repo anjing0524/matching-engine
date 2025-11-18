@@ -1,3 +1,4 @@
+use bincode::config;
 use futures::{SinkExt, StreamExt};
 use matching_engine::shared::protocol::{ClientMessage, NewOrderRequest, OrderType, ServerMessage};
 use rand::Rng;
@@ -8,7 +9,6 @@ use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
-use bincode::config;
 
 // --- 配置 ---
 const NUM_CLIENTS: u32 = 8; // 模拟的并发客户端数量
@@ -62,13 +62,7 @@ async fn main() {
     std::process::exit(0);
 }
 
-
-
-async fn run_client(
-    client_id: u32,
-    trade_counter: Arc<AtomicU64>,
-    latency_tx: mpsc::Sender<u128>,
-) {
+async fn run_client(client_id: u32, trade_counter: Arc<AtomicU64>, latency_tx: mpsc::Sender<u128>) {
     let addr: SocketAddr = SERVER_ADDR.parse().unwrap();
     let stream = match TcpStream::connect(addr).await {
         Ok(s) => s,
@@ -125,7 +119,11 @@ async fn run_client(
         order_id_counter += 1;
         let (order, order_id) = {
             let mut rng = rand::thread_rng();
-            let order_type = if rng.gen::<bool>() { OrderType::Buy } else { OrderType::Sell };
+            let order_type = if rng.gen::<bool>() {
+                OrderType::Buy
+            } else {
+                OrderType::Sell
+            };
             let price = match order_type {
                 OrderType::Buy => rng.gen_range(49990..=50000),
                 OrderType::Sell => rng.gen_range(50000..=50010),

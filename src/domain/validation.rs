@@ -190,13 +190,12 @@ impl OrderValidator {
         }
 
         // If allowed_symbols is configured, check if symbol is in the list
-        if !self.config.allowed_symbols.is_empty() {
-            if !self.config.allowed_symbols.iter().any(|s| s.as_ref() == symbol.as_ref()) {
+        if !self.config.allowed_symbols.is_empty()
+            && !self.config.allowed_symbols.iter().any(|s| s.as_ref() == symbol.as_ref()) {
                 return Err(ValidationError::InvalidSymbol(
                     format!("Symbol '{}' is not in allowed list", symbol)
                 ));
             }
-        }
 
         Ok(())
     }
