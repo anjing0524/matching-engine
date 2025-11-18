@@ -1,10 +1,12 @@
 //! Tick-based Array OrderBook vs BTreeMap性能对比
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matching_engine::orderbook::OrderBook;
-use matching_engine::orderbook_tick::{ContractSpec, TickBasedOrderBook};
-use matching_engine::orderbook_v2::OrderBookV2;
-use matching_engine::protocol::{NewOrderRequest, OrderType};
+#[allow(deprecated)]
+use matching_engine::legacy::orderbook::OrderBook;
+use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
+#[allow(deprecated)]
+use matching_engine::legacy::orderbook_v2::OrderBookV2;
+use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use std::sync::Arc;
 
 fn generate_orders(count: usize, tick_size: u64, base_price: u64) -> Vec<NewOrderRequest> {

@@ -1,8 +1,10 @@
 /// 分区引擎性能基准测试
 /// 验证并行架构的性能提升
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matching_engine::partitioned_engine::{PartitionConfig, PartitionedEngine};
-use matching_engine::protocol::{NewOrderRequest, OrderType};
+#[allow(deprecated)]
+use matching_engine::legacy::partitioned_engine::{PartitionConfig, PartitionedEngine};
+#[allow(deprecated)]
+use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use std::sync::Arc;
 
 /// 基准测试：不同分区数量的性能对比

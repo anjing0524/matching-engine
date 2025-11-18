@@ -8,8 +8,8 @@
 use criterion::{
     black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
 };
-use matching_engine::orderbook::OrderBook;
-use matching_engine::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
+use matching_engine::legacy::orderbook::OrderBook;
+use matching_engine::shared::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
 use std::sync::Arc;
 
 /// ============================================================================

@@ -1,8 +1,8 @@
 //! 高负载基准测试 - 验证批量提交和多核扩展性
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matching_engine::partitioned_engine::{PartitionConfig, PartitionedEngine};
-use matching_engine::protocol::{NewOrderRequest, OrderType};
+use matching_engine::legacy::partitioned_engine::{PartitionConfig, PartitionedEngine};
+use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use std::sync::Arc;
 use std::time::Duration;
 

@@ -13,8 +13,8 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use matching_engine::infrastructure::network::buffer::SharedBuffer;
 use matching_engine::infrastructure::network::codec::{BincodeCodec, Codec, LengthDelimitedCodec};
 use matching_engine::infrastructure::network::traits::ZeroCopyBuffer;
-use matching_engine::orderbook_tick::{ContractSpec, TickBasedOrderBook};
-use matching_engine::protocol::{ClientMessage, NewOrderRequest, OrderType};
+use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
+use matching_engine::shared::protocol::{ClientMessage, NewOrderRequest, OrderType};
 use std::sync::Arc;
 use std::time::Instant;
 

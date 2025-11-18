@@ -14,7 +14,7 @@ use matching_engine::infrastructure::network::codec::{BincodeCodec, Codec, Lengt
 use matching_engine::infrastructure::network::traits::{
     Connection, NetworkTransport, ZeroCopyBuffer,
 };
-use matching_engine::protocol::{ClientMessage, NewOrderRequest, OrderType};
+use matching_engine::shared::protocol::{ClientMessage, NewOrderRequest, OrderType};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

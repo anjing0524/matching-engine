@@ -4,7 +4,7 @@
 use matching_engine::application::services::PersistentMatchingService;
 use matching_engine::domain::orderbook::ContractSpec;
 use matching_engine::infrastructure::persistence::PersistenceConfig;
-use matching_engine::protocol::{NewOrderRequest, OrderType};
+use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use std::sync::Arc;
 use tempfile::TempDir;
 

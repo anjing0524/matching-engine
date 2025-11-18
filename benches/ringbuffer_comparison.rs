@@ -1,9 +1,9 @@
 //! RingBuffer vs 链表实现性能对比
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use matching_engine::orderbook::OrderBook;
+use matching_engine::legacy::orderbook::OrderBook;
 use matching_engine::orderbook_v2::OrderBookV2;
-use matching_engine::protocol::{NewOrderRequest, OrderType};
+use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use std::sync::Arc;
 
 fn generate_orders(count: usize) -> Vec<NewOrderRequest> {

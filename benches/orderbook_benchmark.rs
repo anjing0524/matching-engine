@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use matching_engine::orderbook::OrderBook;
-use matching_engine::protocol::{NewOrderRequest, OrderType};
+use matching_engine::legacy::orderbook::OrderBook;
+use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use std::sync::Arc;
 
 // OrderBook 需要实现 Clone trait 才能在基准测试中被高效克隆

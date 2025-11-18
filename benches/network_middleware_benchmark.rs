@@ -10,7 +10,7 @@ use matching_engine::infrastructure::network::buffer::{BufferPool, SharedBuffer}
 use matching_engine::infrastructure::network::codec::{BincodeCodec, Codec, LengthDelimitedCodec};
 use matching_engine::infrastructure::network::metrics::NetworkMetrics;
 use matching_engine::infrastructure::network::traits::ZeroCopyBuffer;
-use matching_engine::protocol::{ClientMessage, NewOrderRequest, OrderType};
+use matching_engine::shared::protocol::{ClientMessage, NewOrderRequest, OrderType};
 use std::sync::Arc;
 use std::time::Duration;
 

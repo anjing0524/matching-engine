@@ -20,7 +20,7 @@ use super::{PersistenceError, Result, WalEntry};
 use bincode::config::standard;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -183,7 +183,7 @@ impl WalWriter {
     }
 
     /// 获取WAL文件路径
-    fn wal_path(data_dir: &PathBuf, file_num: u64) -> PathBuf {
+    fn wal_path(data_dir: &Path, file_num: u64) -> PathBuf {
         data_dir.join(format!("wal.{:06}.log", file_num))
     }
 

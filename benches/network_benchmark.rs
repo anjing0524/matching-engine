@@ -2,7 +2,7 @@ use bytes::{BufMut, BytesMut};
 /// Network Layer Performance Benchmarks
 /// Tests the zero-copy networking stack impact on total latency
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use matching_engine::protocol::{NewOrderRequest, OrderType, TradeNotification};
+use matching_engine::shared::protocol::{NewOrderRequest, OrderType, TradeNotification};
 use serde_json;
 use std::sync::Arc;
 

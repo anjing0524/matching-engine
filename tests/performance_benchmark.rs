@@ -3,7 +3,7 @@
 /// 测试各个组件的性能，找出瓶颈
 use matching_engine::application::services::{HighPerformanceConfig, HighPerformanceService};
 use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
-use matching_engine::protocol::{NewOrderRequest, OrderType};
+use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use std::sync::Arc;
 use std::time::Instant;
 use tempfile::TempDir;

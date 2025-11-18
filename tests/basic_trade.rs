@@ -1,5 +1,5 @@
 use futures::{SinkExt, StreamExt};
-use matching_engine::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
+use matching_engine::shared::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
 use serde_json;
 use std::sync::Arc;
 use tokio::net::TcpStream;

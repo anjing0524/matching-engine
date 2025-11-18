@@ -6,8 +6,8 @@ use matching_engine::infrastructure::network::{
     BackendType, BincodeCodec, Codec, Connection, LengthDelimitedCodec, MiddlewareConfig,
     NetworkTransport,
 };
-use matching_engine::orderbook_tick::{ContractSpec, TickBasedOrderBook};
-use matching_engine::protocol::ClientMessage;
+use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
+use matching_engine::shared::protocol::ClientMessage;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
