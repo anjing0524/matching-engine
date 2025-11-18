@@ -1,5 +1,5 @@
-use crate::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
-use crate::symbol_pool::SymbolPool;
+use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
+use crate::shared::symbol_pool::SymbolPool;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use bumpalo::Bump;
@@ -60,7 +60,7 @@ impl Default for OrderBook {
 
 impl OrderBook {
     pub fn new() -> Self {
-        Self::with_symbol_pool(Arc::clone(crate::symbol_pool::global_symbol_pool()))
+        Self::with_symbol_pool(Arc::clone(crate::shared::symbol_pool::global_symbol_pool()))
     }
 
     /// 创建一个使用指定符号池的订单簿

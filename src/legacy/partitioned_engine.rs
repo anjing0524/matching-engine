@@ -6,9 +6,9 @@
 /// 3. CPU亲和性绑定，减少缓存失效
 /// 4. 批量处理，提高吞吐量
 
-use crate::orderbook::OrderBook;
-use crate::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
-use crate::symbol_pool::SymbolPool;
+use crate::legacy::orderbook::OrderBook;
+use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
+use crate::shared::symbol_pool::SymbolPool;
 use crossbeam::channel::{bounded, Sender, Receiver};
 use smallvec::SmallVec;
 use std::sync::Arc;
@@ -173,7 +173,7 @@ impl PartitionedEngine {
     /// 创建新的分区引擎
     pub fn new(config: PartitionConfig) -> Self {
         // 使用全局符号池，所有分区共享
-        let symbol_pool = Arc::clone(crate::symbol_pool::global_symbol_pool());
+        let symbol_pool = Arc::clone(crate::shared::symbol_pool::global_symbol_pool());
 
         // 预加载常见交易对
         symbol_pool.preload(&[
@@ -319,7 +319,8 @@ impl PartitionedEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::OrderType;
+    use crate::shared::protocol::{OrderType, NewOrderRequest};
+    use std::sync::Arc;
 
     #[test]
     fn test_partitioned_engine_basic() {

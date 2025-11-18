@@ -11,9 +11,9 @@
 /// - 比手动链表快 20-30%
 /// - 更好的缓存局部性
 
-use crate::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
+use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
 use crate::ringbuffer::RingBuffer;
-use crate::symbol_pool::SymbolPool;
+use crate::shared::symbol_pool::SymbolPool;
 use smallvec::SmallVec;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -52,7 +52,7 @@ pub struct OrderBookV2 {
 impl OrderBookV2 {
     /// 创建新的订单簿
     pub fn new() -> Self {
-        Self::with_symbol_pool(Arc::clone(crate::symbol_pool::global_symbol_pool()))
+        Self::with_symbol_pool(Arc::clone(crate::shared::symbol_pool::global_symbol_pool()))
     }
 
     /// 使用指定符号池创建订单簿

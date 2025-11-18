@@ -124,7 +124,7 @@ pub struct TickBasedOrderBook {
 impl TickBasedOrderBook {
     /// 创建新的订单簿
     pub fn new(spec: ContractSpec) -> Self {
-        Self::with_symbol_pool(spec, Arc::clone(crate::symbol_pool::global_symbol_pool()))
+        Self::with_symbol_pool(spec, Arc::clone(crate::shared::symbol_pool::global_symbol_pool()))
     }
 
     /// 使用指定符号池创建

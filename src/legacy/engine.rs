@@ -1,5 +1,5 @@
-use crate::orderbook::OrderBook;
-use crate::protocol::{CancelOrderRequest, NewOrderRequest, OrderConfirmation, TradeNotification};
+use crate::legacy::orderbook::OrderBook;
+use crate::shared::protocol::{CancelOrderRequest, NewOrderRequest, OrderConfirmation, TradeNotification};
 use crate::timestamp::get_fast_timestamp;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 

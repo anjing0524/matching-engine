@@ -1,6 +1,6 @@
 /// 编解码器实现
 
-use crate::protocol::{NewOrderRequest, TradeNotification};
+use crate::shared::protocol::{NewOrderRequest, TradeNotification};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
