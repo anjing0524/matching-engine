@@ -24,7 +24,7 @@
 /// service.submit_order(order).unwrap();
 /// ```
 
-use crate::orderbook::OrderBook; // TODO: Replace with domain layer trait
+use crate::domain::orderbook::{TickBasedOrderBook, ContractSpec};
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
 use crate::shared::symbol_pool::SymbolPool;
 use crossbeam::channel::{bounded, Sender, Receiver};
@@ -48,6 +48,9 @@ pub struct PartitionConfig {
 
     /// Enable CPU core affinity binding
     pub enable_cpu_affinity: bool,
+
+    /// Contract specification for the orderbook
+    pub contract_spec: ContractSpec,
 }
 
 impl Default for PartitionConfig {
@@ -57,6 +60,7 @@ impl Default for PartitionConfig {
             queue_capacity: 10_000,
             batch_size: 100,
             enable_cpu_affinity: true,
+            contract_spec: ContractSpec::new("DEFAULT", 1, 1000, 100000),
         }
     }
 }
@@ -90,7 +94,7 @@ pub struct PartitionStats {
 struct PartitionWorker {
     #[allow(dead_code)] // Used in cpu-affinity feature
     partition_id: usize,
-    orderbook: OrderBook,
+    orderbook: TickBasedOrderBook,
     rx: Receiver<OrderRequest>,
     stats: PartitionStats,
     config: PartitionConfig,
@@ -100,12 +104,12 @@ impl PartitionWorker {
     fn new(
         partition_id: usize,
         rx: Receiver<OrderRequest>,
-        symbol_pool: Arc<SymbolPool>,
+        _symbol_pool: Arc<SymbolPool>,
         config: PartitionConfig,
     ) -> Self {
         Self {
             partition_id,
-            orderbook: OrderBook::with_symbol_pool(symbol_pool),
+            orderbook: TickBasedOrderBook::new(config.contract_spec.clone()),
             rx,
             stats: PartitionStats::default(),
             config,
@@ -377,6 +381,7 @@ mod tests {
             queue_capacity: 100,
             batch_size: 10,
             enable_cpu_affinity: false,
+            contract_spec: ContractSpec::new("TEST", 1, 1000, 100000),
         };
 
         let service = PartitionedService::new(config);
@@ -390,6 +395,7 @@ mod tests {
             queue_capacity: 100,
             batch_size: 10,
             enable_cpu_affinity: false,
+            contract_spec: ContractSpec::new("TEST", 1, 1000, 100000),
         };
 
         let service = PartitionedService::new(config);
@@ -474,6 +480,7 @@ mod tests {
             queue_capacity: 1000,
             batch_size: 10,
             enable_cpu_affinity: false,
+            contract_spec: ContractSpec::new("TEST", 1, 1000, 100000),
         };
 
         let service = PartitionedService::new(config);

@@ -142,9 +142,23 @@ impl<OB: OrderBook> MatchingService<OB> {
     /// Processes a cancel order request
     #[inline]
     fn process_cancel_order(&mut self, request: CancelOrderRequest) {
-        // TODO: Implement cancel order logic in orderbook
-        // self.orderbook.cancel_order(request.order_id);
-        println!("收到取消订单请求: {:?}", request);
+        match self.orderbook.cancel_order(request.order_id) {
+            Ok(()) => {
+                tracing::debug!(
+                    order_id = request.order_id,
+                    user_id = request.user_id,
+                    "Order cancelled successfully"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    order_id = request.order_id,
+                    user_id = request.user_id,
+                    error = %e,
+                    "Failed to cancel order"
+                );
+            }
+        }
     }
 }
 

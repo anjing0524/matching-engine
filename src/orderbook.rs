@@ -262,6 +262,16 @@ impl OrderBook {
         (order_id, user_id)
     }
 
+    /// 取消订单 (公开API)
+    pub fn cancel_order(&mut self, order_id: u64) -> Result<(), String> {
+        if self.order_id_to_index.contains_key(&order_id) {
+            self.remove_order(order_id);
+            Ok(())
+        } else {
+            Err(format!("Order {} not found", order_id))
+        }
+    }
+
     // 从订单簿中移除一个订单
     #[inline]
     fn remove_order(&mut self, order_id: u64) {
