@@ -99,7 +99,6 @@ impl PartitionWorker {
         if self.config.enable_cpu_affinity {
             #[cfg(feature = "cpu-affinity")]
             {
-                use core_affinity::CoreId;
                 let core_ids = core_affinity::get_core_ids().unwrap();
                 if self.partition_id < core_ids.len() {
                     core_affinity::set_for_current(core_ids[self.partition_id]);
