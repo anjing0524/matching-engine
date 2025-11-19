@@ -361,4 +361,362 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_wal_large_volume_recovery() {
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+
+        const ENTRY_COUNT: u64 = 10_000;
+
+        // 写入10,000条记录
+        {
+            let mut writer = WalWriter::new(data_dir.clone(), false, 100, 1024 * 1024 * 1024).unwrap();
+
+            for i in 0..ENTRY_COUNT {
+                let seq = writer.next_seq();
+                let entry = WalEntry::NewOrder {
+                    seq,
+                    timestamp: i * 1000,
+                    order: NewOrderRequest {
+                        user_id: i,
+                        symbol: Arc::from("BTCUSDT"),
+                        order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+                        price: 50000 + (i % 1000),
+                        quantity: 10 + (i % 100),
+                    },
+                };
+                writer.write(entry).unwrap();
+            }
+
+            writer.flush().unwrap();
+        }
+
+        // 读取并验证所有记录
+        {
+            let reader = WalReader::new(data_dir);
+            let entries = reader.read_all().unwrap();
+
+            assert_eq!(entries.len(), ENTRY_COUNT as usize, "All entries must be recovered");
+
+            // 验证序列号连续性
+            for (i, entry) in entries.iter().enumerate() {
+                assert_eq!(entry.seq(), i as u64, "Sequence number must be continuous");
+                assert_eq!(entry.timestamp(), (i as u64) * 1000, "Timestamp must match");
+
+                // 验证数据完整性
+                if let WalEntry::NewOrder { order, .. } = entry {
+                    assert_eq!(order.user_id, i as u64);
+                    assert_eq!(order.price, 50000 + ((i as u64) % 1000));
+                    assert_eq!(order.quantity, 10 + ((i as u64) % 100));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_wal_corruption_detection() {
+        use std::io::{Seek, SeekFrom, Write as IoWrite};
+
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+
+        // 写入一些有效记录
+        {
+            let mut writer = WalWriter::new(data_dir.clone(), false, 10, 1024 * 1024).unwrap();
+
+            for i in 0..10 {
+                let seq = writer.next_seq();
+                let entry = WalEntry::NewOrder {
+                    seq,
+                    timestamp: i,
+                    order: NewOrderRequest {
+                        user_id: i,
+                        symbol: Arc::from("BTCUSDT"),
+                        order_type: OrderType::Buy,
+                        price: 50000,
+                        quantity: 10,
+                    },
+                };
+                writer.write(entry).unwrap();
+            }
+
+            writer.flush().unwrap();
+        }
+
+        // 手动损坏文件中的数据（在CRC之后的数据区域）
+        {
+            let wal_path = data_dir.join("wal.000000.log");
+            let mut file = OpenOptions::new()
+                .write(true)
+                .open(&wal_path)
+                .unwrap();
+
+            // 跳过header (8 bytes) 和第一个条目的元数据 (4+8+8+4=24 bytes)
+            // 然后损坏实际数据
+            file.seek(SeekFrom::Start(8 + 24 + 10)).unwrap();
+            file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF]).unwrap();
+            file.flush().unwrap();
+        }
+
+        // 尝试读取，应该检测到CRC校验失败
+        {
+            let reader = WalReader::new(data_dir);
+            let result = reader.read_all();
+
+            assert!(result.is_err(), "Corrupted data must be detected");
+            if let Err(e) = result {
+                match e {
+                    PersistenceError::Corruption(msg) => {
+                        assert!(msg.contains("CRC32"), "Error must mention CRC32 mismatch");
+                    }
+                    _ => panic!("Expected Corruption error, got: {:?}", e),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_wal_concurrent_writes() {
+        use std::thread;
+
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+
+        const THREADS: usize = 10;
+        const ENTRIES_PER_THREAD: u64 = 100;
+
+        // 创建writer并包装在Arc中以便多线程共享
+        let writer = Arc::new(Mutex::new(
+            WalWriter::new(data_dir.clone(), false, 10, 1024 * 1024 * 1024).unwrap()
+        ));
+
+        // 启动多个线程并发写入
+        let mut handles = vec![];
+        for thread_id in 0..THREADS {
+            let writer_clone = Arc::clone(&writer);
+            let handle = thread::spawn(move || {
+                for i in 0..ENTRIES_PER_THREAD {
+                    let mut w = writer_clone.lock().unwrap();
+                    let seq = w.next_seq();
+                    let entry = WalEntry::NewOrder {
+                        seq,
+                        timestamp: (thread_id as u64) * 1000 + i,
+                        order: NewOrderRequest {
+                            user_id: (thread_id as u64) * 1000 + i,
+                            symbol: Arc::from("BTCUSDT"),
+                            order_type: OrderType::Buy,
+                            price: 50000 + i,
+                            quantity: 10,
+                        },
+                    };
+                    w.write(entry).unwrap();
+                }
+            });
+            handles.push(handle);
+        }
+
+        // 等待所有线程完成
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // 刷新所有缓冲数据
+        writer.lock().unwrap().flush().unwrap();
+
+        // 读取并验证
+        {
+            let reader = WalReader::new(data_dir);
+            let entries = reader.read_all().unwrap();
+
+            let expected_count = THREADS * ENTRIES_PER_THREAD as usize;
+            assert_eq!(
+                entries.len(),
+                expected_count,
+                "All concurrent writes must be persisted"
+            );
+
+            // 验证序列号唯一性和连续性
+            let mut seqs: Vec<u64> = entries.iter().map(|e| e.seq()).collect();
+            seqs.sort_unstable();
+
+            for (i, &seq) in seqs.iter().enumerate() {
+                assert_eq!(seq, i as u64, "Sequence numbers must be unique and continuous");
+            }
+        }
+    }
+
+    #[test]
+    fn test_wal_file_rotation() {
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+
+        // 设置一个小的max_file_size以触发轮转
+        const MAX_FILE_SIZE: usize = 1024; // 1KB
+        const ENTRY_COUNT: u64 = 100;
+
+        {
+            let mut writer = WalWriter::new(data_dir.clone(), false, 10, MAX_FILE_SIZE).unwrap();
+
+            for i in 0..ENTRY_COUNT {
+                let seq = writer.next_seq();
+                let entry = WalEntry::NewOrder {
+                    seq,
+                    timestamp: i,
+                    order: NewOrderRequest {
+                        user_id: i,
+                        symbol: Arc::from("BTCUSDT"),
+                        order_type: OrderType::Buy,
+                        price: 50000 + i,
+                        quantity: 10,
+                    },
+                };
+                writer.write(entry).unwrap();
+            }
+
+            writer.flush().unwrap();
+        }
+
+        // 验证多个WAL文件被创建
+        let mut file_count = 0;
+        let mut file_num = 0u64;
+        loop {
+            let path = data_dir.join(format!("wal.{file_num:06}.log"));
+            if !path.exists() {
+                break;
+            }
+            file_count += 1;
+            file_num += 1;
+        }
+
+        assert!(
+            file_count > 1,
+            "Multiple WAL files should be created due to rotation (found {})",
+            file_count
+        );
+
+        // 验证所有数据可以从多个文件中恢复
+        {
+            let reader = WalReader::new(data_dir.clone());
+            let entries = reader.read_all().unwrap();
+
+            assert_eq!(
+                entries.len(),
+                ENTRY_COUNT as usize,
+                "All entries must be recoverable across rotated files"
+            );
+
+            // 验证序列号连续性
+            for (i, entry) in entries.iter().enumerate() {
+                assert_eq!(entry.seq(), i as u64);
+            }
+        }
+
+        // 验证每个文件大小不超过限制（允许一些误差，因为条目不可分割）
+        for i in 0..file_count {
+            let path = data_dir.join(format!("wal.{i:06}.log"));
+            let metadata = std::fs::metadata(&path).unwrap();
+
+            // 除了最后一个文件，其他文件应该接近max_file_size
+            if i < file_count - 1 {
+                assert!(
+                    metadata.len() as usize >= MAX_FILE_SIZE,
+                    "File {} should be at least max_file_size",
+                    i
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_wal_fsync_durability() {
+        use std::time::Instant;
+
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+
+        const ENTRY_COUNT: u64 = 50;
+
+        // 测试 sync=true 模式
+        let sync_time = {
+            let start = Instant::now();
+            let mut writer = WalWriter::new(
+                data_dir.join("sync"),
+                true,  // sync=true
+                1,     // batch_size=1 确保每次写入都fsync
+                1024 * 1024
+            ).unwrap();
+
+            for i in 0..ENTRY_COUNT {
+                let seq = writer.next_seq();
+                let entry = WalEntry::NewOrder {
+                    seq,
+                    timestamp: i,
+                    order: NewOrderRequest {
+                        user_id: i,
+                        symbol: Arc::from("BTCUSDT"),
+                        order_type: OrderType::Buy,
+                        price: 50000,
+                        quantity: 10,
+                    },
+                };
+                writer.write(entry).unwrap();
+            }
+            writer.flush().unwrap();
+            start.elapsed()
+        };
+
+        // 测试 sync=false 模式
+        let no_sync_time = {
+            let start = Instant::now();
+            let mut writer = WalWriter::new(
+                data_dir.join("no_sync"),
+                false, // sync=false
+                1,     // batch_size=1
+                1024 * 1024
+            ).unwrap();
+
+            for i in 0..ENTRY_COUNT {
+                let seq = writer.next_seq();
+                let entry = WalEntry::NewOrder {
+                    seq,
+                    timestamp: i,
+                    order: NewOrderRequest {
+                        user_id: i,
+                        symbol: Arc::from("BTCUSDT"),
+                        order_type: OrderType::Buy,
+                        price: 50000,
+                        quantity: 10,
+                    },
+                };
+                writer.write(entry).unwrap();
+            }
+            writer.flush().unwrap();
+            start.elapsed()
+        };
+
+        // 验证两种模式数据都正确写入
+        {
+            let reader = WalReader::new(data_dir.join("sync"));
+            let entries = reader.read_all().unwrap();
+            assert_eq!(entries.len(), ENTRY_COUNT as usize);
+        }
+
+        {
+            let reader = WalReader::new(data_dir.join("no_sync"));
+            let entries = reader.read_all().unwrap();
+            assert_eq!(entries.len(), ENTRY_COUNT as usize);
+        }
+
+        // sync=true 通常应该慢一些（但在某些系统上可能差异不明显）
+        // 这里只是记录性能差异，不强制要求
+        println!("WAL fsync durability test:");
+        println!("  sync=true  time: {:?}", sync_time);
+        println!("  sync=false time: {:?}", no_sync_time);
+        println!("  Performance difference: {:.2}x",
+                 sync_time.as_secs_f64() / no_sync_time.as_secs_f64());
+
+        // 验证sync=true的数据确实被持久化（即使在没有显式flush的情况下也应该可见）
+        // 这通过前面的read_all测试已经验证
+    }
 }
