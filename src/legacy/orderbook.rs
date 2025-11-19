@@ -280,7 +280,7 @@ impl OrderBook {
             self.remove_order(order_id);
             Ok(())
         } else {
-            Err(format!("Order {} not found", order_id))
+            Err(format!("Order {order_id} not found"))
         }
     }
 

@@ -104,7 +104,7 @@ pub async fn run() {
     println!("  高性能期货撮合引擎 v0.1.0");
     println!("========================================");
     println!("监听地址:     {}:{}", config.host, config.port);
-    println!("分区数量:     {}", partition_count);
+    println!("分区数量:     {partition_count}");
     println!("网络后端:     {}", config.network_backend);
     println!("队列容量:     {}", config.queue_capacity);
     println!(
@@ -208,7 +208,7 @@ async fn run_persistent_server(config: CliConfig) -> Result<(), Box<dyn std::err
 
     tracing::info!("服务器已启动，监听 {}", addr);
     println!("✅ 服务器已启动");
-    println!("📡 监听地址: {}", addr);
+    println!("📡 监听地址: {addr}");
     println!("\n等待客户端连接...\n");
     println!("💡 按 Ctrl+C 优雅关闭服务器\n");
 
@@ -230,7 +230,7 @@ async fn run_persistent_server(config: CliConfig) -> Result<(), Box<dyn std::err
                         tracing::info!("WAL数据已刷盘");
                     }
                     Err(e) => {
-                        println!("❌ 刷盘失败: {}", e);
+                        println!("❌ 刷盘失败: {e}");
                         tracing::error!("刷盘失败: {}", e);
                     }
                 }
@@ -252,7 +252,7 @@ async fn run_persistent_server(config: CliConfig) -> Result<(), Box<dyn std::err
                     Ok(conn) => {
                         let peer_addr = conn.peer_addr().ok();
                         tracing::info!("接受新连接: {:?}", peer_addr);
-                        println!("🔗 新连接: {:?}", peer_addr);
+                        println!("🔗 新连接: {peer_addr:?}");
 
                         let service_clone = Arc::clone(&service);
                         tokio::spawn(async move {
@@ -324,7 +324,7 @@ async fn handle_connection(
                     }
                     Err(e) => {
                         tracing::error!("订单处理失败: {}", e);
-                        println!("  ❌ 订单处理失败: {}", e);
+                        println!("  ❌ 订单处理失败: {e}");
                     }
                 }
             }

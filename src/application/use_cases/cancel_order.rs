@@ -57,15 +57,14 @@ pub enum CancelOrderError {
 impl std::fmt::Display for CancelOrderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CancelOrderError::OrderNotFound(id) => write!(f, "Order {} not found", id),
+            CancelOrderError::OrderNotFound(id) => write!(f, "Order {id} not found"),
             CancelOrderError::Unauthorized { order_id, user_id } => {
                 write!(
                     f,
-                    "User {} not authorized to cancel order {}",
-                    user_id, order_id
+                    "User {user_id} not authorized to cancel order {order_id}"
                 )
             }
-            CancelOrderError::OrderbookError(e) => write!(f, "Orderbook error: {}", e),
+            CancelOrderError::OrderbookError(e) => write!(f, "Orderbook error: {e}"),
         }
     }
 }
@@ -175,7 +174,7 @@ mod tests {
 
     #[test]
     fn test_cancel_order_use_case_creation() {
-        let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+        let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
         let orderbook = TickBasedOrderBook::new(spec);
 
         let _use_case = CancelOrderUseCase::new(orderbook);
@@ -183,7 +182,7 @@ mod tests {
 
     #[test]
     fn test_cancel_order_not_implemented() {
-        let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+        let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
         let orderbook = TickBasedOrderBook::new(spec);
 
         let mut use_case = CancelOrderUseCase::new(orderbook);

@@ -45,11 +45,11 @@ pub enum ValidationError {
 impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ValidationError::InvalidPrice(msg) => write!(f, "Invalid price: {}", msg),
-            ValidationError::InvalidQuantity(msg) => write!(f, "Invalid quantity: {}", msg),
-            ValidationError::InvalidSymbol(msg) => write!(f, "Invalid symbol: {}", msg),
-            ValidationError::PriceOutOfRange(msg) => write!(f, "Price out of range: {}", msg),
-            ValidationError::QuantityOutOfRange(msg) => write!(f, "Quantity out of range: {}", msg),
+            ValidationError::InvalidPrice(msg) => write!(f, "Invalid price: {msg}"),
+            ValidationError::InvalidQuantity(msg) => write!(f, "Invalid quantity: {msg}"),
+            ValidationError::InvalidSymbol(msg) => write!(f, "Invalid symbol: {msg}"),
+            ValidationError::PriceOutOfRange(msg) => write!(f, "Price out of range: {msg}"),
+            ValidationError::QuantityOutOfRange(msg) => write!(f, "Quantity out of range: {msg}"),
         }
     }
 }
@@ -201,8 +201,7 @@ impl OrderValidator {
                 .any(|s| s.as_ref() == symbol.as_ref())
         {
             return Err(ValidationError::InvalidSymbol(format!(
-                "Symbol '{}' is not in allowed list",
-                symbol
+                "Symbol '{symbol}' is not in allowed list"
             )));
         }
 
@@ -284,7 +283,7 @@ mod tests {
     fn test_price_out_of_range() {
         let config = ValidationConfig {
             min_price: 100,
-            max_price: 100000,
+            max_price: 100_000,
             ..Default::default()
         };
         let validator = OrderValidator::with_config(config);

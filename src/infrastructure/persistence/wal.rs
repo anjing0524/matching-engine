@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-const WAL_MAGIC: u32 = 0x57414C46; // "WALF"
+const WAL_MAGIC: u32 = 0x5741_4C46; // "WALF"
 const WAL_VERSION: u16 = 1;
 
 /// WAL写入器
@@ -188,7 +188,7 @@ impl WalWriter {
 
     /// 获取WAL文件路径
     fn wal_path(data_dir: &Path, file_num: u64) -> PathBuf {
-        data_dir.join(format!("wal.{:06}.log", file_num))
+        data_dir.join(format!("wal.{file_num:06}.log"))
     }
 
     /// 获取下一个序列号
@@ -305,7 +305,7 @@ impl WalReader {
 
     /// 获取WAL文件路径
     fn wal_path(&self, file_num: u64) -> PathBuf {
-        self.data_dir.join(format!("wal.{:06}.log", file_num))
+        self.data_dir.join(format!("wal.{file_num:06}.log"))
     }
 }
 

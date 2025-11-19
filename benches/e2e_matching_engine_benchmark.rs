@@ -25,7 +25,7 @@ fn create_test_orderbook() -> TickBasedOrderBook {
         tick_size: 1,
         min_price: 40000,
         max_price: 70000,
-        queue_capacity: 10000,
+        queue_capacity: 10_000,
     };
     TickBasedOrderBook::new(spec)
 }
@@ -194,7 +194,7 @@ fn bench_e2e_order_processing(c: &mut Criterion) {
 fn bench_order_volumes(c: &mut Criterion) {
     let mut group = c.benchmark_group("order_volumes");
 
-    for qty in [10, 100, 1000, 10000].iter() {
+    for qty in [10, 100, 1000, 10_000].iter() {
         group.throughput(Throughput::Elements(*qty as u64));
 
         group.bench_with_input(BenchmarkId::new("batch_orders", qty), qty, |b, &qty| {

@@ -54,8 +54,8 @@ pub enum MatchOrderError {
 impl std::fmt::Display for MatchOrderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MatchOrderError::ValidationFailed(e) => write!(f, "Validation failed: {}", e),
-            MatchOrderError::OrderbookError(e) => write!(f, "Orderbook error: {}", e),
+            MatchOrderError::ValidationFailed(e) => write!(f, "Validation failed: {e}"),
+            MatchOrderError::OrderbookError(e) => write!(f, "Orderbook error: {e}"),
         }
     }
 }
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_match_order_use_case_creation() {
-        let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+        let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
         let orderbook = TickBasedOrderBook::new(spec);
         let validator = OrderValidator::new();
 
@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn test_match_order_validation_failure() {
-        let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+        let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
         let orderbook = TickBasedOrderBook::new(spec);
         let validator = OrderValidator::new();
 
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_match_order_success() {
-        let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+        let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
         let orderbook = TickBasedOrderBook::new(spec);
         let validator = OrderValidator::new();
 

@@ -59,7 +59,7 @@ impl Default for PartitionConfig {
             queue_capacity: 10_000,
             batch_size: 100,
             enable_cpu_affinity: true,
-            contract_spec: ContractSpec::new("DEFAULT", 1, 1000, 100000),
+            contract_spec: ContractSpec::new("DEFAULT", 1, 1000, 100_000),
         }
     }
 }
@@ -231,7 +231,7 @@ impl PartitionedService {
 
             // Spawn worker thread
             let handle = thread::Builder::new()
-                .name(format!("partition-{}", partition_id))
+                .name(format!("partition-{partition_id}"))
                 .spawn(move || worker.run())
                 .expect("Failed to spawn worker thread");
 
@@ -266,7 +266,7 @@ impl PartitionedService {
 
         self.partitions[partition_id]
             .send(order_req)
-            .map_err(|e| format!("Failed to send order: {}", e))
+            .map_err(|e| format!("Failed to send order: {e}"))
     }
 
     /// Submits an order and waits for response (synchronous)
@@ -291,11 +291,11 @@ impl PartitionedService {
 
         self.partitions[partition_id]
             .send(order_req)
-            .map_err(|e| format!("Failed to send order: {}", e))?;
+            .map_err(|e| format!("Failed to send order: {e}"))?;
 
         response_rx
             .recv()
-            .map_err(|e| format!("Failed to receive response: {}", e))
+            .map_err(|e| format!("Failed to receive response: {e}"))
     }
 
     /// Submits a batch of orders asynchronously (high-performance API)
@@ -339,7 +339,7 @@ impl PartitionedService {
             for order in orders {
                 self.partitions[partition_id]
                     .send(order)
-                    .map_err(|e| format!("Partition {} send failed: {}", partition_id, e))?;
+                    .map_err(|e| format!("Partition {partition_id} send failed: {e}"))?;
             }
         }
 
@@ -382,7 +382,7 @@ mod tests {
             queue_capacity: 100,
             batch_size: 10,
             enable_cpu_affinity: false,
-            contract_spec: ContractSpec::new("TEST", 1, 1000, 100000),
+            contract_spec: ContractSpec::new("TEST", 1, 1000, 100_000),
         };
 
         let service = PartitionedService::new(config);
@@ -396,7 +396,7 @@ mod tests {
             queue_capacity: 100,
             batch_size: 10,
             enable_cpu_affinity: false,
-            contract_spec: ContractSpec::new("TEST", 1, 1000, 100000),
+            contract_spec: ContractSpec::new("TEST", 1, 1000, 100_000),
         };
 
         let service = PartitionedService::new(config);
@@ -487,7 +487,7 @@ mod tests {
             queue_capacity: 1000,
             batch_size: 10,
             enable_cpu_affinity: false,
-            contract_spec: ContractSpec::new("TEST", 1, 1000, 100000),
+            contract_spec: ContractSpec::new("TEST", 1, 1000, 100_000),
         };
 
         let service = PartitionedService::new(config);

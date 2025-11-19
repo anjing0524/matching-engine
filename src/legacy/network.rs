@@ -16,7 +16,7 @@ pub async fn run_server(
     mut output_receiver: mpsc::UnboundedReceiver<EngineOutput>,
 ) {
     let listener = TcpListener::bind(&addr).await.expect("无法绑定地址");
-    println!("服务器正在监听: {}", addr);
+    println!("服务器正在监听: {addr}");
 
     // 创建一个广播通道用于分发引擎的输出，现在使用 Bytes
     let (broadcast_tx, _) = broadcast::channel::<Bytes>(1024);
@@ -38,7 +38,7 @@ pub async fn run_server(
                     }
                 }
                 Err(e) => {
-                    eprintln!("Bincode encoding error in broadcaster: {:?}", e);
+                    eprintln!("Bincode encoding error in broadcaster: {e:?}");
                 }
             }
         }
@@ -83,12 +83,12 @@ async fn handle_connection(
                                 }
                             }
                             Err(e) => {
-                                eprintln!("Bincode decoding error in handle_connection: {:?}", e);
+                                eprintln!("Bincode decoding error in handle_connection: {e:?}");
                             }
                         }
                     }
                     Some(Err(e)) => {
-                        println!("处理连接时出错: {}", e);
+                        println!("处理连接时出错: {e}");
                         break;
                     }
                     None => break, // 连接已关闭

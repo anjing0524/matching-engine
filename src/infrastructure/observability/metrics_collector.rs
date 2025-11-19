@@ -76,7 +76,7 @@ impl MetricsCollector {
     pub fn new() -> Self {
         Self {
             active_connections: AtomicUsize::new(0),
-            latency_samples: Arc::new(RwLock::new(LatencyTracker::new(10000))),
+            latency_samples: Arc::new(RwLock::new(LatencyTracker::new(10_000))),
         }
     }
 

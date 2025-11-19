@@ -45,8 +45,8 @@ impl Default for HighPerformanceConfig {
         Self {
             data_dir: std::path::PathBuf::from("./data"),
             wal_sync: true,
-            flush_interval_ms: 10,   // 10ms刷盘间隔
-            buffer_threshold: 10000, // 1万条缓冲区
+            flush_interval_ms: 10,    // 10ms刷盘间隔
+            buffer_threshold: 10_000, // 1万条缓冲区
             wal_max_size: 64 * 1024 * 1024,
             snapshot_interval_secs: 300,
         }
@@ -251,7 +251,7 @@ impl HighPerformanceService {
             .unwrap_or(Duration::from_secs(0));
 
         let should_snapshot = elapsed.as_secs() >= self.config.snapshot_interval_secs
-            || self.ops_since_snapshot >= 10000;
+            || self.ops_since_snapshot >= 10_000;
 
         if should_snapshot {
             self.create_snapshot()?;
@@ -267,7 +267,7 @@ impl HighPerformanceService {
         let wal_seq = self.wal_writer.current_seq();
 
         // TODO: 序列化订单簿状态
-        let orderbook_state = format!("Placeholder snapshot at seq {}", wal_seq).into_bytes();
+        let orderbook_state = format!("Placeholder snapshot at seq {wal_seq}").into_bytes();
 
         let snapshot = create_snapshot(wal_seq, orderbook_state);
         self.snapshot_writer.write(snapshot)?;
@@ -355,7 +355,7 @@ mod tests {
             data_dir: temp_dir.path().to_path_buf(),
             wal_sync: false,
             flush_interval_ms: 10,
-            buffer_threshold: 10000,
+            buffer_threshold: 10_000,
             ..Default::default()
         };
 

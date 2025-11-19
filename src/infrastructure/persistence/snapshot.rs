@@ -168,13 +168,13 @@ impl SnapshotWriter {
 
     /// 获取快照文件路径
     fn snapshot_path(&self, snapshot_id: u64) -> PathBuf {
-        self.data_dir.join(format!("snapshot.{}.snap", snapshot_id))
+        self.data_dir.join(format!("snapshot.{snapshot_id}.snap"))
     }
 
     /// 获取元数据文件路径
     fn metadata_path(&self, snapshot_id: u64) -> PathBuf {
         self.data_dir
-            .join(format!("snapshot.{}.snap.meta", snapshot_id))
+            .join(format!("snapshot.{snapshot_id}.snap.meta"))
     }
 }
 
@@ -301,7 +301,7 @@ impl SnapshotReader {
 
     /// 获取快照文件路径
     fn snapshot_path(&self, snapshot_id: u64) -> PathBuf {
-        self.data_dir.join(format!("snapshot.{}.snap", snapshot_id))
+        self.data_dir.join(format!("snapshot.{snapshot_id}.snap"))
     }
 }
 
@@ -356,7 +356,7 @@ mod tests {
         let data_dir = temp_dir.path().to_path_buf();
 
         // 创建大数据快照
-        let orderbook_state = vec![42u8; 10000];
+        let orderbook_state = vec![42u8; 10_000];
         let snapshot = create_snapshot(100, orderbook_state.clone());
 
         // 写入（启用压缩）

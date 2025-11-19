@@ -17,7 +17,7 @@ const ORDERS_PER_CLIENT: usize = 1000;
 #[ignore] // 默认跳过，使用 cargo test -- --ignored 运行
 fn chaos_test_concurrent_order_submission() {
     // 创建引擎
-    let spec = domain::orderbook::ContractSpec::new("CHAOS/TEST", 1, 1000, 100000);
+    let spec = domain::orderbook::ContractSpec::new("CHAOS/TEST", 1, 1000, 100_000);
     let orderbook = Arc::new(parking_lot::Mutex::new(
         domain::orderbook::TickBasedOrderBook::new(spec),
     ));
@@ -39,7 +39,7 @@ fn chaos_test_concurrent_order_submission() {
                     shared::protocol::OrderType::Sell
                 };
 
-                let price = rng.gen_range(10000..50000);
+                let price = rng.gen_range(10_000..50000);
                 let quantity = rng.gen_range(1..100);
 
                 // 构造订单
@@ -101,7 +101,7 @@ fn chaos_test_concurrent_order_submission() {
 #[test]
 #[ignore]
 fn chaos_test_random_cancellations() {
-    let spec = domain::orderbook::ContractSpec::new("CHAOS/TEST", 1, 1000, 100000);
+    let spec = domain::orderbook::ContractSpec::new("CHAOS/TEST", 1, 1000, 100_000);
     let mut orderbook = domain::orderbook::TickBasedOrderBook::new(spec);
 
     let mut rng = rand::thread_rng();
@@ -117,7 +117,7 @@ fn chaos_test_random_cancellations() {
             } else {
                 shared::protocol::OrderType::Sell
             },
-            price: 10000 + (i * 10),
+            price: 10_000 + (i * 10),
             quantity: 10,
         };
 
@@ -156,13 +156,13 @@ fn chaos_test_random_cancellations() {
 #[test]
 #[ignore]
 fn chaos_test_extreme_price_ranges() {
-    let spec = domain::orderbook::ContractSpec::new("CHAOS/TEST", 1, 1000, 100000);
+    let spec = domain::orderbook::ContractSpec::new("CHAOS/TEST", 1, 1000, 100_000);
     let mut orderbook = domain::orderbook::TickBasedOrderBook::new(spec);
 
     let test_cases = vec![
         // (price, quantity, description)
         (1000, 10, "最低价"),
-        (100000, 10, "最高价"),
+        (100_000, 10, "最高价"),
         (50000, 10, "中间价格"),
         (1, 10, "极低价格"),
         (200000, 10, "极高价格"),
@@ -192,7 +192,7 @@ fn chaos_test_extreme_price_ranges() {
 #[ignore]
 fn chaos_test_memory_pressure() {
     // 测试在大量订单下的内存使用
-    let spec = domain::orderbook::ContractSpec::new("CHAOS/TEST", 1, 1000, 100000);
+    let spec = domain::orderbook::ContractSpec::new("CHAOS/TEST", 1, 1000, 100_000);
     let mut orderbook = domain::orderbook::TickBasedOrderBook::new(spec);
 
     let large_order_count = 10_000;
@@ -207,7 +207,7 @@ fn chaos_test_memory_pressure() {
             } else {
                 shared::protocol::OrderType::Sell
             },
-            price: 10000 + ((i % 1000) * 10),
+            price: 10_000 + ((i % 1000) * 10),
             quantity: (i % 100 + 1),
         };
 
@@ -237,7 +237,7 @@ fn chaos_test_memory_pressure() {
 #[ignore]
 fn chaos_test_rapid_order_churn() {
     // 测试快速提交和取消订单
-    let spec = domain::orderbook::ContractSpec::new("CHAOS/TEST", 1, 1000, 100000);
+    let spec = domain::orderbook::ContractSpec::new("CHAOS/TEST", 1, 1000, 100_000);
     let mut orderbook = domain::orderbook::TickBasedOrderBook::new(spec);
 
     let mut order_ids = Vec::new();
@@ -249,7 +249,7 @@ fn chaos_test_rapid_order_churn() {
             user_id: 1,
             symbol: Arc::from("CHAOS/TEST"),
             order_type: shared::protocol::OrderType::Buy,
-            price: 10000 + (i % 100) * 10,
+            price: 10_000 + (i % 100) * 10,
             quantity: 10,
         };
 
@@ -275,7 +275,7 @@ fn chaos_test_rapid_order_churn() {
 #[ignore]
 fn chaos_test_stress_single_price_level() {
     // 测试同一价格档位的大量订单
-    let spec = domain::orderbook::ContractSpec::new("CHAOS/TEST", 1, 1000, 100000);
+    let spec = domain::orderbook::ContractSpec::new("CHAOS/TEST", 1, 1000, 100_000);
     let mut orderbook = domain::orderbook::TickBasedOrderBook::new(spec);
 
     let same_price = 50000;
@@ -316,7 +316,7 @@ fn chaos_test_stress_single_price_level() {
 #[ignore]
 fn chaos_test_concurrent_lock_contention() {
     // 测试高并发下的锁竞争
-    let spec = domain::orderbook::ContractSpec::new("CHAOS/TEST", 1, 1000, 100000);
+    let spec = domain::orderbook::ContractSpec::new("CHAOS/TEST", 1, 1000, 100_000);
     let orderbook = Arc::new(parking_lot::Mutex::new(
         domain::orderbook::TickBasedOrderBook::new(spec),
     ));
@@ -338,7 +338,7 @@ fn chaos_test_concurrent_lock_contention() {
                     } else {
                         shared::protocol::OrderType::Sell
                     },
-                    price: 10000 + (i % 50) * 100,
+                    price: 10_000 + (i % 50) * 100,
                     quantity: 10,
                 };
 

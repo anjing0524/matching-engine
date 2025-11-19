@@ -48,7 +48,7 @@ fn generate_random_order(symbol: &str, rng: &mut impl Rng) -> NewOrderRequest {
 /// 单核基准测试
 fn single_core_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("single_core");
-    group.throughput(Throughput::Elements(10000));
+    group.throughput(Throughput::Elements(10_000));
 
     group.bench_function("tick_orderbook", |b| {
         let spec = ContractSpec::new("BTC/USD", 10, 40000, 60000);
@@ -56,7 +56,7 @@ fn single_core_benchmark(c: &mut Criterion) {
         let mut rng = rand::thread_rng();
 
         b.iter(|| {
-            for _ in 0..10000 {
+            for _ in 0..10_000 {
                 let order = generate_random_order("BTC/USD", &mut rng);
                 let start = std::time::Instant::now();
                 let _result = orderbook.match_order(order);
@@ -86,7 +86,7 @@ fn multicore_benchmark(c: &mut Criterion) {
             continue;
         }
 
-        group.throughput(Throughput::Elements(10000 * cores as u64));
+        group.throughput(Throughput::Elements(10_000 * cores as u64));
 
         group.bench_with_input(
             BenchmarkId::from_parameter(format!("{}cores", cores)),
@@ -110,7 +110,7 @@ fn multicore_benchmark(c: &mut Criterion) {
                             barrier.wait();
 
                             // 执行订单处理
-                            for _ in 0..10000 {
+                            for _ in 0..10_000 {
                                 let order = generate_random_order(&symbol, &mut rng);
                                 black_box(orderbook.match_order(order));
                             }
@@ -136,7 +136,7 @@ fn partitioned_engine_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("partitioned_engine");
     let num_partitions = num_cpus::get().min(16);
 
-    group.throughput(Throughput::Elements(100000));
+    group.throughput(Throughput::Elements(100_000));
 
     group.bench_function(format!("{}_partitions", num_partitions), |b| {
         b.iter(|| {
@@ -157,7 +157,7 @@ fn partitioned_engine_benchmark(c: &mut Criterion) {
                     let mut orderbooks: Vec<_> = symbols
                         .iter()
                         .map(|s| {
-                            let spec = ContractSpec::new(s, 10, 10000, 100000);
+                            let spec = ContractSpec::new(s, 10, 10_000, 100_000);
                             TickBasedOrderBook::new(spec)
                         })
                         .collect();
@@ -168,7 +168,7 @@ fn partitioned_engine_benchmark(c: &mut Criterion) {
                     barrier.wait();
 
                     // 处理订单
-                    for _ in 0..(100000 / num_partitions) {
+                    for _ in 0..(100_000 / num_partitions) {
                         let symbol_idx = rng.gen_range(0..symbols.len());
                         let order = generate_random_order(&symbols[symbol_idx], &mut rng);
                         black_box(orderbooks[symbol_idx].match_order(order));
@@ -205,7 +205,7 @@ fn throughput_benchmark(c: &mut Criterion) {
 
                 let handle = thread::spawn(move || {
                     let symbol = format!("PERF{}", thread_id);
-                    let spec = ContractSpec::new(&symbol, 1, 10000, 100000);
+                    let spec = ContractSpec::new(&symbol, 1, 10_000, 100_000);
                     let mut orderbook = TickBasedOrderBook::new(spec);
                     let mut rng = rand::thread_rng();
 

@@ -101,7 +101,7 @@ impl Metrics {
                 "matching_engine_order_size",
                 "Order size distribution",
                 &["order_type"],
-                vec![1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0]
+                vec![1.0, 10.0, 100.0, 1000.0, 10_000.0, 100_000.0]
             )
             .unwrap(),
 

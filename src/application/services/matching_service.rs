@@ -25,7 +25,7 @@
 /// let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
 /// let (out_tx, out_rx) = mpsc::unbounded_channel();
 ///
-/// let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+/// let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
 /// let orderbook = TickBasedOrderBook::new(spec);
 /// let mut service = MatchingService::new(orderbook, cmd_rx, out_tx);
 /// service.run();
@@ -77,7 +77,7 @@ impl<OB: OrderBook> MatchingService<OB> {
     /// ```rust,ignore
     /// use matching_engine::domain::orderbook::{TickBasedOrderBook, ContractSpec};
     ///
-    /// let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+    /// let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
     /// let orderbook = TickBasedOrderBook::new(spec);
     /// let service = MatchingService::new(orderbook, cmd_rx, out_tx);
     /// ```
@@ -180,7 +180,7 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (out_tx, _out_rx) = mpsc::unbounded_channel();
 
-        let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+        let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
         let orderbook = TickBasedOrderBook::new(spec);
         let service = MatchingService::new(orderbook, cmd_rx, out_tx);
         assert_eq!(service.next_trade_id, 1);
@@ -193,7 +193,7 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (out_tx, mut out_rx) = mpsc::unbounded_channel();
 
-        let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+        let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
         let orderbook = TickBasedOrderBook::new(spec);
         let mut service = MatchingService::new(orderbook, cmd_rx, out_tx);
 

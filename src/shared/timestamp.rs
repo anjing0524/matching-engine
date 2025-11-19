@@ -155,7 +155,7 @@ mod tests {
 
         // 测试精确时间戳性能
         let start = Instant::now();
-        for _ in 0..10000 {
+        for _ in 0..10_000 {
             get_precise_timestamp();
         }
         let precise_duration = start.elapsed();
@@ -165,7 +165,7 @@ mod tests {
 
         // 测试快速时间戳性能
         let start = Instant::now();
-        for _ in 0..10000 {
+        for _ in 0..10_000 {
             get_fast_timestamp();
         }
         let fast_duration = start.elapsed();

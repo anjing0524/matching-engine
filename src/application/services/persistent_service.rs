@@ -210,7 +210,7 @@ impl PersistentMatchingService {
             .unwrap_or(Duration::from_secs(0));
 
         let should_snapshot = elapsed.as_secs() >= self.config.snapshot_interval_secs
-            || self.ops_since_snapshot >= 10000; // 或者每10000个操作
+            || self.ops_since_snapshot >= 10_000; // 或者每10_000个操作
 
         if should_snapshot {
             self.create_snapshot()?;
@@ -227,7 +227,7 @@ impl PersistentMatchingService {
 
         // TODO: 序列化订单簿状态
         // 现在使用占位符数据
-        let orderbook_state = format!("Placeholder snapshot at seq {}", wal_seq).into_bytes();
+        let orderbook_state = format!("Placeholder snapshot at seq {wal_seq}").into_bytes();
 
         let snapshot = create_snapshot(wal_seq, orderbook_state);
         self.snapshot_writer.write(snapshot)?;

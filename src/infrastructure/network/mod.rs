@@ -153,7 +153,7 @@ impl<C: Codec> NetworkMiddleware<C> {
             // 为每个连接spawn任务
             tokio::spawn(async move {
                 if let Err(e) = Self::handle_connection(conn, metrics).await {
-                    eprintln!("Connection error: {}", e);
+                    eprintln!("Connection error: {e}");
                 }
             });
         }

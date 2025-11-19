@@ -26,7 +26,7 @@ use tokio::sync::mpsc;
 use tokio::time;
 use tracing::{debug, error, info, warn};
 
-const WAL_MAGIC: u32 = 0x57414C46; // "WALF"
+const WAL_MAGIC: u32 = 0x5741_4C46; // "WALF"
 const WAL_VERSION: u16 = 1;
 
 /// 异步WAL写入器
@@ -253,7 +253,7 @@ impl AsyncWalWriter {
 
     /// 获取WAL文件路径
     fn wal_path(data_dir: &Path, file_num: u64) -> PathBuf {
-        data_dir.join(format!("wal.{}.log", file_num))
+        data_dir.join(format!("wal.{file_num}.log"))
     }
 }
 
@@ -444,7 +444,7 @@ mod tests {
         )
         .unwrap();
 
-        let count = 10000;
+        let count = 10_000;
         let start = Instant::now();
 
         for i in 0..count {

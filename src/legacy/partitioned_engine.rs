@@ -200,7 +200,7 @@ impl PartitionedEngine {
 
             // 启动worker线程
             let handle = thread::Builder::new()
-                .name(format!("partition-{}", partition_id))
+                .name(format!("partition-{partition_id}"))
                 .spawn(move || worker.run())
                 .expect("Failed to spawn worker thread");
 
@@ -228,7 +228,7 @@ impl PartitionedEngine {
 
         self.partitions[partition_id]
             .send(order_req)
-            .map_err(|e| format!("Failed to send order: {}", e))
+            .map_err(|e| format!("Failed to send order: {e}"))
     }
 
     /// 提交订单并等待响应（同步）
@@ -246,11 +246,11 @@ impl PartitionedEngine {
 
         self.partitions[partition_id]
             .send(order_req)
-            .map_err(|e| format!("Failed to send order: {}", e))?;
+            .map_err(|e| format!("Failed to send order: {e}"))?;
 
         response_rx
             .recv()
-            .map_err(|e| format!("Failed to receive response: {}", e))
+            .map_err(|e| format!("Failed to receive response: {e}"))
     }
 
     /// 批量提交订单（异步，无响应）- 高性能API
@@ -287,7 +287,7 @@ impl PartitionedEngine {
             for order in orders {
                 self.partitions[partition_id]
                     .send(order)
-                    .map_err(|e| format!("Partition {} send failed: {}", partition_id, e))?;
+                    .map_err(|e| format!("Partition {partition_id} send failed: {e}"))?;
             }
         }
 

@@ -18,8 +18,8 @@ const SERVER_ADDR: &str = "127.0.0.1:8080";
 #[tokio::main]
 async fn main() {
     println!("启动吞吐量测试...");
-    println!("模拟客户端数量: {}", NUM_CLIENTS);
-    println!("测试持续时间: {:?}", TEST_DURATION);
+    println!("模拟客户端数量: {NUM_CLIENTS}");
+    println!("测试持续时间: {TEST_DURATION:?}");
 
     let trade_counter = Arc::new(AtomicU64::new(0));
     let (latency_tx, mut latency_rx) = mpsc::channel(NUM_CLIENTS as usize * 100);
@@ -54,8 +54,8 @@ async fn main() {
     };
 
     println!("\n--- 测试结果 ---");
-    println!("总撮合交易数: {}", total_trades);
-    println!("吞吐量 (TPS): {:.2}", throughput);
+    println!("总撮合交易数: {total_trades}");
+    println!("吞吐量 (TPS): {throughput:.2}");
     println!("平均端到端延迟: {:.2} µs", avg_latency / 1000.0);
 
     // 可以在这里中止所有任务，但为了简单起见，我们直接退出进程
@@ -67,7 +67,7 @@ async fn run_client(client_id: u32, trade_counter: Arc<AtomicU64>, latency_tx: m
     let stream = match TcpStream::connect(addr).await {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("[客户端 {}] 连接失败: {}", client_id, e);
+            eprintln!("[客户端 {client_id}] 连接失败: {e}");
             return;
         }
     };
@@ -104,7 +104,7 @@ async fn run_client(client_id: u32, trade_counter: Arc<AtomicU64>, latency_tx: m
                             }
                         }
                         Err(e) => {
-                            eprintln!("Bincode decoding error in load_generator: {:?}", e);
+                            eprintln!("Bincode decoding error in load_generator: {e:?}");
                         }
                     }
                 }
@@ -149,7 +149,7 @@ async fn run_client(client_id: u32, trade_counter: Arc<AtomicU64>, latency_tx: m
                 }
             }
             Err(e) => {
-                eprintln!("Bincode encoding error in load_generator: {:?}", e);
+                eprintln!("Bincode encoding error in load_generator: {e:?}");
             }
         }
     }

@@ -7,7 +7,7 @@ pub mod matching;
 /// and can be tested in isolation.
 ///
 /// ## Modules
-/// - `orderbook`: Order book implementations (TickBasedOrderBook is production)
+/// - `orderbook`: Order book implementations (`TickBasedOrderBook` is production)
 /// - `matching`: Matching algorithms and rules
 /// - `entities`: Domain entities (Order, Trade, etc.)
 ///

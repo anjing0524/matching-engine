@@ -26,7 +26,7 @@
 /// }
 ///
 /// // Use with any implementation
-/// let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+/// let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
 /// let mut ob = TickBasedOrderBook::new(spec);
 /// // process_order(&mut ob, request);
 /// ```
@@ -109,7 +109,7 @@ pub trait OrderBook {
     /// ```
     fn cancel_order(&mut self, order_id: u64) -> Result<(), String> {
         // Default implementation returns "not implemented"
-        Err(format!("Cancel order {} not yet implemented", order_id))
+        Err(format!("Cancel order {order_id} not yet implemented"))
     }
 
     /// Gets the best (highest) bid price

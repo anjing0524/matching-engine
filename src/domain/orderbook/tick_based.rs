@@ -6,10 +6,10 @@ use crate::shared::collections::ringbuffer::RingBuffer;
 /// 1. **价格离散化** - 期货价格按固定tick变化
 /// 2. **Array索引** - O(1)查找替代BTreeMap的O(log n)
 /// 3. **预分配数组** - 整个价格范围预分配
-/// 4. **RingBuffer** - 每个价格层使用零分配队列
+/// 4. `RingBuffer` - 每个价格层使用零分配队列
 ///
 /// 性能优势：
-/// - BTreeMap查找: O(log n) → Array索引: O(1)
+/// - `BTreeMap` 查找: O(log n) → Array索引: O(1)
 /// - 连续内存遍历，极佳的缓存局部性
 /// - 预分配消除运行时分配
 /// - 预期比BTreeMap快50-80%
@@ -399,7 +399,7 @@ impl TickBasedOrderBook {
             .get_or_insert_with(|| RingBuffer::with_capacity(self.spec.queue_capacity));
 
         if queue.push(order).is_err() {
-            eprintln!("Warning: Bid queue full at index {}", idx);
+            eprintln!("Warning: Bid queue full at index {idx}");
         } else {
             // 记录订单位置
             self.order_locations.insert(
@@ -440,7 +440,7 @@ impl TickBasedOrderBook {
             .get_or_insert_with(|| RingBuffer::with_capacity(self.spec.queue_capacity));
 
         if queue.push(order).is_err() {
-            eprintln!("Warning: Ask queue full at index {}", idx);
+            eprintln!("Warning: Ask queue full at index {idx}");
         } else {
             // 记录订单位置
             self.order_locations.insert(
@@ -539,7 +539,7 @@ impl crate::domain::orderbook::traits::OrderBook for TickBasedOrderBook {
             .order_locations
             .get(&order_id)
             .cloned()
-            .ok_or_else(|| format!("Order {} not found", order_id))?;
+            .ok_or_else(|| format!("Order {order_id} not found"))?;
 
         // Step 2: 获取对应的价格层队列
         let levels = if location.is_bid {
@@ -550,7 +550,7 @@ impl crate::domain::orderbook::traits::OrderBook for TickBasedOrderBook {
 
         let queue = levels[location.price_idx]
             .as_mut()
-            .ok_or_else(|| format!("Price level not found for order {}", order_id))?;
+            .ok_or_else(|| format!("Price level not found for order {order_id}"))?;
 
         // Step 3: 从队列中移除订单（物理删除）
         // 注意: 由于RingBuffer无iter_mut，需要重建队列
@@ -576,7 +576,7 @@ impl crate::domain::orderbook::traits::OrderBook for TickBasedOrderBook {
         }
 
         if !found {
-            return Err(format!("Order {} not found in queue", order_id));
+            return Err(format!("Order {order_id} not found in queue"));
         }
 
         // Step 4: 如果价格层变空，更新位图
