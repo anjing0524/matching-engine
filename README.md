@@ -32,8 +32,9 @@
 
 ### 生产就绪
 - **100% Safe Rust**: 无unsafe代码，内存安全保证
-- **完整测试覆盖**: 单元测试 + 集成测试 + 性能基准测试 (65/65 通过)
-- **详尽文档**: 架构设计文档 + 性能分析报告 + API文档
+- **完整测试覆盖**: 91单元/集成测试 + 7混沌测试 = 98测试全通过 ✅
+- **混沌工程验证**: 高并发、内存压力、锁竞争等极端场景测试
+- **详尽文档**: 架构设计 + 性能分析 + 部署指南 + 贡献指南
 
 ## 📊 性能对比
 
@@ -106,11 +107,11 @@ cargo bench --bench partitioned_engine_benchmark
 
 ## 📁 项目结构
 
-采用**五层架构**设计（Hexagonal/Onion Architecture）:
+采用**DDD分层架构**设计（Domain-Driven Design + Hexagonal Architecture）:
 
 ```
 src/
-├── lib.rs                    # 模块导出
+├── lib.rs                    # 模块导出与向后兼容层
 ├── main.rs                   # 程序入口 (thin wrapper)
 │
 ├── interfaces/               # 🔵 Layer 5: 接口层 (Interfaces)
@@ -122,47 +123,75 @@ src/
 │   │   ├── match_order.rs    #   - 订单撮合用例
 │   │   └── cancel_order.rs   #   - 订单取消用例
 │   └── services/             #   技术服务 (处理并发/通信)
-│       ├── matching_service.rs    # - 单线程撮合服务
-│       └── partitioned_service.rs # - 多线程分区服务
+│       ├── matching_service.rs         # - 单线程撮合服务
+│       ├── partitioned_service.rs      # - 多线程分区服务
+│       └── high_performance_service.rs # - 高性能优化服务
 │
 ├── domain/                   # ⭐ Layer 3: 领域层 (Domain) - 核心
 │   ├── orderbook/            #   订单簿模块
 │   │   ├── traits.rs         #   - OrderBook trait (抽象接口)
-│   │   └── tick_based.rs     #   - TickBasedOrderBook (9.34M ops/s)
+│   │   ├── tick_based.rs     #   - TickBasedOrderBook (9.34M ops/s)
+│   │   └── mod.rs            #   - ContractSpec等领域模型
 │   └── validation.rs         #   - OrderValidator (业务规则验证)
 │
 ├── infrastructure/           # 🟠 Layer 2: 基础设施层 (Infrastructure)
 │   ├── network/              #   网络适配器
-│   │   ├── tokio_net.rs      #   - Tokio异步网络
-│   │   ├── uring_net.rs      #   - io_uring零拷贝
-│   │   └── dpdk_net.rs       #   - DPDK内核旁路
-│   └── channels/             #   通道抽象
-│       └── crossbeam.rs      #   - Crossbeam无锁通道
+│   │   ├── backends/         #   - Tokio/io_uring/DPDK后端
+│   │   ├── codec.rs          #   - 消息编解码
+│   │   └── metrics.rs        #   - 网络指标
+│   ├── persistence/          #   持久化
+│   │   ├── wal.rs            #   - Write-Ahead Log
+│   │   ├── snapshot.rs       #   - 快照管理
+│   │   └── recovery.rs       #   - 崩溃恢复
+│   └── observability/        #   可观测性
+│       ├── health.rs         #   - 健康检查
+│       ├── metrics_collector.rs  #   - 指标收集器
+│       └── http_server.rs    #   - HTTP监控服务
 │
-└── shared/                   # 🟡 Layer 1: 共享层 (Shared)
-    ├── protocol.rs           #   - 协议数据结构
-    ├── symbol_pool.rs        #   - 符号池化
-    ├── ringbuffer.rs         #   - 零分配循环队列
-    ├── fast_bitmap.rs        #   - FastBitmap硬件指令
-    └── timestamp.rs          #   - 高性能时间戳
+├── shared/                   # 🟡 Layer 1: 共享层 (Shared)
+│   ├── protocol.rs           #   - 协议数据结构
+│   ├── symbol_pool.rs        #   - 符号池化
+│   ├── collections/          #   - 高性能数据结构
+│   │   ├── ringbuffer.rs     #   - 零分配循环队列
+│   │   └── fast_bitmap.rs    #   - FastBitmap硬件指令
+│   ├── metrics.rs            #   - 指标定义
+│   └── timestamp.rs          #   - 高性能时间戳
+│
+└── legacy/                   # ⚠️  向后兼容层 (Legacy - Deprecated)
+    ├── engine.rs             #   - 旧引擎实现 [@deprecated]
+    ├── orderbook.rs          #   - 旧订单簿 (BTreeMap) [@deprecated]
+    ├── orderbook_v2.rs       #   - V2订单簿 [@deprecated]
+    ├── partitioned_engine.rs #   - 旧分区引擎 [@deprecated]
+    └── network.rs            #   - 旧网络实现 [@deprecated]
 
 benches/                      # 性能基准测试
 ├── tick_orderbook_benchmark.rs
-├── ringbuffer_comparison.rs
-└── partitioned_engine_benchmark.rs
+├── comprehensive_benchmark.rs
+├── partitioned_engine_benchmark.rs
+└── ...                       # 13个基准测试
 
-tests/                        # 集成测试
-└── basic_trade.rs
+tests/                        # 集成测试 + 混沌测试
+├── basic_trade.rs            # 基础交易测试
+├── chaos_engineering_test.rs # 混沌工程测试 (7个场景)
+├── performance_benchmark.rs  # 性能测试
+└── ...                       # 91个单元/集成测试
 
 docs/                         # 文档
-├── ARCHITECTURE.md           # 架构设计文档 (详细)
+├── ARCHITECTURE.md           # 架构设计文档 (v4.0)
+├── DEPLOYMENT.md             # 生产部署指南 (789行)
+├── CONTRIBUTING.md           # 贡献者指南 (722行)
 ├── PERFORMANCE_FINAL_REPORT.md  # 性能分析报告
-├── ARCHITECTURE_PHASE*.md    # 各阶段重构总结
-└── ...
+└── ...                       # 20+文档文件
 ```
 
-**依赖规则**: Interfaces → Application → Domain ← Infrastructure
-              所有层可依赖 → Shared
+**依赖规则**:
+```
+Interfaces → Application → Domain ← Infrastructure
+                         ↓
+                      Shared (所有层可用)
+                         ↓
+                      Legacy (仅用于向后兼容)
+```
 
 ## 🏗️ 架构设计
 
@@ -277,14 +306,28 @@ pub struct TickBasedOrderBook {
 
 ## 🧪 测试
 
-### 单元测试
+### 单元测试和集成测试
 ```bash
-cargo test
+# 运行所有测试 (91个测试)
+cargo test --lib --release
+
+# 查看测试详情
+cargo test --lib --release -- --nocapture
 ```
 
-### 集成测试
+### 混沌工程测试
 ```bash
-cargo test --test basic_trade -- --nocapture
+# 运行混沌测试 (7个极端场景)
+cargo test --release --test chaos_engineering_test -- --ignored --nocapture
+
+# 测试场景包括:
+# - 高并发订单提交 (10客户端 × 1000订单)
+# - 随机订单取消
+# - 极端价格范围测试
+# - 内存压力测试 (10,000订单)
+# - 快速订单流转
+# - 单一价格层压力
+# - 并发锁竞争
 ```
 
 ### 性能基准测试
@@ -294,13 +337,36 @@ cargo bench
 
 # 生成性能报告
 cargo bench -- --save-baseline current
+
+# Tick-based订单簿对比
+cargo bench --bench tick_orderbook_benchmark
 ```
 
 ## 📖 文档
 
-- [架构设计文档](ARCHITECTURE.md) - 详细的架构设计和实现细节
-- [性能分析报告](PERFORMANCE_FINAL_REPORT.md) - 完整的性能测试和优化分析
-- [API文档](https://docs.rs) - 使用 `cargo doc --open` 生成
+### 核心文档
+- **[架构设计文档](ARCHITECTURE.md)** - 详细的架构设计和实现细节 (v4.0)
+- **[部署指南](DEPLOYMENT.md)** - 完整的生产部署指南 (789行)
+- **[贡献指南](CONTRIBUTING.md)** - 开发者贡献规范 (722行)
+- **[性能分析报告](PERFORMANCE_FINAL_REPORT.md)** - 完整的性能测试和优化分析
+
+### API文档
+```bash
+# 生成并查看API文档
+cargo doc --open
+
+# 包含私有项的完整文档
+cargo doc --document-private-items --open
+```
+
+### 便捷命令
+```bash
+# 使用cargo别名（在.cargo/config.toml中定义）
+cargo docs              # 生成并打开文档
+cargo docs-all          # 生成完整文档（含私有项）
+cargo build-small       # 体积优化构建
+cargo bench-quick       # 快速基准测试
+```
 
 ## 🎯 适用场景
 
@@ -361,13 +427,28 @@ sudo cpupower frequency-set -g performance
 
 ## 🤝 贡献
 
-欢迎贡献! 请遵循以下步骤:
+欢迎贡献！我们欢迎各种形式的贡献，包括但不限于：
 
+- 🐛 Bug报告和修复
+- ✨ 新功能和性能优化
+- 📝 文档改进
+- 🧪 测试用例补充
+
+### 快速开始
 1. Fork本项目
 2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启Pull Request
+3. 遵循代码规范和测试要求
+4. 提交更改 (`git commit -m 'feat: Add some AmazingFeature'`)
+5. 推送到分支 (`git push origin feature/AmazingFeature`)
+6. 开启Pull Request
+
+### 详细指南
+请查看 **[贡献者指南](CONTRIBUTING.md)** 了解：
+- 代码风格规范
+- 提交信息格式（Conventional Commits）
+- 测试要求（>80%覆盖率）
+- Code Review流程
+- 开发环境设置
 
 ## 📝 许可证
 
