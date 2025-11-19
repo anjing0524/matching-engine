@@ -2,13 +2,12 @@
 ///
 /// 演示如何将网络中间件与高性能匹配引擎集成
 /// 支持多种后端：Tokio、io_uring、DPDK
-
 use matching_engine::infrastructure::network::{
     BackendType, BincodeCodec, Codec, Connection, LengthDelimitedCodec, MiddlewareConfig,
     NetworkTransport,
 };
-use matching_engine::protocol::ClientMessage;
-use matching_engine::orderbook_tick::{TickBasedOrderBook, ContractSpec};
+use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
+use matching_engine::shared::protocol::ClientMessage;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -27,8 +26,12 @@ async fn main() {
     };
 
     let orderbook = Arc::new(RwLock::new(TickBasedOrderBook::new(spec.clone())));
-    tracing::info!("订单簿初始化完成: BTCUSDT, tick_size={}, range=[{}, {}]",
-        spec.tick_size, spec.min_price, spec.max_price);
+    tracing::info!(
+        "订单簿初始化完成: BTCUSDT, tick_size={}, range=[{}, {}]",
+        spec.tick_size,
+        spec.min_price,
+        spec.max_price
+    );
 
     // 选择网络后端
     let backend = std::env::var("NETWORK_BACKEND")
@@ -60,32 +63,39 @@ async fn main() {
 
     // 创建传输层（手动实现，因为我们需要自定义服务逻辑）
     let mut transport: Box<dyn NetworkTransport> = match backend {
-        BackendType::Tokio => {
-            Box::new(matching_engine::infrastructure::network::backends::TokioTransport::new().unwrap())
-        }
+        BackendType::Tokio => Box::new(
+            matching_engine::infrastructure::network::backends::TokioTransport::new().unwrap(),
+        ),
         #[cfg(feature = "io-uring")]
         BackendType::IoUring => {
-            let io_uring_config = matching_engine::infrastructure::network::backends::IoUringConfig {
-                queue_depth: middleware_config.rx_queue_depth as u32,
-                buffer_size: middleware_config.buffer_size,
-                buffer_pool_size: middleware_config.rx_queue_depth,
-                ..Default::default()
-            };
-            Box::new(matching_engine::infrastructure::network::backends::IoUringTransport::new(io_uring_config).unwrap())
+            let io_uring_config =
+                matching_engine::infrastructure::network::backends::IoUringConfig {
+                    queue_depth: middleware_config.rx_queue_depth as u32,
+                    buffer_size: middleware_config.buffer_size,
+                    buffer_pool_size: middleware_config.rx_queue_depth,
+                    ..Default::default()
+                };
+            Box::new(
+                matching_engine::infrastructure::network::backends::IoUringTransport::new(
+                    io_uring_config,
+                )
+                .unwrap(),
+            )
         }
         #[cfg(feature = "dpdk")]
         BackendType::Dpdk => {
-            let dpdk_config = matching_engine::infrastructure::network::backends::DpdkConfig::default();
-            Box::new(matching_engine::infrastructure::network::backends::DpdkTransport::new(dpdk_config).unwrap())
+            let dpdk_config =
+                matching_engine::infrastructure::network::backends::DpdkConfig::default();
+            Box::new(
+                matching_engine::infrastructure::network::backends::DpdkTransport::new(dpdk_config)
+                    .unwrap(),
+            )
         }
         _ => panic!("Unsupported backend"),
     };
 
     // 绑定并监听
-    transport
-        .bind(middleware_config.listen_addr)
-        .await
-        .unwrap();
+    transport.bind(middleware_config.listen_addr).await.unwrap();
 
     let listen_addr = transport.local_addr().unwrap();
     tracing::info!("服务器启动，监听地址: {}", listen_addr);

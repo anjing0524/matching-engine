@@ -27,7 +27,6 @@ clap = { version = "4.5", features = ["derive"] }
 prometheus = "0.13"
 lazy_static = "1.4"
 axum = "0.7"
-tower = "0.4"
 hyper = "1.0"
 tracing-opentelemetry = { version = "0.23", optional = true }
 opentelemetry = { version = "0.22", optional = true }
@@ -39,7 +38,8 @@ flate2 = "1.0"
 core_affinity = { version = "0.8", optional = true }
 tokio-uring = { version = "0.5", optional = true }
 libc = "0.2"
-socket2 = "0.5"
+# socket2: 移除直接依赖，使用tokio传递的版本
+# tower: 移除直接依赖，使用axum传递的版本
 
 [features]
 # CPU亲和性特性（需要平台支持）
@@ -106,3 +106,19 @@ harness = false
 [[bench]]
 name = "multicore_benchmark"
 harness = false
+
+# 性能优化配置
+[profile.release]
+opt-level = 3           # 最大性能优化
+lto = "thin"            # 瘦链接时优化（平衡编译时间和性能）
+codegen-units = 16      # 并行代码生成单元（平衡编译时间）
+strip = false           # 保留符号表以便调试（生产环境可设为true）
+
+# 二进制大小优化配置（可选，用于部署）
+[profile.release-small]
+inherits = "release"
+opt-level = "z"         # 优化二进制大小
+lto = true              # 完整链接时优化
+codegen-units = 1       # 单一代码生成单元
+strip = true            # 剥离符号表
+panic = "abort"         # panic时直接abort，减小二进制

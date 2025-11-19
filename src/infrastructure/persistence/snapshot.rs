@@ -11,7 +11,6 @@
 use super::{PersistenceError, Result, SnapshotData};
 use crate::infrastructure::persistence::types::SnapshotMetadata;
 use bincode::config::standard;
-use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
@@ -133,9 +132,12 @@ impl SnapshotWriter {
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().and_then(|s| s.to_str()) == Some("snap.meta") {
-                if let Ok(metadata) = self.read_metadata_file(&path) {
-                    snapshots.push(metadata);
+            // 检查文件名是否以 .snap.meta 结尾
+            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                if file_name.ends_with(".snap.meta") {
+                    if let Ok(metadata) = self.read_metadata_file(&path) {
+                        snapshots.push(metadata);
+                    }
                 }
             }
         }
@@ -244,14 +246,17 @@ impl SnapshotReader {
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().and_then(|s| s.to_str()) == Some("snap.meta") {
-                if let Ok(metadata) = self.read_metadata_file(&path) {
-                    match &latest {
-                        None => latest = Some(metadata),
-                        Some(current) if metadata.created_at > current.created_at => {
-                            latest = Some(metadata)
+            // 检查文件名是否以 .snap.meta 结尾
+            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                if file_name.ends_with(".snap.meta") {
+                    if let Ok(metadata) = self.read_metadata_file(&path) {
+                        match &latest {
+                            None => latest = Some(metadata),
+                            Some(current) if metadata.created_at > current.created_at => {
+                                latest = Some(metadata)
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
             }

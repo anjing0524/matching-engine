@@ -7,13 +7,12 @@
 /// - 零拷贝: 支持注册缓冲区
 /// - SQPOLL: 内核轮询模式，避免系统调用
 
-use crate::infrastructure::network::buffer::{AlignedBuffer, BufferPool, SharedBuffer};
+use crate::infrastructure::network::buffer::{BufferPool, SharedBuffer};
 use crate::infrastructure::network::metrics::NetworkMetrics;
 use crate::infrastructure::network::traits::{Connection, NetworkTransport, ZeroCopyBuffer};
 use async_trait::async_trait;
 use std::io;
 use std::net::SocketAddr;
-use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio_uring::net::{TcpListener, TcpStream};

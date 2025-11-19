@@ -1,5 +1,5 @@
-use crate::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
-use crate::symbol_pool::SymbolPool;
+use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
+use crate::shared::symbol_pool::SymbolPool;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use bumpalo::Bump;
@@ -45,15 +45,22 @@ pub struct OrderBook {
     next_order_id: u64,
     // Arena 分配器：用于临时 Vec 分配，显著减少堆分配开销
     // 每次匹配后 reset，实现零开销批量释放
+    #[allow(dead_code)]
     arena: Bump,
     // 符号字符串池：避免重复创建Arc<str>
     // 使用Arc包装以便Clone时共享同一个池
     symbol_pool: Arc<SymbolPool>,
 }
 
+impl Default for OrderBook {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OrderBook {
     pub fn new() -> Self {
-        Self::with_symbol_pool(Arc::clone(crate::symbol_pool::global_symbol_pool()))
+        Self::with_symbol_pool(Arc::clone(crate::shared::symbol_pool::global_symbol_pool()))
     }
 
     /// 创建一个使用指定符号池的订单簿
@@ -253,6 +260,16 @@ impl OrderBook {
         }
 
         (order_id, user_id)
+    }
+
+    /// 取消订单 (公开API)
+    pub fn cancel_order(&mut self, order_id: u64) -> Result<(), String> {
+        if self.order_id_to_index.contains_key(&order_id) {
+            self.remove_order(order_id);
+            Ok(())
+        } else {
+            Err(format!("Order {} not found", order_id))
+        }
     }
 
     // 从订单簿中移除一个订单

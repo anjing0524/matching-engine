@@ -1,11 +1,10 @@
 /// 崩溃恢复场景测试
 ///
 /// 这些测试演示了服务器突然崩溃时的各种场景
-
 use matching_engine::application::services::PersistentMatchingService;
 use matching_engine::domain::orderbook::ContractSpec;
 use matching_engine::infrastructure::persistence::PersistenceConfig;
-use matching_engine::protocol::{NewOrderRequest, OrderType};
+use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -34,7 +33,11 @@ fn test_unflushed_data_loss() {
             let order = NewOrderRequest {
                 user_id: i,
                 symbol: Arc::from("BTCUSDT"),
-                order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+                order_type: if i % 2 == 0 {
+                    OrderType::Buy
+                } else {
+                    OrderType::Sell
+                },
                 price: 50000 + (i % 10),
                 quantity: 10,
             };
@@ -95,7 +98,11 @@ fn test_flush_before_crash() {
             let order = NewOrderRequest {
                 user_id: i,
                 symbol: Arc::from("BTCUSDT"),
-                order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+                order_type: if i % 2 == 0 {
+                    OrderType::Buy
+                } else {
+                    OrderType::Sell
+                },
                 price: 50000 + (i % 10),
                 quantity: 10,
             };
@@ -123,10 +130,7 @@ fn test_flush_before_crash() {
         // 由于订单可能撮合，这里只检查有数据
         let has_orders = orderbook.best_bid().is_some() || orderbook.best_ask().is_some();
 
-        assert!(
-            has_orders,
-            "显式刷盘后崩溃，数据应该能完整恢复"
-        );
+        assert!(has_orders, "显式刷盘后崩溃，数据应该能完整恢复");
     }
 }
 
@@ -344,7 +348,8 @@ fn bench_flush_strategies() {
         }
         let elapsed = start.elapsed();
 
-        println!("{:12} | {:8.2}ms | {:.0} ops/s",
+        println!(
+            "{:12} | {:8.2}ms | {:.0} ops/s",
             name,
             elapsed.as_secs_f64() * 1000.0,
             1000.0 / elapsed.as_secs_f64()

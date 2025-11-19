@@ -1,5 +1,5 @@
-use crate::orderbook::OrderBook;
-use crate::protocol::{CancelOrderRequest, NewOrderRequest, OrderConfirmation, TradeNotification};
+use crate::legacy::orderbook::OrderBook;
+use crate::shared::protocol::{CancelOrderRequest, NewOrderRequest, OrderConfirmation, TradeNotification};
 use crate::timestamp::get_fast_timestamp;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -66,9 +66,14 @@ impl MatchingEngine {
                     }
                 }
                 EngineCommand::CancelOrder(request) => {
-                    // TODO: 实现取消订单逻辑
-                    // self.orderbook.remove_order(request.order_id);
-                    println!("收到取消订单请求: {:?}", request);
+                    match self.orderbook.cancel_order(request.order_id) {
+                        Ok(()) => {
+                            eprintln!("订单 {} 已成功取消", request.order_id);
+                        }
+                        Err(e) => {
+                            eprintln!("取消订单 {} 失败: {}", request.order_id, e);
+                        }
+                    }
                 }
             }
         }

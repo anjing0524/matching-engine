@@ -7,12 +7,11 @@
 
 use crate::domain::orderbook::{TickBasedOrderBook, ContractSpec};
 use crate::infrastructure::persistence::{
-    WalWriter, WalEntry, SnapshotWriter, SnapshotReader, RecoveryManager,
+    WalWriter, WalEntry, SnapshotWriter, RecoveryManager,
     PersistenceConfig, PersistenceError,
 };
 use crate::infrastructure::persistence::snapshot::create_snapshot;
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
-use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use tracing::{info, warn, error};
 
@@ -191,7 +190,7 @@ impl PersistentMatchingService {
         self.check_snapshot()?;
 
         // 返回结果，如果confirmation为None，创建一个默认的
-        let confirmation = confirmation_opt.unwrap_or_else(|| OrderConfirmation {
+        let confirmation = confirmation_opt.unwrap_or(OrderConfirmation {
             user_id: 0,
             order_id: 0,
         });

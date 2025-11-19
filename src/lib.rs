@@ -38,33 +38,23 @@ pub mod legacy;
 // 向后兼容层 (Backward Compatibility Layer)
 // ===================================================================
 //
-// 为了不破坏现有的测试、示例和基准测试，保留旧的模块路径
-// 这些会在未来版本中废弃
-
-// 将所有模块声明为公共的，这样二进制文件、测试和基准测试都能访问它们
-#[deprecated(note = "使用 crate::shared::protocol 代替")]
-pub use shared::protocol;
-
-#[deprecated(note = "使用 crate::domain::orderbook::TickBasedOrderBook 代替，或移至 legacy")]
-pub mod orderbook;
-
-#[deprecated(note = "已废弃，移至 crate::legacy::orderbook_v2")]
-pub mod orderbook_v2;
+// 为了不破坏现有的测试、示例和基准测试，提供旧模块路径的别名
+// 实际实现已移至 src/legacy/
 
 #[deprecated(note = "使用 crate::domain::orderbook::TickBasedOrderBook 代替")]
-pub use domain::orderbook::tick_based as orderbook_tick;
+pub use legacy::orderbook;
+
+#[deprecated(note = "已废弃，使用 crate::domain::orderbook::TickBasedOrderBook 代替")]
+pub use legacy::orderbook_v2;
 
 #[deprecated(note = "使用 crate::application::services 代替")]
-pub mod engine;
+pub use legacy::engine;
+
+#[deprecated(note = "使用 crate::application::services::PartitionedService 代替")]
+pub use legacy::partitioned_engine;
 
 #[deprecated(note = "使用 crate::infrastructure::network 代替")]
-pub mod network;
-
-#[deprecated(note = "使用 crate::shared::symbol_pool 代替")]
-pub use shared::symbol_pool;
-
-#[deprecated(note = "使用 crate::application::services::partitioned 代替")]
-pub mod partitioned_engine;
+pub use legacy::network;
 
 #[deprecated(note = "使用 crate::shared::timestamp 代替")]
 pub use shared::timestamp;

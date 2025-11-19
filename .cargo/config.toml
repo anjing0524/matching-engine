@@ -1,0 +1,17 @@
+# Cargo配置文件
+
+[build]
+# 增量编译加速开发
+incremental = true
+
+[doc]
+# rustdoc配置
+# 生成带有源码链接的文档
+# cargo doc --open 时的默认配置
+
+[alias]
+# 便捷命令别名
+docs = "doc --no-deps --open"
+docs-all = "doc --document-private-items --open"
+build-small = "build --profile release-small"
+bench-quick = "bench --bench tick_orderbook_benchmark"

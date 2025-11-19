@@ -2,19 +2,17 @@
 /// 测试真实网络延迟，包括系统调用、内核处理等隐藏成本
 ///
 /// 这个基准测试暴露当前内存中基准的缺陷
-
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::thread;
-use matching_engine::protocol::{NewOrderRequest, OrderType};
 use std::sync::Arc;
+use std::thread;
 
 /// 启动简单的TCP回显服务器
 fn start_echo_server(port: u16) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
-            .expect("无法绑定服务器");
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).expect("无法绑定服务器");
 
         for stream in listener.incoming() {
             match stream {
@@ -43,8 +41,7 @@ fn start_echo_server(port: u16) -> thread::JoinHandle<()> {
 /// 启动带处理的应用服务器 (模拟匹配引擎)
 fn start_matching_server(port: u16) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
-            .expect("无法绑定服务器");
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).expect("无法绑定服务器");
 
         for stream in listener.incoming() {
             match stream {
@@ -91,8 +88,7 @@ fn bench_tcp_echo_rtt(c: &mut Criterion) {
 
     group.bench_function("100_byte_echo", |b| {
         b.iter(|| {
-            let mut client = TcpStream::connect("127.0.0.1:9001")
-                .expect("无法连接");
+            let mut client = TcpStream::connect("127.0.0.1:9001").expect("无法连接");
 
             let request = "x".repeat(100);
             client.write_all(request.as_bytes()).expect("写入失败");
@@ -105,8 +101,7 @@ fn bench_tcp_echo_rtt(c: &mut Criterion) {
 
     group.bench_function("400_byte_echo", |b| {
         b.iter(|| {
-            let mut client = TcpStream::connect("127.0.0.1:9001")
-                .expect("无法连接");
+            let mut client = TcpStream::connect("127.0.0.1:9001").expect("无法连接");
 
             let request = "x".repeat(400);
             client.write_all(request.as_bytes()).expect("写入失败");
@@ -130,8 +125,7 @@ fn bench_application_processing(c: &mut Criterion) {
 
     group.bench_function("order_matching_e2e", |b| {
         b.iter(|| {
-            let mut client = TcpStream::connect("127.0.0.1:9002")
-                .expect("无法连接");
+            let mut client = TcpStream::connect("127.0.0.1:9002").expect("无法连接");
 
             // 构造订单请求
             let order = NewOrderRequest {
@@ -165,8 +159,7 @@ fn bench_connection_reuse(c: &mut Criterion) {
 
     group.bench_function("new_connection_per_request", |b| {
         b.iter(|| {
-            let mut client = TcpStream::connect("127.0.0.1:9003")
-                .expect("无法连接");
+            let mut client = TcpStream::connect("127.0.0.1:9003").expect("无法连接");
 
             client.write_all(b"test").expect("写入失败");
             let mut buffer = [0; 1024];
@@ -176,8 +169,7 @@ fn bench_connection_reuse(c: &mut Criterion) {
     });
 
     group.bench_function("reuse_single_connection", |b| {
-        let mut client = TcpStream::connect("127.0.0.1:9003")
-            .expect("无法连接");
+        let mut client = TcpStream::connect("127.0.0.1:9003").expect("无法连接");
 
         b.iter(|| {
             client.write_all(b"test").expect("写入失败");
@@ -202,8 +194,7 @@ fn bench_syscall_overhead(c: &mut Criterion) {
             request_size,
             |b, &request_size| {
                 b.iter(|| {
-                    let mut client = TcpStream::connect("127.0.0.1:9004")
-                        .expect("无法连接");
+                    let mut client = TcpStream::connect("127.0.0.1:9004").expect("无法连接");
 
                     let request = "x".repeat(request_size);
 
@@ -231,8 +222,7 @@ fn bench_persistent_connection_throughput(c: &mut Criterion) {
     thread::sleep(std::time::Duration::from_millis(100));
 
     group.bench_function("1000_sequential_messages", |b| {
-        let mut client = TcpStream::connect("127.0.0.1:9005")
-            .expect("无法连接");
+        let mut client = TcpStream::connect("127.0.0.1:9005").expect("无法连接");
 
         b.iter(|| {
             for _ in 0..1000 {

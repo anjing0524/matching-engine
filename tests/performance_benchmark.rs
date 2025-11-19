@@ -1,10 +1,9 @@
 /// 综合性能基准测试
 ///
 /// 测试各个组件的性能，找出瓶颈
-
-use matching_engine::application::services::{HighPerformanceService, HighPerformanceConfig};
-use matching_engine::domain::orderbook::{TickBasedOrderBook, ContractSpec};
-use matching_engine::protocol::{NewOrderRequest, OrderType};
+use matching_engine::application::services::{HighPerformanceConfig, HighPerformanceService};
+use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
+use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use std::sync::Arc;
 use std::time::Instant;
 use tempfile::TempDir;
@@ -22,7 +21,11 @@ fn bench_pure_orderbook() {
         let order = NewOrderRequest {
             user_id: i,
             symbol: Arc::from("BTCUSDT"),
-            order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+            order_type: if i % 2 == 0 {
+                OrderType::Buy
+            } else {
+                OrderType::Sell
+            },
             price: 50000 + (i % 100),
             quantity: 10,
         };
@@ -35,7 +38,10 @@ fn bench_pure_orderbook() {
 
     println!("\n====== 纯订单簿性能 ======");
     println!("吞吐量: {:.0} ops/s", ops_per_sec);
-    println!("平均延迟: {:.2}μs", elapsed.as_micros() as f64 / count as f64);
+    println!(
+        "平均延迟: {:.2}μs",
+        elapsed.as_micros() as f64 / count as f64
+    );
     println!("总耗时: {:.2}s", elapsed.as_secs_f64());
 }
 
@@ -62,7 +68,11 @@ async fn bench_high_performance_service() {
         let order = NewOrderRequest {
             user_id: i,
             symbol: Arc::from("BTCUSDT"),
-            order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+            order_type: if i % 2 == 0 {
+                OrderType::Buy
+            } else {
+                OrderType::Sell
+            },
             price: 50000 + (i % 100),
             quantity: 10,
         };
@@ -75,7 +85,10 @@ async fn bench_high_performance_service() {
 
     println!("\n====== 高性能服务 (异步WAL) ======");
     println!("吞吐量: {:.0} ops/s", ops_per_sec);
-    println!("平均延迟: {:.2}μs", elapsed.as_micros() as f64 / count as f64);
+    println!(
+        "平均延迟: {:.2}μs",
+        elapsed.as_micros() as f64 / count as f64
+    );
     println!("总耗时: {:.2}s", elapsed.as_secs_f64());
 
     // 等待刷盘
@@ -86,8 +99,14 @@ async fn bench_high_performance_service() {
     if ops_per_sec >= 1_000_000.0 {
         println!("✅ 达到百万级吞吐量目标！");
     } else {
-        println!("⚠️ 未达到百万级吞吐量，当前: {:.0} ops/s (目标: 1,000,000 ops/s)", ops_per_sec);
-        println!("   差距: {:.1}%", (1_000_000.0 - ops_per_sec) / 1_000_000.0 * 100.0);
+        println!(
+            "⚠️ 未达到百万级吞吐量，当前: {:.0} ops/s (目标: 1,000,000 ops/s)",
+            ops_per_sec
+        );
+        println!(
+            "   差距: {:.1}%",
+            (1_000_000.0 - ops_per_sec) / 1_000_000.0 * 100.0
+        );
     }
 }
 
@@ -126,7 +145,11 @@ async fn bench_configuration_comparison() {
             let order = NewOrderRequest {
                 user_id: i,
                 symbol: Arc::from("BTCUSDT"),
-                order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+                order_type: if i % 2 == 0 {
+                    OrderType::Buy
+                } else {
+                    OrderType::Sell
+                },
                 price: 50000 + (i % 100),
                 quantity: 10,
             };
@@ -138,7 +161,10 @@ async fn bench_configuration_comparison() {
         let ops_per_sec = count as f64 / elapsed.as_secs_f64();
         let avg_latency_us = elapsed.as_micros() as f64 / count as f64;
 
-        println!("{:30} | {:10.0} /s | {:8.2}μs", name, ops_per_sec, avg_latency_us);
+        println!(
+            "{:30} | {:10.0} /s | {:8.2}μs",
+            name, ops_per_sec, avg_latency_us
+        );
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         service.close().await.unwrap();
@@ -169,7 +195,11 @@ async fn bench_with_fsync() {
         let order = NewOrderRequest {
             user_id: i,
             symbol: Arc::from("BTCUSDT"),
-            order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+            order_type: if i % 2 == 0 {
+                OrderType::Buy
+            } else {
+                OrderType::Sell
+            },
             price: 50000 + (i % 100),
             quantity: 10,
         };
@@ -182,7 +212,10 @@ async fn bench_with_fsync() {
 
     println!("\n====== 启用fsync的性能 ======");
     println!("吞吐量: {:.0} ops/s", ops_per_sec);
-    println!("平均延迟: {:.2}μs", elapsed.as_micros() as f64 / count as f64);
+    println!(
+        "平均延迟: {:.2}μs",
+        elapsed.as_micros() as f64 / count as f64
+    );
     println!("\n注意: fsync会显著降低性能，但提供更强的数据安全性");
 
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;

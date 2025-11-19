@@ -142,10 +142,10 @@ async fn run_persistent_server(config: CliConfig) -> Result<(), Box<dyn std::err
     use crate::domain::orderbook::ContractSpec;
     use crate::infrastructure::persistence::PersistenceConfig;
     use crate::infrastructure::network::backends::TokioTransport;
-    use crate::infrastructure::network::traits::{NetworkTransport, Connection};
-    use crate::infrastructure::network::codec::{Codec, BincodeCodec, LengthDelimitedCodec};
-    use crate::shared::protocol::ClientMessage;
-    use futures::StreamExt;
+    use crate::infrastructure::network::traits::NetworkTransport;
+    
+    
+    
     use std::sync::Arc;
     use tokio::sync::RwLock;
 

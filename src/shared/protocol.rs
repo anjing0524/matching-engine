@@ -3,21 +3,31 @@ use bincode::{Encode, Decode, enc::Encoder, de::Decoder, error::{EncodeError, De
 use std::sync::Arc;
 
 /// 订单类型，区分买单和卖单
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Default)]
 pub enum OrderType {
+    #[default]
     Buy,
     Sell,
 }
 
 /// 新订单请求，由客户端发起
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NewOrderRequest {
+    #[serde(default)]
     pub user_id: u64,
     #[serde(with = "arc_str_serde")]
+    #[serde(default = "default_symbol")]
     pub symbol: Arc<str>,
+    #[serde(default)]
     pub order_type: OrderType,
+    #[serde(default)]
     pub price: u64, // 使用 u64 避免浮点数精度问题，例如价格 123.45 可以表示为 12345
+    #[serde(default)]
     pub quantity: u64,
+}
+
+fn default_symbol() -> Arc<str> {
+    Arc::from("")
 }
 
 /// 取消订单请求
@@ -35,22 +45,31 @@ pub struct OrderConfirmation {
 }
 
 /// 成交回报，发送给交易双方
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TradeNotification {
+    #[serde(default)]
     pub trade_id: u64,
     #[serde(with = "arc_str_serde")]
+    #[serde(default = "default_symbol")]
     pub symbol: Arc<str>,
     // 撮合价格
+    #[serde(default)]
     pub matched_price: u64,
     // 撮合数量
+    #[serde(default)]
     pub matched_quantity: u64,
     // 买方信息
+    #[serde(default)]
     pub buyer_user_id: u64,
+    #[serde(default)]
     pub buyer_order_id: u64,
     // 卖方信息
+    #[serde(default)]
     pub seller_user_id: u64,
+    #[serde(default)]
     pub seller_order_id: u64,
     // 时间戳
+    #[serde(default)]
     pub timestamp: u64,
 }
 
@@ -228,3 +247,4 @@ impl<Context> Decode<Context> for ServerMessage {
         }
     }
 }
+

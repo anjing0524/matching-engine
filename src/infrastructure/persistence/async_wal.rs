@@ -19,9 +19,9 @@ use super::{PersistenceError, Result, WalEntry};
 use bincode::config::standard;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time;
@@ -197,16 +197,14 @@ impl AsyncWalWriter {
     /// 写入WAL条目（异步，不阻塞）
     pub fn write(&mut self, entry: WalEntry) -> Result<u64> {
         if self.closed.load(Ordering::SeqCst) {
-            return Err(PersistenceError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(PersistenceError::Io(std::io::Error::other(
                 "WAL已关闭",
             )));
         }
 
         self.tx
             .send(WalMessage::Write(entry))
-            .map_err(|_| PersistenceError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            .map_err(|_| PersistenceError::Io(std::io::Error::other(
                 "后台任务已停止",
             )))?;
 
@@ -221,8 +219,7 @@ impl AsyncWalWriter {
 
         self.tx
             .send(WalMessage::Flush)
-            .map_err(|_| PersistenceError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            .map_err(|_| PersistenceError::Io(std::io::Error::other(
                 "后台任务已停止",
             )))?;
 
@@ -246,7 +243,7 @@ impl AsyncWalWriter {
     }
 
     /// 关闭WAL（同步等待刷盘完成）
-    pub async fn close(mut self) -> Result<()> {
+    pub async fn close(self) -> Result<()> {
         self.closed.store(true, Ordering::SeqCst);
         let _ = self.tx.send(WalMessage::Shutdown);
         // 注意：task_handle会在drop时自动等待
@@ -262,7 +259,7 @@ impl AsyncWalWriter {
     }
 
     /// 获取WAL文件路径
-    fn wal_path(data_dir: &PathBuf, file_num: u64) -> PathBuf {
+    fn wal_path(data_dir: &Path, file_num: u64) -> PathBuf {
         data_dir.join(format!("wal.{}.log", file_num))
     }
 }

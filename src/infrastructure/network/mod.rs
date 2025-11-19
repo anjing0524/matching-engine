@@ -61,7 +61,8 @@ impl Default for MiddlewareConfig {
     fn default() -> Self {
         Self {
             backend: BackendType::Tokio,
-            listen_addr: "127.0.0.1:8080".parse().unwrap(),
+            listen_addr: "127.0.0.1:8080".parse()
+                .expect("Default listen address should be valid"),
             buffer_size: 65536,
             rx_queue_depth: 1024,
             tx_queue_depth: 1024,
@@ -78,6 +79,7 @@ pub struct NetworkMiddleware<C: Codec> {
     backend: Box<dyn NetworkTransport>,
 
     /// 编解码器
+    #[allow(dead_code)]
     codec: C,
 
     /// 性能指标

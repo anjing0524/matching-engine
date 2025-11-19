@@ -71,6 +71,7 @@ impl ZeroCopyBuffer for SharedBuffer {
 /// 确保缓冲区地址和大小都对齐到指定边界
 pub struct AlignedBuffer {
     data: Vec<u8>,
+    #[allow(dead_code)]
     alignment: usize,
     offset: usize,
     len: usize,
@@ -133,8 +134,10 @@ pub struct BufferPool {
     /// 空闲缓冲区栈
     free_list: parking_lot::Mutex<Vec<Box<dyn ZeroCopyBuffer>>>,
     /// 缓冲区大小
+    #[allow(dead_code)]
     buffer_size: usize,
     /// 池容量
+    #[allow(dead_code)]
     capacity: usize,
 }
 

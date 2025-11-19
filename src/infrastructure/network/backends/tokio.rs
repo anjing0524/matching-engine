@@ -11,6 +11,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 /// Tokio TCP连接
 pub struct TokioConnection {
+    #[allow(dead_code)]
     id: u64,
     stream: TcpStream,
     peer_addr: SocketAddr,
@@ -87,7 +88,7 @@ impl NetworkTransport for TokioTransport {
         let listener = self
             .listener
             .as_ref()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Not bound"))?;
+            .ok_or_else(|| std::io::Error::other("Not bound"))?;
 
         let (stream, peer_addr) = listener.accept().await?;
 
@@ -99,7 +100,7 @@ impl NetworkTransport for TokioTransport {
     fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.listener
             .as_ref()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Not bound"))?
+            .ok_or_else(|| std::io::Error::other("Not bound"))?
             .local_addr()
     }
 }

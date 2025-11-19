@@ -6,9 +6,9 @@
 /// 3. CPU亲和性绑定，减少缓存失效
 /// 4. 批量处理，提高吞吐量
 
-use crate::orderbook::OrderBook;
-use crate::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
-use crate::symbol_pool::SymbolPool;
+use crate::legacy::orderbook::OrderBook;
+use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
+use crate::shared::symbol_pool::SymbolPool;
 use crossbeam::channel::{bounded, Sender, Receiver};
 use smallvec::SmallVec;
 use std::sync::Arc;
@@ -53,7 +53,7 @@ pub struct OrderRequest {
 /// 订单响应
 pub enum OrderResponse {
     Matched {
-        trades: SmallVec<[TradeNotification; 8]>,
+        trades: Box<SmallVec<[TradeNotification; 8]>>,
         confirmation: Option<OrderConfirmation>,
     },
     Error(String),
@@ -99,7 +99,6 @@ impl PartitionWorker {
         if self.config.enable_cpu_affinity {
             #[cfg(feature = "cpu-affinity")]
             {
-                use core_affinity::CoreId;
                 let core_ids = core_affinity::get_core_ids().unwrap();
                 if self.partition_id < core_ids.len() {
                     core_affinity::set_for_current(core_ids[self.partition_id]);
@@ -148,7 +147,7 @@ impl PartitionWorker {
 
         // 发送响应（如果需要）
         if let Some(response_tx) = order_req.response_tx {
-            let response = OrderResponse::Matched { trades, confirmation };
+            let response = OrderResponse::Matched { trades: Box::new(trades), confirmation };
             let _ = response_tx.send(response);
         }
     }
@@ -174,7 +173,7 @@ impl PartitionedEngine {
     /// 创建新的分区引擎
     pub fn new(config: PartitionConfig) -> Self {
         // 使用全局符号池，所有分区共享
-        let symbol_pool = Arc::clone(crate::symbol_pool::global_symbol_pool());
+        let symbol_pool = Arc::clone(crate::shared::symbol_pool::global_symbol_pool());
 
         // 预加载常见交易对
         symbol_pool.preload(&[
@@ -320,7 +319,8 @@ impl PartitionedEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::OrderType;
+    use crate::shared::protocol::{OrderType, NewOrderRequest};
+    use std::sync::Arc;
 
     #[test]
     fn test_partitioned_engine_basic() {

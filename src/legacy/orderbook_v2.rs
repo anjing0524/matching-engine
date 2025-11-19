@@ -11,9 +11,9 @@
 /// - 比手动链表快 20-30%
 /// - 更好的缓存局部性
 
-use crate::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
+use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
 use crate::ringbuffer::RingBuffer;
-use crate::symbol_pool::SymbolPool;
+use crate::shared::symbol_pool::SymbolPool;
 use smallvec::SmallVec;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -52,7 +52,7 @@ pub struct OrderBookV2 {
 impl OrderBookV2 {
     /// 创建新的订单簿
     pub fn new() -> Self {
-        Self::with_symbol_pool(Arc::clone(crate::symbol_pool::global_symbol_pool()))
+        Self::with_symbol_pool(Arc::clone(crate::shared::symbol_pool::global_symbol_pool()))
     }
 
     /// 使用指定符号池创建订单簿
@@ -199,12 +199,12 @@ impl OrderBookV2 {
                 order_id,
                 price: request.price,
                 quantity: remaining_quantity,
-                order_type: request.order_type.clone(),
+                order_type: request.order_type,
             };
 
             // 记录订单索引
             self.order_index
-                .insert(order_id, (request.price, request.order_type.clone()));
+                .insert(order_id, (request.price, request.order_type));
 
             // 添加到对应价格层
             let book = match request.order_type {
@@ -216,7 +216,7 @@ impl OrderBookV2 {
                 .entry(request.price)
                 .or_insert_with(|| RingBuffer::with_capacity(self.ring_capacity));
 
-            if let Err(_) = queue.push(order) {
+            if queue.push(order).is_err() {
                 // 队列已满，需要扩容（实际应用中需要处理）
                 eprintln!("Warning: RingBuffer full at price {}", request.price);
                 return (trades, None);

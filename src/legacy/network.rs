@@ -1,5 +1,5 @@
 use crate::engine::{EngineCommand, EngineOutput};
-use crate::protocol::{ClientMessage, ServerMessage};
+use crate::shared::protocol::{ClientMessage, ServerMessage};
 use bytes::Bytes;
 use futures::stream::StreamExt;
 use futures::SinkExt;

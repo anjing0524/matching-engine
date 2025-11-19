@@ -1,10 +1,9 @@
+use bytes::{BufMut, BytesMut};
 /// Network Layer Performance Benchmarks
 /// Tests the zero-copy networking stack impact on total latency
-
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use matching_engine::protocol::{NewOrderRequest, OrderType, TradeNotification};
+use matching_engine::shared::protocol::{NewOrderRequest, OrderType, TradeNotification};
 use serde_json;
-use bytes::{BytesMut, BufMut};
 use std::sync::Arc;
 
 /// ============================================================================
@@ -24,9 +23,7 @@ fn bench_json_encode_order_request(c: &mut Criterion) {
             quantity: 100,
         };
 
-        b.iter(|| {
-            serde_json::to_string(&black_box(&order)).unwrap()
-        });
+        b.iter(|| serde_json::to_string(&black_box(&order)).unwrap());
     });
 
     group.finish();
@@ -36,12 +33,11 @@ fn bench_json_decode_order_request(c: &mut Criterion) {
     let mut group = c.benchmark_group("Network - JSON Decode");
     group.throughput(Throughput::Bytes(300));
 
-    let json = r#"{"user_id":12345,"symbol":"BTC/USD","order_type":"Buy","price":50000,"quantity":100}"#;
+    let json =
+        r#"{"user_id":12345,"symbol":"BTC/USD","order_type":"Buy","price":50000,"quantity":100}"#;
 
     group.bench_function("new_order_request", |b| {
-        b.iter(|| {
-            serde_json::from_str::<NewOrderRequest>(black_box(json)).unwrap()
-        });
+        b.iter(|| serde_json::from_str::<NewOrderRequest>(black_box(json)).unwrap());
     });
 
     group.finish();
@@ -64,9 +60,7 @@ fn bench_json_encode_trade_notification(c: &mut Criterion) {
             timestamp: 1234567890123,
         };
 
-        b.iter(|| {
-            serde_json::to_string(&black_box(&trade)).unwrap()
-        });
+        b.iter(|| serde_json::to_string(&black_box(&trade)).unwrap());
     });
 
     group.finish();
@@ -97,7 +91,7 @@ fn bench_bytesmut_framing(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(104)); // 4 bytes length + 100 data
 
     group.bench_function("encode_with_length_prefix", |b| {
-        let payload = "payload".repeat(14);  // ~100 bytes
+        let payload = "payload".repeat(14); // ~100 bytes
         b.iter(|| {
             let mut buf = BytesMut::with_capacity(128);
             let payload_bytes = black_box(payload.as_bytes());

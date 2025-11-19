@@ -1,14 +1,16 @@
-use tokio::net::TcpStream;
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use futures::{SinkExt, StreamExt};
-use matching_engine::protocol::{NewOrderRequest, OrderType, TradeNotification, OrderConfirmation};
+use matching_engine::shared::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
 use serde_json;
 use std::sync::Arc;
+use tokio::net::TcpStream;
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 #[tokio::test]
 async fn test_basic_match() {
     // 确保服务器正在运行中
-    let stream = TcpStream::connect("127.0.0.1:8080").await.expect("无法连接到服务器");
+    let stream = TcpStream::connect("127.0.0.1:8080")
+        .await
+        .expect("无法连接到服务器");
     let mut framed = Framed::new(stream, LengthDelimitedCodec::new());
 
     // 1. 发送一个买单 (限价单)
@@ -34,7 +36,7 @@ async fn test_basic_match() {
         symbol: Arc::from("BTC/USD"),
         order_type: OrderType::Sell,
         price: 50000, // 价格匹配
-        quantity: 7,      // 数量小于买单
+        quantity: 7,  // 数量小于买单
     };
     let sell_order_json = serde_json::to_string(&sell_order).unwrap();
     framed.send(sell_order_json.into()).await.unwrap();

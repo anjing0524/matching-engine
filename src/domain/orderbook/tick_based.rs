@@ -61,7 +61,7 @@ impl ContractSpec {
         assert!(tick_size > 0, "Tick size must be positive");
         assert!(max_price > min_price, "Max price must be greater than min");
         assert!(
-            (max_price - min_price) % tick_size == 0,
+            (max_price - min_price).is_multiple_of(tick_size),
             "Price range must be divisible by tick size"
         );
 
@@ -77,7 +77,7 @@ impl ContractSpec {
 
 /// 订单位置信息（用于快速取消）
 #[derive(Clone, Debug)]
-struct OrderLocation {
+pub(crate) struct OrderLocation {
     /// 价格索引
     price_idx: usize,
     /// 订单类型（买/卖）
@@ -124,7 +124,7 @@ pub struct TickBasedOrderBook {
 impl TickBasedOrderBook {
     /// 创建新的订单簿
     pub fn new(spec: ContractSpec) -> Self {
-        Self::with_symbol_pool(spec, Arc::clone(crate::symbol_pool::global_symbol_pool()))
+        Self::with_symbol_pool(spec, Arc::clone(crate::shared::symbol_pool::global_symbol_pool()))
     }
 
     /// 使用指定符号池创建
@@ -157,7 +157,7 @@ impl TickBasedOrderBook {
         if price < self.spec.min_price || price > self.spec.max_price {
             return None;
         }
-        if (price - self.spec.min_price) % self.spec.tick_size != 0 {
+        if !(price - self.spec.min_price).is_multiple_of(self.spec.tick_size) {
             return None; // 非法价格（不在tick上）
         }
         Some(((price - self.spec.min_price) / self.spec.tick_size) as usize)

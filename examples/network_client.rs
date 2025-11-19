@@ -1,9 +1,8 @@
 /// 网络客户端示例
 ///
 /// 连接到匹配引擎服务器并发送订单
-
 use matching_engine::infrastructure::network::{BincodeCodec, Codec, LengthDelimitedCodec};
-use matching_engine::protocol::{ClientMessage, NewOrderRequest, OrderType};
+use matching_engine::shared::protocol::{ClientMessage, NewOrderRequest, OrderType};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
