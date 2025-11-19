@@ -96,17 +96,18 @@ impl<C: Codec> NetworkMiddleware<C> {
             BackendType::Tokio => {
                 Box::new(backends::tokio::TokioTransport::new()?) as Box<dyn NetworkTransport>
             }
-            #[cfg(feature = "io-uring")]
-            BackendType::IoUring => {
-                let io_uring_config = backends::io_uring::IoUringConfig {
-                    queue_depth: config.rx_queue_depth.max(config.tx_queue_depth) as u32,
-                    buffer_size: config.buffer_size,
-                    buffer_pool_size: config.rx_queue_depth,
-                    ..Default::default()
-                };
-                Box::new(backends::io_uring::IoUringTransport::new(io_uring_config)?)
-                    as Box<dyn NetworkTransport>
-            }
+            // io_uring backend temporarily disabled due to compatibility issues
+            // #[cfg(feature = "io-uring")]
+            // BackendType::IoUring => {
+            //     let io_uring_config = backends::io_uring::IoUringConfig {
+            //         queue_depth: config.rx_queue_depth.max(config.tx_queue_depth) as u32,
+            //         buffer_size: config.buffer_size,
+            //         buffer_pool_size: config.rx_queue_depth,
+            //         ..Default::default()
+            //     };
+            //     Box::new(backends::io_uring::IoUringTransport::new(io_uring_config)?)
+            //         as Box<dyn NetworkTransport>
+            // }
             #[cfg(feature = "dpdk")]
             BackendType::Dpdk => {
                 let dpdk_config = backends::dpdk::DpdkConfig {
@@ -121,7 +122,8 @@ impl<C: Codec> NetworkMiddleware<C> {
             BackendType::Fpga => {
                 let fpga_config = fpga_backend::FpgaConfig {
                     device_id: 0,
-                    ring_size: 1024,
+                    dma_buffer_size: 1024 * 1024,
+                    queue_depth: 1024,
                 };
                 Box::new(fpga_backend::FpgaTransport::new(fpga_config)?)
                     as Box<dyn NetworkTransport>

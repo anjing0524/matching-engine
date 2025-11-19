@@ -10,7 +10,6 @@ use crate::infrastructure::network::traits::{Connection, NetworkTransport, ZeroC
 use async_trait::async_trait;
 use std::io::{self, Error, ErrorKind};
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 /// FPGA传输层配置
 #[derive(Debug, Clone)]
@@ -41,7 +40,7 @@ pub struct FpgaTransport {
 
 impl FpgaTransport {
     /// 创建新的FPGA传输层
-    pub fn new(config: FpgaConfig) -> io::Result<Self> {
+    pub fn new(_config: FpgaConfig) -> io::Result<Self> {
         // FPGA后端尚未实现
         Err(Error::new(
             ErrorKind::Unsupported,
