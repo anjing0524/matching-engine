@@ -30,7 +30,7 @@
 /// let mut ob = TickBasedOrderBook::new(spec);
 /// // process_order(&mut ob, request);
 /// ```
-use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
+use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, OrderStatus, TradeNotification};
 use smallvec::SmallVec;
 
 /// Core OrderBook trait
@@ -83,33 +83,38 @@ pub trait OrderBook {
         request: NewOrderRequest,
     ) -> (SmallVec<[TradeNotification; 8]>, Option<OrderConfirmation>);
 
-    /// Cancels an existing order
+    /// Cancels an existing order with authorization check
     ///
-    /// Removes an order from the orderbook by its order ID.
+    /// Removes an order from the orderbook by its order ID, verifying that
+    /// the requesting user is authorized to cancel the order.
     ///
     /// # Arguments
     /// * `order_id` - The ID of the order to cancel
+    /// * `user_id` - The ID of the user requesting the cancellation
     ///
     /// # Returns
     /// * `Ok(())` if the order was successfully canceled
-    /// * `Err(String)` if the order was not found or cannot be canceled
+    /// * `Err(String)` with error details if:
+    ///   - Order not found
+    ///   - User not authorized to cancel the order
+    ///   - Other cancellation errors
     ///
-    /// # Future Implementation
-    /// This is currently a placeholder. Full implementation will include:
-    /// - Order ID to price level mapping
-    /// - Efficient removal from price level queue
-    /// - Bitmap updates for empty price levels
+    /// # Authorization
+    /// This method verifies that the `user_id` matches the user who originally
+    /// placed the order. This prevents users from canceling orders they don't own.
     ///
     /// # Example
     /// ```rust,ignore
-    /// match orderbook.cancel_order(order_id) {
+    /// match orderbook.cancel_order(order_id, user_id) {
     ///     Ok(()) => println!("Order {} canceled", order_id),
     ///     Err(e) => eprintln!("Cancel failed: {}", e),
     /// }
     /// ```
-    fn cancel_order(&mut self, order_id: u64) -> Result<(), String> {
+    fn cancel_order(&mut self, order_id: u64, user_id: u64) -> Result<(), String> {
         // Default implementation returns "not implemented"
-        Err(format!("Cancel order {order_id} not yet implemented"))
+        Err(format!(
+            "Cancel order {order_id} by user {user_id} not yet implemented"
+        ))
     }
 
     /// Gets the best (highest) bid price
@@ -162,6 +167,29 @@ pub trait OrderBook {
             (Some(bid), Some(ask)) => Some((bid + ask) / 2),
             _ => None,
         }
+    }
+
+    /// Queries the status of an existing order
+    ///
+    /// Returns detailed information about an order including its current state,
+    /// remaining quantity, and other relevant details.
+    ///
+    /// # Arguments
+    /// * `order_id` - The ID of the order to query
+    ///
+    /// # Returns
+    /// * `Some(OrderStatus)` if the order exists in the orderbook
+    /// * `None` if the order is not found (fully filled, cancelled, or never existed)
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// if let Some(status) = orderbook.get_order_status(order_id) {
+    ///     println!("Order {} has {} remaining",
+    ///         status.order_id, status.remaining_quantity);
+    /// }
+    /// ```
+    fn get_order_status(&self, order_id: u64) -> Option<OrderStatus> {
+        None // Default implementation
     }
 }
 
@@ -221,6 +249,6 @@ mod tests {
             best_ask: None,
         };
 
-        assert!(mock.cancel_order(123).is_err());
+        assert!(mock.cancel_order(123, 1).is_err());
     }
 }

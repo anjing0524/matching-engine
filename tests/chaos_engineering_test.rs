@@ -140,10 +140,10 @@ fn chaos_test_random_cancellations() {
             let idx = rng.gen_range(0..order_ids.len());
             let order_id = order_ids.remove(idx);
 
-            match orderbook.cancel_order(order_id) {
+            match orderbook.cancel_order(order_id, 1) {
                 Ok(_) => cancelled += 1,
                 Err(_) => {
-                    // 订单可能已经完全成交
+                    // 订单可能已经完全成交或授权失败
                 }
             }
         }
@@ -261,7 +261,7 @@ fn chaos_test_rapid_order_churn() {
         // 每隔几次，取消一个旧订单
         if i % 3 == 0 && !order_ids.is_empty() {
             let order_id = order_ids.remove(0);
-            let _ = orderbook.cancel_order(order_id);
+            let _ = orderbook.cancel_order(order_id, 1);
         }
     }
 

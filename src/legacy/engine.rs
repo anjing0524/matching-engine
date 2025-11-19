@@ -77,7 +77,7 @@ impl MatchingEngine {
                             eprintln!("订单 {} 已成功取消", request.order_id);
                         }
                         Err(e) => {
-                            eprintln!("取消订单 {} 失败: {}", request.order_id, e);
+                            eprintln!("取消订单 {} 失败: {} (可能未授权)", request.order_id, e);
                         }
                     }
                 }

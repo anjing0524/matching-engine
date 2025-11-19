@@ -15,6 +15,34 @@ pub enum OrderType {
     Sell,
 }
 
+/// 订单状态枚举
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+pub enum OrderStatusType {
+    /// 订单在订单簿中等待撮合
+    Resting,
+    /// 订单已部分成交
+    PartiallyFilled,
+}
+
+/// 订单状态详情
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrderStatus {
+    /// 订单ID
+    pub order_id: u64,
+    /// 用户ID
+    pub user_id: u64,
+    /// 订单方向（买/卖）
+    pub side: OrderType,
+    /// 订单价格
+    pub price: u64,
+    /// 原始订单数量
+    pub original_quantity: u64,
+    /// 剩余待成交数量
+    pub remaining_quantity: u64,
+    /// 订单状态
+    pub status: OrderStatusType,
+}
+
 /// 新订单请求，由客户端发起
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NewOrderRequest {
@@ -254,5 +282,41 @@ impl<Context> Decode<Context> for ServerMessage {
                 allowed: &bincode::error::AllowedEnumVariants::Range { min: 0, max: 1 },
             }),
         }
+    }
+}
+
+// Manual Encode implementation for OrderStatus
+impl Encode for OrderStatus {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        self.order_id.encode(encoder)?;
+        self.user_id.encode(encoder)?;
+        self.side.encode(encoder)?;
+        self.price.encode(encoder)?;
+        self.original_quantity.encode(encoder)?;
+        self.remaining_quantity.encode(encoder)?;
+        self.status.encode(encoder)?;
+        Ok(())
+    }
+}
+
+// Manual Decode implementation for OrderStatus
+impl<Context> Decode<Context> for OrderStatus {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let order_id = u64::decode(decoder)?;
+        let user_id = u64::decode(decoder)?;
+        let side = OrderType::decode(decoder)?;
+        let price = u64::decode(decoder)?;
+        let original_quantity = u64::decode(decoder)?;
+        let remaining_quantity = u64::decode(decoder)?;
+        let status = OrderStatusType::decode(decoder)?;
+        Ok(OrderStatus {
+            order_id,
+            user_id,
+            side,
+            price,
+            original_quantity,
+            remaining_quantity,
+            status,
+        })
     }
 }

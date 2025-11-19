@@ -186,6 +186,22 @@ impl<T> RingBuffer<T> {
     }
 }
 
+impl<T: Clone> Clone for RingBuffer<T> {
+    fn clone(&self) -> Self {
+        let mut new_buffer = Self::with_capacity(self.capacity);
+        // 复制所有元素
+        for i in 0..self.len {
+            let idx = (self.head + i) % self.capacity;
+            // Safety: 我们知道这个位置是已初始化的
+            unsafe {
+                let value = (*self.buffer[idx].as_ptr()).clone();
+                let _ = new_buffer.push(value);
+            }
+        }
+        new_buffer
+    }
+}
+
 impl<T> Drop for RingBuffer<T> {
     fn drop(&mut self) {
         // 确保所有元素都被正确drop
@@ -216,6 +232,32 @@ impl<'a, T> ExactSizeIterator for Drain<'a, T> {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone, PartialEq, Debug)]
+    struct TestItem {
+        id: u64,
+        value: u64,
+    }
+
+    #[test]
+    fn test_clone() {
+        let mut rb = RingBuffer::with_capacity(4);
+        rb.push(TestItem { id: 1, value: 100 }).unwrap();
+        rb.push(TestItem { id: 2, value: 200 }).unwrap();
+        rb.push(TestItem { id: 3, value: 300 }).unwrap();
+
+        let mut cloned = rb.clone();
+
+        // 验证克隆的队列内容相同
+        assert_eq!(cloned.len(), 3);
+        assert_eq!(cloned.pop(), Some(TestItem { id: 1, value: 100 }));
+        assert_eq!(cloned.pop(), Some(TestItem { id: 2, value: 200 }));
+        assert_eq!(cloned.pop(), Some(TestItem { id: 3, value: 300 }));
+        assert_eq!(cloned.pop(), None);
+
+        // 验证原队列未被影响
+        assert_eq!(rb.len(), 3);
+    }
 
     #[test]
     fn test_basic_operations() {
