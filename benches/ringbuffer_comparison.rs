@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! RingBuffer vs 链表实现性能对比
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};

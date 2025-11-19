@@ -1,9 +1,10 @@
+#![allow(deprecated)]
 //! Tick-based Array OrderBook vs BTreeMap性能对比
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 #[allow(deprecated)]
 use matching_engine::legacy::orderbook::OrderBook;
-use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 #[allow(deprecated)]
 use matching_engine::legacy::orderbook_v2::OrderBookV2;
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType};

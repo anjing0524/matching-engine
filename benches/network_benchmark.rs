@@ -3,7 +3,6 @@ use bytes::{BufMut, BytesMut};
 /// Tests the zero-copy networking stack impact on total latency
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType, TradeNotification};
-use serde_json;
 use std::sync::Arc;
 
 /// ============================================================================
@@ -78,7 +77,7 @@ fn bench_bytesmut_push(c: &mut Criterion) {
         let data = vec![0u8; 100];
         b.iter(|| {
             let mut buf = BytesMut::with_capacity(1024);
-            buf.extend_from_slice(&black_box(&data));
+            buf.extend_from_slice(black_box(&data));
             black_box(buf);
         });
     });

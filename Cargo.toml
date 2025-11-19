@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-bytes = "1"
+bytes = "1.11"
 tokio-util = { version = "0.7", features = ["codec"] }
 parking_lot = "0.12"
 bumpalo = { version = "3.16.0", features = ["collections"] }
@@ -22,11 +22,11 @@ num_cpus = "1.16"
 smallvec = "1.13"
 bit-vec = "0.6"
 async-trait = "0.1"
-thiserror = "1.0"
-clap = { version = "4.5", features = ["derive"] }
-prometheus = "0.13"
+thiserror = "2.0"
+clap = { version = "4.5.52", features = ["derive"] }
+prometheus = "0.14"
 lazy_static = "1.4"
-axum = "0.7"
+axum = "0.8"
 hyper = "1.0"
 tracing-opentelemetry = { version = "0.23", optional = true }
 opentelemetry = { version = "0.22", optional = true }
@@ -55,7 +55,7 @@ dpdk = []
 fpga = []
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.7"
 tempfile = "3.10"
 
 [[bench]]

@@ -6,12 +6,10 @@
 /// - 专用的硬件抽象层
 ///
 /// 当前状态: 未实现，返回错误
-
-use crate::infrastructure::network::traits::{NetworkTransport, Connection, ZeroCopyBuffer};
+use crate::infrastructure::network::traits::{Connection, NetworkTransport, ZeroCopyBuffer};
 use async_trait::async_trait;
 use std::io::{self, Error, ErrorKind};
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 /// FPGA传输层配置
 #[derive(Debug, Clone)]
@@ -42,37 +40,35 @@ pub struct FpgaTransport {
 
 impl FpgaTransport {
     /// 创建新的FPGA传输层
-    pub fn new(config: FpgaConfig) -> io::Result<Self> {
+    pub fn new(_config: FpgaConfig) -> io::Result<Self> {
         // FPGA后端尚未实现
         Err(Error::new(
             ErrorKind::Unsupported,
-            "FPGA backend is not yet implemented. Requires hardware drivers and firmware."
+            "FPGA backend is not yet implemented. Requires hardware drivers and firmware.",
         ))
     }
 }
 
 #[async_trait]
 impl NetworkTransport for FpgaTransport {
-    type Connection = FpgaConnection;
-
     async fn bind(&mut self, _addr: SocketAddr) -> io::Result<()> {
         Err(Error::new(
             ErrorKind::Unsupported,
-            "FPGA backend not implemented"
+            "FPGA backend not implemented",
         ))
     }
 
-    async fn accept(&mut self) -> io::Result<Self::Connection> {
+    async fn accept(&mut self) -> io::Result<Box<dyn Connection>> {
         Err(Error::new(
             ErrorKind::Unsupported,
-            "FPGA backend not implemented"
+            "FPGA backend not implemented",
         ))
     }
 
-    async fn connect(&mut self, _addr: SocketAddr) -> io::Result<Self::Connection> {
+    fn local_addr(&self) -> io::Result<SocketAddr> {
         Err(Error::new(
             ErrorKind::Unsupported,
-            "FPGA backend not implemented"
+            "FPGA backend not implemented",
         ))
     }
 }
@@ -82,24 +78,31 @@ pub struct FpgaConnection;
 
 #[async_trait]
 impl Connection for FpgaConnection {
-    async fn send(&mut self, _buf: &[u8]) -> io::Result<()> {
+    async fn recv(&mut self) -> io::Result<Box<dyn ZeroCopyBuffer>> {
         Err(Error::new(
             ErrorKind::Unsupported,
-            "FPGA backend not implemented"
+            "FPGA backend not implemented",
         ))
     }
 
-    async fn recv(&mut self) -> io::Result<Arc<dyn ZeroCopyBuffer>> {
+    async fn send(&mut self, _buf: Box<dyn ZeroCopyBuffer>) -> io::Result<()> {
         Err(Error::new(
             ErrorKind::Unsupported,
-            "FPGA backend not implemented"
+            "FPGA backend not implemented",
         ))
     }
 
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         Err(Error::new(
             ErrorKind::Unsupported,
-            "FPGA backend not implemented"
+            "FPGA backend not implemented",
+        ))
+    }
+
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "FPGA backend not implemented",
         ))
     }
 }

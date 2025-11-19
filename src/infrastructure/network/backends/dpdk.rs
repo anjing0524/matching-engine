@@ -10,17 +10,15 @@
 ///
 /// 注意: 这是一个模拟实现，用于演示架构。
 /// 真实的DPDK集成需要C FFI绑定和实际的DPDK库。
-
-use crate::infrastructure::network::buffer::{AlignedBuffer, BufferPool, SharedBuffer};
 use crate::infrastructure::network::metrics::NetworkMetrics;
 use crate::infrastructure::network::traits::{Connection, NetworkTransport, ZeroCopyBuffer};
 use async_trait::async_trait;
+use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use parking_lot::Mutex;
-use std::collections::VecDeque;
 
 /// DPDK配置
 #[derive(Debug, Clone)]
@@ -74,7 +72,7 @@ impl Default for DpdkConfig {
                 "--file-prefix=dpdk".to_string(),
             ],
             port_id: 0,
-            rx_queues: 4,  // 多队列以支持RSS
+            rx_queues: 4, // 多队列以支持RSS
             tx_queues: 4,
             rx_desc: 2048,
             tx_desc: 2048,
@@ -83,13 +81,14 @@ impl Default for DpdkConfig {
             mtu: 1500,
             enable_rss: true,
             enable_checksum_offload: true,
-            rx_burst_size: 32,  // 一次接收32个包
+            rx_burst_size: 32, // 一次接收32个包
             tx_burst_size: 32,
         }
     }
 }
 
 /// DPDK传输层
+#[allow(dead_code)]
 pub struct DpdkTransport {
     config: DpdkConfig,
     metrics: Arc<NetworkMetrics>,
@@ -119,6 +118,7 @@ impl DpdkTransport {
         })
     }
 
+    #[must_use]
     pub fn metrics(&self) -> Arc<NetworkMetrics> {
         Arc::clone(&self.metrics)
     }
@@ -126,6 +126,7 @@ impl DpdkTransport {
     /// 轮询接收数据包
     ///
     /// 这是DPDK的核心：持续轮询而不是等待中断
+    #[allow(dead_code)]
     fn poll_rx(&self) -> io::Result<Vec<DmaBuffer>> {
         // 在真实实现中:
         // let mut pkts = vec![std::ptr::null_mut(); self.config.rx_burst_size as usize];
@@ -136,6 +137,7 @@ impl DpdkTransport {
     }
 
     /// 批量发送数据包
+    #[allow(dead_code)]
     fn tx_burst(&self, buffers: Vec<DmaBuffer>) -> io::Result<usize> {
         // 在真实实现中:
         // let nb_tx = rte_eth_tx_burst(self.config.port_id, queue_id, &pkts, pkts.len());
@@ -191,6 +193,7 @@ impl NetworkTransport for DpdkTransport {
 }
 
 /// DPDK连接
+#[allow(dead_code)]
 pub struct DpdkConnection {
     id: u64,
     peer_addr: SocketAddr,
@@ -242,8 +245,8 @@ impl Connection for DpdkConnection {
 /// DMA缓冲区（模拟rte_mbuf）
 pub struct DmaBuffer {
     data: Vec<u8>,
-    phys_addr: u64,   // 物理地址
-    iova_addr: u64,   // IOVA地址
+    phys_addr: u64, // 物理地址
+    iova_addr: u64, // IOVA地址
 }
 
 impl ZeroCopyBuffer for DmaBuffer {
@@ -269,6 +272,7 @@ impl ZeroCopyBuffer for DmaBuffer {
 }
 
 /// DMA缓冲区池（模拟rte_mempool）
+#[allow(dead_code)]
 pub struct DmaBufferPool {
     free_list: Mutex<Vec<DmaBuffer>>,
     capacity: usize,
@@ -276,6 +280,7 @@ pub struct DmaBufferPool {
 }
 
 impl DmaBufferPool {
+    #[must_use]
     pub fn new(capacity: usize, buffer_size: usize) -> Self {
         let mut free_list = Vec::with_capacity(capacity);
 
@@ -309,6 +314,7 @@ impl DmaBufferPool {
 }
 
 // 扩展 NetworkMetrics 以支持DPDK特定的指标
+#[allow(dead_code)]
 trait DpdkMetrics {
     fn record_poll_cycle(&self);
     fn record_tx_batch(&self, count: usize);

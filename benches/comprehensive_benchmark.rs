@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 /// Comprehensive Performance Benchmark Suite
 /// Tests all key components of the matching engine based on system design principles:
 /// 1. OrderBook matching (core latency)
@@ -9,7 +10,9 @@ use criterion::{
     black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
 };
 use matching_engine::legacy::orderbook::OrderBook;
-use matching_engine::shared::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
+use matching_engine::shared::protocol::{
+    NewOrderRequest, OrderConfirmation, OrderType, TradeNotification,
+};
 use std::sync::Arc;
 
 /// ============================================================================
@@ -24,7 +27,7 @@ fn bench_order_add_no_match(c: &mut Criterion) {
 
     group.bench_function("single_order_add", |b| {
         b.iter_batched(
-            || OrderBook::new(),
+            OrderBook::new,
             |mut book| {
                 let order = NewOrderRequest {
                     user_id: 1,
@@ -126,7 +129,7 @@ fn bench_memory_pool_reuse(c: &mut Criterion) {
 
     group.bench_function("add_remove_add_sequence", |b| {
         b.iter_batched(
-            || OrderBook::new(),
+            OrderBook::new,
             |mut book| {
                 // Add order 1
                 let order1 = NewOrderRequest {
@@ -173,7 +176,7 @@ fn bench_memory_pool_reuse(c: &mut Criterion) {
 fn bench_price_level_lookup(c: &mut Criterion) {
     let mut group = c.benchmark_group("OrderBook - Price Level Lookup");
 
-    for num_levels in [10, 100, 1000, 10000].iter() {
+    for num_levels in [10, 100, 1000, 10_000].iter() {
         group.throughput(Throughput::Elements(*num_levels as u64));
 
         group.bench_with_input(
@@ -374,7 +377,7 @@ fn bench_worst_case_crossing(c: &mut Criterion) {
                     symbol: Arc::from("BTC/USD"),
                     order_type: OrderType::Buy,
                     price: black_box(51000),
-                    quantity: black_box(10000),
+                    quantity: black_box(10_000),
                 };
                 book.match_order(big_buy);
             },

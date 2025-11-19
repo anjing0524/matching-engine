@@ -1,5 +1,4 @@
 /// 网络中间件核心trait定义
-
 use async_trait::async_trait;
 use std::net::SocketAddr;
 use std::sync::Arc;

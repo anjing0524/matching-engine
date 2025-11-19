@@ -25,7 +25,6 @@
 ///
 /// let result = use_case.execute(cancel_request)?;
 /// ```
-
 use crate::domain::orderbook::OrderBook;
 use crate::shared::protocol::CancelOrderRequest;
 
@@ -58,11 +57,14 @@ pub enum CancelOrderError {
 impl std::fmt::Display for CancelOrderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CancelOrderError::OrderNotFound(id) => write!(f, "Order {} not found", id),
+            CancelOrderError::OrderNotFound(id) => write!(f, "Order {id} not found"),
             CancelOrderError::Unauthorized { order_id, user_id } => {
-                write!(f, "User {} not authorized to cancel order {}", user_id, order_id)
+                write!(
+                    f,
+                    "User {user_id} not authorized to cancel order {order_id}"
+                )
             }
-            CancelOrderError::OrderbookError(e) => write!(f, "Orderbook error: {}", e),
+            CancelOrderError::OrderbookError(e) => write!(f, "Orderbook error: {e}"),
         }
     }
 }
@@ -121,7 +123,10 @@ impl<OB: OrderBook> CancelOrderUseCase<OB> {
     /// 1. Optionally check authorization
     /// 2. Cancel the order via orderbook
     /// 3. Return result
-    pub fn execute(&mut self, request: CancelOrderRequest) -> Result<CancelOrderResult, CancelOrderError> {
+    pub fn execute(
+        &mut self,
+        request: CancelOrderRequest,
+    ) -> Result<CancelOrderResult, CancelOrderError> {
         // Step 1: Authorization check (if enabled)
         if self.check_authorization {
             // TODO: Implement authorization check
@@ -165,11 +170,11 @@ impl<OB: OrderBook> CancelOrderUseCase<OB> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::orderbook::{TickBasedOrderBook, ContractSpec};
+    use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 
     #[test]
     fn test_cancel_order_use_case_creation() {
-        let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+        let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
         let orderbook = TickBasedOrderBook::new(spec);
 
         let _use_case = CancelOrderUseCase::new(orderbook);
@@ -177,7 +182,7 @@ mod tests {
 
     #[test]
     fn test_cancel_order_not_implemented() {
-        let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+        let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
         let orderbook = TickBasedOrderBook::new(spec);
 
         let mut use_case = CancelOrderUseCase::new(orderbook);

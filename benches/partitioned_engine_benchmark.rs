@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 /// 分区引擎性能基准测试
 /// 验证并行架构的性能提升
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
@@ -101,7 +102,7 @@ fn bench_multi_symbol(c: &mut Criterion) {
     let mut group = c.benchmark_group("Partitioned Engine - Multi Symbol");
     group.throughput(Throughput::Elements(1000));
 
-    let symbols = vec![
+    let symbols = [
         "BTC/USD",
         "ETH/USD",
         "BNB/USD",

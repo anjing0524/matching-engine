@@ -5,7 +5,6 @@
 /// - 每100次调用才真正获取系统时间
 /// - 中间使用缓存的时间戳
 /// - 对于高频场景，节省90-100ns/次
-
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -32,6 +31,7 @@ const UPDATE_INTERVAL: u32 = 100;
 /// - 对于交易撮合场景，使用相对顺序更重要
 /// - 如需精确时间戳，使用get_precise_timestamp()
 #[inline]
+#[must_use]
 pub fn get_fast_timestamp() -> u64 {
     UPDATE_COUNTER.with(|counter| {
         let count = counter.get();
@@ -57,6 +57,7 @@ pub fn get_fast_timestamp() -> u64 {
 ///
 /// 用于需要精确时间的场景
 #[inline]
+#[must_use]
 pub fn get_precise_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -156,7 +157,7 @@ mod tests {
 
         // 测试精确时间戳性能
         let start = Instant::now();
-        for _ in 0..10000 {
+        for _ in 0..10_000 {
             get_precise_timestamp();
         }
         let precise_duration = start.elapsed();
@@ -166,7 +167,7 @@ mod tests {
 
         // 测试快速时间戳性能
         let start = Instant::now();
-        for _ in 0..10000 {
+        for _ in 0..10_000 {
             get_fast_timestamp();
         }
         let fast_duration = start.elapsed();

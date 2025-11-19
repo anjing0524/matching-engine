@@ -26,7 +26,6 @@
 ///
 /// let result = use_case.execute(order_request)?;
 /// ```
-
 use crate::domain::orderbook::OrderBook;
 use crate::domain::validation::{OrderValidator, ValidationError};
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
@@ -55,8 +54,8 @@ pub enum MatchOrderError {
 impl std::fmt::Display for MatchOrderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MatchOrderError::ValidationFailed(e) => write!(f, "Validation failed: {}", e),
-            MatchOrderError::OrderbookError(e) => write!(f, "Orderbook error: {}", e),
+            MatchOrderError::ValidationFailed(e) => write!(f, "Validation failed: {e}"),
+            MatchOrderError::OrderbookError(e) => write!(f, "Orderbook error: {e}"),
         }
     }
 }
@@ -106,7 +105,10 @@ impl<OB: OrderBook> MatchOrderUseCase<OB> {
     /// 1. Validate the order request
     /// 2. Submit to orderbook for matching
     /// 3. Return results
-    pub fn execute(&mut self, request: NewOrderRequest) -> Result<MatchOrderResult, MatchOrderError> {
+    pub fn execute(
+        &mut self,
+        request: NewOrderRequest,
+    ) -> Result<MatchOrderResult, MatchOrderError> {
         // Step 1: Validate the order
         self.validator.validate(&request)?;
 
@@ -134,13 +136,13 @@ impl<OB: OrderBook> MatchOrderUseCase<OB> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::orderbook::{TickBasedOrderBook, ContractSpec};
+    use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
     use crate::shared::protocol::OrderType;
     use std::sync::Arc;
 
     #[test]
     fn test_match_order_use_case_creation() {
-        let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+        let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
         let orderbook = TickBasedOrderBook::new(spec);
         let validator = OrderValidator::new();
 
@@ -149,7 +151,7 @@ mod tests {
 
     #[test]
     fn test_match_order_validation_failure() {
-        let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+        let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
         let orderbook = TickBasedOrderBook::new(spec);
         let validator = OrderValidator::new();
 
@@ -166,12 +168,15 @@ mod tests {
 
         let result = use_case.execute(invalid_order);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), MatchOrderError::ValidationFailed(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            MatchOrderError::ValidationFailed(_)
+        ));
     }
 
     #[test]
     fn test_match_order_success() {
-        let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+        let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
         let orderbook = TickBasedOrderBook::new(spec);
         let validator = OrderValidator::new();
 

@@ -7,7 +7,6 @@
 /// - 校验和验证
 /// - 原子性写入（先写临时文件，然后重命名）
 /// - 自动清理旧快照
-
 use super::{PersistenceError, Result, SnapshotData};
 use crate::infrastructure::persistence::types::SnapshotMetadata;
 use bincode::config::standard;
@@ -169,12 +168,13 @@ impl SnapshotWriter {
 
     /// 获取快照文件路径
     fn snapshot_path(&self, snapshot_id: u64) -> PathBuf {
-        self.data_dir.join(format!("snapshot.{}.snap", snapshot_id))
+        self.data_dir.join(format!("snapshot.{snapshot_id}.snap"))
     }
 
     /// 获取元数据文件路径
     fn metadata_path(&self, snapshot_id: u64) -> PathBuf {
-        self.data_dir.join(format!("snapshot.{}.snap.meta", snapshot_id))
+        self.data_dir
+            .join(format!("snapshot.{snapshot_id}.snap.meta"))
     }
 }
 
@@ -186,6 +186,7 @@ pub struct SnapshotReader {
 
 impl SnapshotReader {
     /// 创建新的快照读取器
+    #[must_use]
     pub fn new(data_dir: PathBuf) -> Self {
         Self { data_dir }
     }
@@ -223,8 +224,9 @@ impl SnapshotReader {
         }
 
         // 反序列化
-        let (snapshot, _): (SnapshotData, usize) = bincode::serde::decode_from_slice(&data, standard())
-            .map_err(|e| PersistenceError::Deserialization(e.to_string()))?;
+        let (snapshot, _): (SnapshotData, usize) =
+            bincode::serde::decode_from_slice(&data, standard())
+                .map_err(|e| PersistenceError::Deserialization(e.to_string()))?;
 
         // 验证校验和
         let actual_checksum = self.calculate_checksum(&snapshot.orderbook_state);
@@ -300,11 +302,12 @@ impl SnapshotReader {
 
     /// 获取快照文件路径
     fn snapshot_path(&self, snapshot_id: u64) -> PathBuf {
-        self.data_dir.join(format!("snapshot.{}.snap", snapshot_id))
+        self.data_dir.join(format!("snapshot.{snapshot_id}.snap"))
     }
 }
 
 /// 创建快照数据
+#[must_use]
 pub fn create_snapshot(wal_seq: u64, orderbook_state: Vec<u8>) -> SnapshotData {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -355,7 +358,7 @@ mod tests {
         let data_dir = temp_dir.path().to_path_buf();
 
         // 创建大数据快照
-        let orderbook_state = vec![42u8; 10000];
+        let orderbook_state = vec![42u8; 10_000];
         let snapshot = create_snapshot(100, orderbook_state.clone());
 
         // 写入（启用压缩）

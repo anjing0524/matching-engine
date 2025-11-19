@@ -23,16 +23,15 @@
 ///
 /// service.submit_order(order).unwrap();
 /// ```
-
-use crate::domain::orderbook::{TickBasedOrderBook, ContractSpec};
+use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
 use crate::shared::symbol_pool::SymbolPool;
-use crossbeam::channel::{bounded, Sender, Receiver};
+use crossbeam::channel::{bounded, Receiver, Sender};
 use smallvec::SmallVec;
-use std::sync::Arc;
-use std::thread;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use std::thread;
 
 /// Configuration for the partitioned service
 #[derive(Clone, Debug)]
@@ -60,7 +59,7 @@ impl Default for PartitionConfig {
             queue_capacity: 10_000,
             batch_size: 100,
             enable_cpu_affinity: true,
-            contract_spec: ContractSpec::new("DEFAULT", 1, 1000, 100000),
+            contract_spec: ContractSpec::new("DEFAULT", 1, 1000, 100_000),
         }
     }
 }
@@ -132,10 +131,8 @@ impl PartitionWorker {
 
         loop {
             // Batch receive orders to reduce context switching
-            let batch: Vec<OrderRequest> = self.rx
-                .try_iter()
-                .take(self.config.batch_size)
-                .collect();
+            let batch: Vec<OrderRequest> =
+                self.rx.try_iter().take(self.config.batch_size).collect();
 
             if batch.is_empty() {
                 // Adaptive wait strategy
@@ -171,7 +168,10 @@ impl PartitionWorker {
 
         // Send response if requested
         if let Some(response_tx) = order_req.response_tx {
-            let response = OrderResponse::Matched { trades: Box::new(trades), confirmation };
+            let response = OrderResponse::Matched {
+                trades: Box::new(trades),
+                confirmation,
+            };
             let _ = response_tx.send(response);
         }
     }
@@ -202,14 +202,21 @@ impl PartitionedService {
     ///
     /// # Arguments
     /// * `config` - Configuration for partitioning and performance tuning
+    #[must_use]
     pub fn new(config: PartitionConfig) -> Self {
         // Use global symbol pool, shared across all partitions
         let symbol_pool = Arc::clone(crate::shared::symbol_pool::global_symbol_pool());
 
         // Preload common trading pairs
         symbol_pool.preload(&[
-            "BTC/USD", "ETH/USD", "BNB/USD", "SOL/USD",
-            "ADA/USD", "XRP/USD", "DOT/USD", "MATIC/USD",
+            "BTC/USD",
+            "ETH/USD",
+            "BNB/USD",
+            "SOL/USD",
+            "ADA/USD",
+            "XRP/USD",
+            "DOT/USD",
+            "MATIC/USD",
         ]);
 
         let mut partitions = Vec::with_capacity(config.partition_count);
@@ -220,16 +227,12 @@ impl PartitionedService {
             let (tx, rx) = bounded(config.queue_capacity);
             partitions.push(tx);
 
-            let worker = PartitionWorker::new(
-                partition_id,
-                rx,
-                symbol_pool.clone(),
-                config.clone(),
-            );
+            let worker =
+                PartitionWorker::new(partition_id, rx, symbol_pool.clone(), config.clone());
 
             // Spawn worker thread
             let handle = thread::Builder::new()
-                .name(format!("partition-{}", partition_id))
+                .name(format!("partition-{partition_id}"))
                 .spawn(move || worker.run())
                 .expect("Failed to spawn worker thread");
 
@@ -264,7 +267,7 @@ impl PartitionedService {
 
         self.partitions[partition_id]
             .send(order_req)
-            .map_err(|e| format!("Failed to send order: {}", e))
+            .map_err(|e| format!("Failed to send order: {e}"))
     }
 
     /// Submits an order and waits for response (synchronous)
@@ -289,11 +292,11 @@ impl PartitionedService {
 
         self.partitions[partition_id]
             .send(order_req)
-            .map_err(|e| format!("Failed to send order: {}", e))?;
+            .map_err(|e| format!("Failed to send order: {e}"))?;
 
         response_rx
             .recv()
-            .map_err(|e| format!("Failed to receive response: {}", e))
+            .map_err(|e| format!("Failed to receive response: {e}"))
     }
 
     /// Submits a batch of orders asynchronously (high-performance API)
@@ -337,7 +340,7 @@ impl PartitionedService {
             for order in orders {
                 self.partitions[partition_id]
                     .send(order)
-                    .map_err(|e| format!("Partition {} send failed: {}", partition_id, e))?;
+                    .map_err(|e| format!("Partition {partition_id} send failed: {e}"))?;
             }
         }
 
@@ -358,11 +361,13 @@ impl PartitionedService {
     }
 
     /// Gets a reference to the symbol pool
+    #[must_use]
     pub fn symbol_pool(&self) -> &Arc<SymbolPool> {
         &self.symbol_pool
     }
 
     /// Gets the number of partitions
+    #[must_use]
     pub fn partition_count(&self) -> usize {
         self.config.partition_count
     }
@@ -380,7 +385,7 @@ mod tests {
             queue_capacity: 100,
             batch_size: 10,
             enable_cpu_affinity: false,
-            contract_spec: ContractSpec::new("TEST", 1, 1000, 100000),
+            contract_spec: ContractSpec::new("TEST", 1, 1000, 100_000),
         };
 
         let service = PartitionedService::new(config);
@@ -394,7 +399,7 @@ mod tests {
             queue_capacity: 100,
             batch_size: 10,
             enable_cpu_affinity: false,
-            contract_spec: ContractSpec::new("TEST", 1, 1000, 100000),
+            contract_spec: ContractSpec::new("TEST", 1, 1000, 100_000),
         };
 
         let service = PartitionedService::new(config);
@@ -455,8 +460,14 @@ mod tests {
         let service = PartitionedService::new(config);
 
         let symbols = vec![
-            "BTC/USD", "ETH/USD", "BNB/USD", "SOL/USD",
-            "ADA/USD", "XRP/USD", "DOT/USD", "MATIC/USD",
+            "BTC/USD",
+            "ETH/USD",
+            "BNB/USD",
+            "SOL/USD",
+            "ADA/USD",
+            "XRP/USD",
+            "DOT/USD",
+            "MATIC/USD",
         ];
 
         let mut partition_counts = vec![0; 4];
@@ -479,7 +490,7 @@ mod tests {
             queue_capacity: 1000,
             batch_size: 10,
             enable_cpu_affinity: false,
-            contract_spec: ContractSpec::new("TEST", 1, 1000, 100000),
+            contract_spec: ContractSpec::new("TEST", 1, 1000, 100_000),
         };
 
         let service = PartitionedService::new(config);
@@ -489,7 +500,11 @@ mod tests {
             .map(|i| NewOrderRequest {
                 user_id: i,
                 symbol: Arc::from("BTC/USD"),
-                order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+                order_type: if i % 2 == 0 {
+                    OrderType::Buy
+                } else {
+                    OrderType::Sell
+                },
                 price: 50000,
                 quantity: 1,
             })

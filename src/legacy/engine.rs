@@ -1,5 +1,7 @@
 use crate::legacy::orderbook::OrderBook;
-use crate::shared::protocol::{CancelOrderRequest, NewOrderRequest, OrderConfirmation, TradeNotification};
+use crate::shared::protocol::{
+    CancelOrderRequest, NewOrderRequest, OrderConfirmation, TradeNotification,
+};
 use crate::timestamp::get_fast_timestamp;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -60,7 +62,11 @@ impl MatchingEngine {
                     if let Some(confirmation) = confirmation_opt {
                         // 如果订单未完全成交，会有一个新挂单
                         // 发送这个新挂单的确认信息
-                        if self.output_sender.send(EngineOutput::Confirmation(confirmation)).is_err() {
+                        if self
+                            .output_sender
+                            .send(EngineOutput::Confirmation(confirmation))
+                            .is_err()
+                        {
                             eprintln!("输出通道已关闭，无法发送订单确认");
                         }
                     }

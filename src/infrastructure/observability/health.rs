@@ -17,10 +17,10 @@
 //! }
 //! ```
 
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use parking_lot::RwLock;
 
 /// 健康状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,11 +86,9 @@ impl HealthChecker {
     }
 
     /// 获取运行时间（秒）
+    #[must_use]
     pub fn uptime_seconds(&self) -> u64 {
-        self.start_time
-            .elapsed()
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
+        self.start_time.elapsed().map(|d| d.as_secs()).unwrap_or(0)
     }
 
     /// 获取当前时间戳
@@ -107,11 +105,13 @@ impl HealthChecker {
     }
 
     /// 获取健康状态
+    #[must_use]
     pub fn get_status(&self) -> HealthStatus {
         *self.status.read()
     }
 
     /// 生成健康检查响应
+    #[must_use]
     pub fn check_health(&self) -> HealthResponse {
         HealthResponse {
             status: self.get_status(),
@@ -123,6 +123,7 @@ impl HealthChecker {
     }
 
     /// 生成详细健康检查响应
+    #[must_use]
     pub fn check_health_detailed(&self, details: HealthDetails) -> HealthResponse {
         HealthResponse {
             status: self.get_status(),
@@ -135,6 +136,7 @@ impl HealthChecker {
 
     /// 存活检查（liveness probe）
     /// 返回true表示进程仍在运行
+    #[must_use]
     pub fn check_liveness(&self) -> bool {
         // 简单检查：只要能返回就说明还活着
         true
@@ -142,6 +144,7 @@ impl HealthChecker {
 
     /// 就绪检查（readiness probe）
     /// 返回true表示可以接受流量
+    #[must_use]
     pub fn check_readiness(&self) -> bool {
         matches!(self.get_status(), HealthStatus::Healthy)
     }
@@ -170,7 +173,8 @@ mod tests {
     fn test_uptime() {
         let checker = HealthChecker::new("1.0.0");
         thread::sleep(Duration::from_millis(100));
-        assert!(checker.uptime_seconds() >= 0);
+        // uptime_seconds 返回 u64，总是非负
+        assert!(checker.uptime_seconds() < u64::MAX);
     }
 
     #[test]
@@ -192,7 +196,8 @@ mod tests {
 
         assert_eq!(response.status, HealthStatus::Healthy);
         assert_eq!(response.version, "1.0.0");
-        assert!(response.uptime_seconds >= 0);
+        // uptime_seconds 是 u64，总是非负
+        assert!(response.uptime_seconds < u64::MAX);
         assert!(response.timestamp > 0);
         assert!(response.details.is_none());
     }

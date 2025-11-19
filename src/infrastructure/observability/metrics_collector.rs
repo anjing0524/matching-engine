@@ -1,9 +1,9 @@
+use parking_lot::RwLock;
 /// 指标收集器
 ///
 /// 收集系统运行时指标，用于健康检查和监控
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 /// 全局指标收集器
 pub struct MetricsCollector {
@@ -73,10 +73,11 @@ impl LatencyTracker {
 
 impl MetricsCollector {
     /// 创建新的指标收集器
+    #[must_use]
     pub fn new() -> Self {
         Self {
             active_connections: AtomicUsize::new(0),
-            latency_samples: Arc::new(RwLock::new(LatencyTracker::new(10000))),
+            latency_samples: Arc::new(RwLock::new(LatencyTracker::new(10_000))),
         }
     }
 
@@ -142,16 +143,8 @@ impl MetricsCollector {
             }
         }
 
-        // 如果无法读取，返回jemalloc统计
-        #[cfg(feature = "jemalloc")]
-        {
-            use tikv_jemallocator::Jemalloc;
-            use std::alloc::GlobalAlloc;
-
-            // 这里需要jemalloc的统计API
-            // 简化版本：返回估计值
-            return 0.0;
-        }
+        // 如果无法读取，返回默认值
+        // TODO: 实现 jemalloc 统计API获取内存使用率
 
         // 默认返回0（未知）
         0.0
@@ -164,8 +157,8 @@ impl Default for MetricsCollector {
     }
 }
 
-/// 全局指标收集器实例
 lazy_static::lazy_static! {
+    /// 全局指标收集器实例
     pub static ref GLOBAL_METRICS: Arc<MetricsCollector> = Arc::new(MetricsCollector::new());
 }
 

@@ -1,5 +1,4 @@
 /// 编解码器实现
-
 use crate::shared::protocol::{NewOrderRequest, TradeNotification};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
@@ -24,6 +23,7 @@ pub struct BincodeCodec<T> {
 }
 
 impl<T> BincodeCodec<T> {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             _phantom: PhantomData,

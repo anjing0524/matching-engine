@@ -26,6 +26,7 @@ impl FastBitmap {
     ///
     /// # 参数
     /// * `len` - bit总数
+    #[must_use]
     pub fn new(len: usize) -> Self {
         let num_blocks = len.div_ceil(64); // 向上取整
         Self {
@@ -57,6 +58,7 @@ impl FastBitmap {
 
     /// 获取指定位置的bit
     #[inline]
+    #[must_use]
     pub fn get(&self, index: usize) -> bool {
         debug_assert!(index < self.len, "Index out of bounds");
 
@@ -82,6 +84,7 @@ impl FastBitmap {
     /// - 最好情况: O(1) (最后一个块有bit)
     /// - CPU指令: BSR (x86) / CLZ (ARM)
     #[inline]
+    #[must_use]
     pub fn find_last_one(&self) -> Option<usize> {
         // 从高到低遍历u64块
         for (block_idx, &block) in self.blocks.iter().enumerate().rev() {
@@ -117,6 +120,7 @@ impl FastBitmap {
     /// - 最好情况: O(1) (第一个块有bit)
     /// - CPU指令: BSF (x86) / CTZ (ARM)
     #[inline]
+    #[must_use]
     pub fn find_first_one(&self) -> Option<usize> {
         // 从低到高遍历u64块
         for (block_idx, &block) in self.blocks.iter().enumerate() {
@@ -144,6 +148,7 @@ impl FastBitmap {
     /// Some(index) - 下一个为1的bit位置 (index > start)
     /// None - 没有找到
     #[inline]
+    #[must_use]
     pub fn find_next_one(&self, start: usize) -> Option<usize> {
         if start + 1 >= self.len {
             return None;
@@ -190,6 +195,7 @@ impl FastBitmap {
     /// Some(index) - 上一个为1的bit位置 (index < start)
     /// None - 没有找到
     #[inline]
+    #[must_use]
     pub fn find_prev_one(&self, start: usize) -> Option<usize> {
         if start == 0 {
             return None;
@@ -225,12 +231,14 @@ impl FastBitmap {
 
     /// 返回位图总长度
     #[inline]
+    #[must_use]
     pub fn len(&self) -> usize {
         self.len
     }
 
     /// 是否为空（所有bit都是0）
     #[inline]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.blocks.iter().all(|&block| block == 0)
     }
@@ -243,8 +251,12 @@ impl FastBitmap {
     }
 
     /// 统计设置的bit数量
+    #[must_use]
     pub fn count_ones(&self) -> usize {
-        self.blocks.iter().map(|&block| block.count_ones() as usize).sum()
+        self.blocks
+            .iter()
+            .map(|&block| block.count_ones() as usize)
+            .sum()
     }
 }
 
@@ -266,11 +278,11 @@ mod tests {
         bitmap.set(64, true);
         bitmap.set(127, true);
 
-        assert_eq!(bitmap.get(0), true);
-        assert_eq!(bitmap.get(63), true);
-        assert_eq!(bitmap.get(64), true);
-        assert_eq!(bitmap.get(127), true);
-        assert_eq!(bitmap.get(1), false);
+        assert!(bitmap.get(0));
+        assert!(bitmap.get(63));
+        assert!(bitmap.get(64));
+        assert!(bitmap.get(127));
+        assert!(!bitmap.get(1));
 
         // 查找
         assert_eq!(bitmap.find_first_one(), Some(0));
@@ -331,7 +343,8 @@ mod tests {
     #[test]
     fn test_hardware_instructions() {
         // 验证硬件指令正确性
-        let block = 0b1010_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000u64;
+        let block =
+            0b1010_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000u64;
 
         // leading_zeros: 前导0的个数
         assert_eq!(block.leading_zeros(), 0); // 最高位是1
@@ -339,7 +352,8 @@ mod tests {
         // trailing_zeros: 尾部0的个数
         assert_eq!(block.trailing_zeros(), 61); // 最低位1在第61位
 
-        let block2 = 0b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0001u64;
+        let block2 =
+            0b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0001u64;
         assert_eq!(block2.leading_zeros(), 63);
         assert_eq!(block2.trailing_zeros(), 0);
     }

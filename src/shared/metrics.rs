@@ -22,8 +22,8 @@
 
 use lazy_static::lazy_static;
 use prometheus::{
-    register_counter_vec, register_gauge_vec, register_histogram_vec,
-    CounterVec, Encoder, GaugeVec, HistogramVec, TextEncoder,
+    register_counter_vec, register_gauge_vec, register_histogram_vec, CounterVec, Encoder,
+    GaugeVec, HistogramVec, TextEncoder,
 };
 
 lazy_static! {
@@ -66,6 +66,7 @@ pub struct Metrics {
 
 impl Metrics {
     /// 创建新的Metrics实例
+    #[must_use]
     pub fn new() -> Self {
         Self {
             orders_total: register_counter_vec!(
@@ -101,7 +102,7 @@ impl Metrics {
                 "matching_engine_order_size",
                 "Order size distribution",
                 &["order_type"],
-                vec![1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0]
+                vec![1.0, 10.0, 100.0, 1000.0, 10_000.0, 100_000.0]
             )
             .unwrap(),
 
@@ -143,6 +144,7 @@ impl Metrics {
     }
 
     /// 导出Prometheus格式的指标
+    #[must_use]
     pub fn export(&self) -> String {
         let encoder = TextEncoder::new();
         let metric_families = prometheus::gather();
@@ -178,7 +180,10 @@ mod tests {
     #[test]
     fn test_metrics_global() {
         // 使用全局METRICS实例而不是创建新的
-        METRICS.orders_total.with_label_values(&["buy", "TEST"]).inc();
+        METRICS
+            .orders_total
+            .with_label_values(&["buy", "TEST"])
+            .inc();
 
         // 测试导出
         let output = METRICS.export();
@@ -188,7 +193,8 @@ mod tests {
     #[test]
     fn test_histogram_global() {
         // 使用全局实例
-        METRICS.matching_duration
+        METRICS
+            .matching_duration
             .with_label_values(&["TEST"])
             .observe(125.5);
 
@@ -199,7 +205,8 @@ mod tests {
     #[test]
     fn test_gauge_global() {
         // 使用全局实例
-        METRICS.orderbook_depth
+        METRICS
+            .orderbook_depth
             .with_label_values(&["TEST", "bid"])
             .set(100.0);
 

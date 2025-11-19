@@ -11,14 +11,13 @@
 /// - `telemetry`: Metrics, tracing, logging
 /// - `persistence`: WAL, snapshots, and crash recovery
 /// - `observability`: HTTP metrics server and health checks
-
 pub mod network;
-pub mod telemetry;
 pub mod observability;
 pub mod persistence;
+pub mod telemetry;
 
 // Re-export key types
-pub use network::{NetworkTransport, Connection, ZeroCopyBuffer};
 pub use network::{BackendType, MiddlewareConfig, NetworkMiddleware};
-pub use persistence::{WalWriter, SnapshotWriter, SnapshotReader, RecoveryManager};
-pub use persistence::{WalEntry, SnapshotData, PersistenceConfig};
+pub use network::{Connection, NetworkTransport, ZeroCopyBuffer};
+pub use persistence::{PersistenceConfig, SnapshotData, WalEntry};
+pub use persistence::{RecoveryManager, SnapshotReader, SnapshotWriter, WalWriter};

@@ -14,7 +14,6 @@
 /// - 高性能交易系统
 /// - 可以容忍极小概率的数据丢失（10ms窗口）
 /// - 需要百万级吞吐量
-
 use super::{PersistenceError, Result, WalEntry};
 use bincode::config::standard;
 use std::fs::{File, OpenOptions};
@@ -27,7 +26,7 @@ use tokio::sync::mpsc;
 use tokio::time;
 use tracing::{debug, error, info, warn};
 
-const WAL_MAGIC: u32 = 0x57414C46; // "WALF"
+const WAL_MAGIC: u32 = 0x5741_4C46; // "WALF"
 const WAL_VERSION: u16 = 1;
 
 /// 异步WAL写入器
@@ -197,16 +196,12 @@ impl AsyncWalWriter {
     /// 写入WAL条目（异步，不阻塞）
     pub fn write(&mut self, entry: WalEntry) -> Result<u64> {
         if self.closed.load(Ordering::SeqCst) {
-            return Err(PersistenceError::Io(std::io::Error::other(
-                "WAL已关闭",
-            )));
+            return Err(PersistenceError::Io(std::io::Error::other("WAL已关闭")));
         }
 
         self.tx
             .send(WalMessage::Write(entry))
-            .map_err(|_| PersistenceError::Io(std::io::Error::other(
-                "后台任务已停止",
-            )))?;
+            .map_err(|_| PersistenceError::Io(std::io::Error::other("后台任务已停止")))?;
 
         Ok(self.seq.fetch_add(1, Ordering::SeqCst))
     }
@@ -219,24 +214,25 @@ impl AsyncWalWriter {
 
         self.tx
             .send(WalMessage::Flush)
-            .map_err(|_| PersistenceError::Io(std::io::Error::other(
-                "后台任务已停止",
-            )))?;
+            .map_err(|_| PersistenceError::Io(std::io::Error::other("后台任务已停止")))?;
 
         Ok(())
     }
 
     /// 获取下一个序列号
+    #[must_use]
     pub fn next_seq(&self) -> u64 {
         self.seq.fetch_add(1, Ordering::SeqCst)
     }
 
     /// 获取当前序列号
+    #[must_use]
     pub fn current_seq(&self) -> u64 {
         self.seq.load(Ordering::SeqCst)
     }
 
     /// 设置序列号
+    #[must_use]
     pub fn with_seq(self, seq: u64) -> Self {
         self.seq.store(seq, Ordering::SeqCst);
         self
@@ -260,7 +256,7 @@ impl AsyncWalWriter {
 
     /// 获取WAL文件路径
     fn wal_path(data_dir: &Path, file_num: u64) -> PathBuf {
-        data_dir.join(format!("wal.{}.log", file_num))
+        data_dir.join(format!("wal.{file_num}.log"))
     }
 }
 
@@ -451,7 +447,7 @@ mod tests {
         )
         .unwrap();
 
-        let count = 10000;
+        let count = 10_000;
         let start = Instant::now();
 
         for i in 0..count {
@@ -475,7 +471,10 @@ mod tests {
         let ops_per_sec = count as f64 / elapsed.as_secs_f64();
 
         println!("异步WAL性能: {:.0} ops/s", ops_per_sec);
-        println!("平均延迟: {:.2}μs", elapsed.as_micros() as f64 / count as f64);
+        println!(
+            "平均延迟: {:.2}μs",
+            elapsed.as_micros() as f64 / count as f64
+        );
 
         // 等待刷盘
         tokio::time::sleep(Duration::from_millis(100)).await;

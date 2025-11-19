@@ -1,9 +1,9 @@
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
 use crate::shared::symbol_pool::SymbolPool;
-use std::collections::BTreeMap;
-use std::sync::Arc;
 use bumpalo::Bump;
 use smallvec::SmallVec;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 // 订单簿中的一个节点，代表一个具体的订单
 #[derive(Clone)]
@@ -85,7 +85,10 @@ impl OrderBook {
 
     // 撮合一个新订单
     // 返回值是一个元组，包含 (成交列表, 新挂单的确认信息)
-    pub fn match_order(&mut self, mut request: NewOrderRequest) -> (SmallVec<[TradeNotification; 8]>, Option<OrderConfirmation>) {
+    pub fn match_order(
+        &mut self,
+        mut request: NewOrderRequest,
+    ) -> (SmallVec<[TradeNotification; 8]>, Option<OrderConfirmation>) {
         // 优化策略：
         // 1. 使用symbol_pool.intern()确保符号共享（避免重复Arc创建）
         // 2. 订单/价格ID使用普通Vec（简单u64不需要arena）
@@ -95,8 +98,8 @@ impl OrderBook {
 
         // SmallVec: 8个以内trades栈上分配，超过则堆分配
         let mut trades: SmallVec<[TradeNotification; 8]> = SmallVec::new();
-        let mut orders_to_remove = Vec::with_capacity(16);  // 普通Vec，避免arena借用
-        let mut prices_to_remove = Vec::with_capacity(4);   // 普通Vec，避免arena借用
+        let mut orders_to_remove = Vec::with_capacity(16); // 普通Vec，避免arena借用
+        let mut prices_to_remove = Vec::with_capacity(4); // 普通Vec，避免arena借用
 
         let mut remaining_quantity = request.quantity;
 
@@ -111,7 +114,8 @@ impl OrderBook {
                     let mut current_node_idx = level.head;
                     while let Some(node_idx) = current_node_idx {
                         let counter_order = &mut self.orders[node_idx];
-                        let trade_quantity = std::cmp::min(remaining_quantity, counter_order.quantity);
+                        let trade_quantity =
+                            std::cmp::min(remaining_quantity, counter_order.quantity);
 
                         // Use Arc::clone which is just atomic increment (cheap)
                         trades.push(TradeNotification {
@@ -145,7 +149,8 @@ impl OrderBook {
             }
             OrderType::Sell => {
                 // 对手盘是买单(bids)，从价格最高的开始匹配
-                for (&price, level) in self.bids.iter().rev() { // 使用 .rev() 来反向遍历
+                for (&price, level) in self.bids.iter().rev() {
+                    // 使用 .rev() 来反向遍历
                     if remaining_quantity == 0 || request.price > price {
                         break; // 新订单已完全成交，或对手价格已低于卖价
                     }
@@ -153,7 +158,8 @@ impl OrderBook {
                     let mut current_node_idx = level.head;
                     while let Some(node_idx) = current_node_idx {
                         let counter_order = &mut self.orders[node_idx];
-                        let trade_quantity = std::cmp::min(remaining_quantity, counter_order.quantity);
+                        let trade_quantity =
+                            std::cmp::min(remaining_quantity, counter_order.quantity);
 
                         // Use Arc::clone which is just atomic increment (cheap)
                         trades.push(TradeNotification {
@@ -203,7 +209,10 @@ impl OrderBook {
             request.quantity = remaining_quantity;
             request.symbol = symbol; // 使用interned symbol
             let (new_order_id, user_id) = self.add_order(request);
-            let confirmation = OrderConfirmation { order_id: new_order_id, user_id };
+            let confirmation = OrderConfirmation {
+                order_id: new_order_id,
+                user_id,
+            };
             (trades, Some(confirmation))
         } else {
             (trades, None) // 完全成交，没有新挂单
@@ -246,7 +255,10 @@ impl OrderBook {
             OrderType::Sell => &mut self.asks,
         };
 
-        let level = price_map.entry(request.price).or_insert(PriceLevel { head: None, tail: None });
+        let level = price_map.entry(request.price).or_insert(PriceLevel {
+            head: None,
+            tail: None,
+        });
 
         // 将新节点添加到价格队列的尾部
         if let Some(tail_index) = level.tail {
@@ -268,7 +280,7 @@ impl OrderBook {
             self.remove_order(order_id);
             Ok(())
         } else {
-            Err(format!("Order {} not found", order_id))
+            Err(format!("Order {order_id} not found"))
         }
     }
 
@@ -338,7 +350,7 @@ impl Clone for OrderBook {
             order_id_to_index: self.order_id_to_index.clone(),
             free_list_head: self.free_list_head,
             next_order_id: self.next_order_id,
-            arena: Bump::with_capacity(1024), // 新建 arena
+            arena: Bump::with_capacity(1024),      // 新建 arena
             symbol_pool: self.symbol_pool.clone(), // Arc克隆，共享池
         }
     }

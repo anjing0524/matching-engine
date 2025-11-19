@@ -1,4 +1,4 @@
-/// Domain Layer - OrderBook Module
+/// Domain Layer - `OrderBook` Module
 ///
 /// Contains the core orderbook implementations for the matching engine.
 /// This is the heart of the domain logic - pure business rules with no
@@ -11,7 +11,7 @@
 ///   - Easy to mock for testing
 ///
 /// ## Production Implementation
-/// - `TickBasedOrderBook` (V3): Array-based O(1) tick orderbook with FastBitmap
+/// - `TickBasedOrderBook` (V3): Array-based O(1) tick orderbook with `FastBitmap`
 ///   - Performance: 9.34M ops/s
 ///   - Optimized for futures/derivatives with discrete price ticks
 ///   - Uses hardware instructions (POPCNT/TZCNT) for best bid/ask
@@ -27,11 +27,10 @@
 /// }
 ///
 /// // Use with concrete implementation
-/// let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+/// let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
 /// let mut ob = TickBasedOrderBook::new(spec);
 /// process_orders(&mut ob);
 /// ```
-
 pub mod tick_based;
 pub mod traits;
 
@@ -39,4 +38,4 @@ pub mod traits;
 pub use traits::OrderBook;
 
 // Re-export the production implementation
-pub use tick_based::{TickBasedOrderBook, ContractSpec, OrderNode};
+pub use tick_based::{ContractSpec, OrderNode, TickBasedOrderBook};

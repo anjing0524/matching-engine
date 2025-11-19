@@ -20,7 +20,6 @@
 ///     Err(e) => println!("Validation error: {}", e),
 /// }
 /// ```
-
 use crate::shared::protocol::NewOrderRequest;
 use std::sync::Arc;
 
@@ -46,11 +45,11 @@ pub enum ValidationError {
 impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ValidationError::InvalidPrice(msg) => write!(f, "Invalid price: {}", msg),
-            ValidationError::InvalidQuantity(msg) => write!(f, "Invalid quantity: {}", msg),
-            ValidationError::InvalidSymbol(msg) => write!(f, "Invalid symbol: {}", msg),
-            ValidationError::PriceOutOfRange(msg) => write!(f, "Price out of range: {}", msg),
-            ValidationError::QuantityOutOfRange(msg) => write!(f, "Quantity out of range: {}", msg),
+            ValidationError::InvalidPrice(msg) => write!(f, "Invalid price: {msg}"),
+            ValidationError::InvalidQuantity(msg) => write!(f, "Invalid quantity: {msg}"),
+            ValidationError::InvalidSymbol(msg) => write!(f, "Invalid symbol: {msg}"),
+            ValidationError::PriceOutOfRange(msg) => write!(f, "Price out of range: {msg}"),
+            ValidationError::QuantityOutOfRange(msg) => write!(f, "Quantity out of range: {msg}"),
         }
     }
 }
@@ -97,6 +96,7 @@ pub struct OrderValidator {
 
 impl OrderValidator {
     /// Creates a new validator with default configuration
+    #[must_use]
     pub fn new() -> Self {
         Self {
             config: ValidationConfig::default(),
@@ -104,6 +104,7 @@ impl OrderValidator {
     }
 
     /// Creates a new validator with custom configuration
+    #[must_use]
     pub fn with_config(config: ValidationConfig) -> Self {
         Self { config }
     }
@@ -139,20 +140,22 @@ impl OrderValidator {
     fn validate_price(&self, price: u64) -> Result<(), ValidationError> {
         if price == 0 {
             return Err(ValidationError::InvalidPrice(
-                "Price must be greater than zero".to_string()
+                "Price must be greater than zero".to_string(),
             ));
         }
 
         if price < self.config.min_price {
-            return Err(ValidationError::PriceOutOfRange(
-                format!("Price {} is below minimum {}", price, self.config.min_price)
-            ));
+            return Err(ValidationError::PriceOutOfRange(format!(
+                "Price {} is below minimum {}",
+                price, self.config.min_price
+            )));
         }
 
         if price > self.config.max_price {
-            return Err(ValidationError::PriceOutOfRange(
-                format!("Price {} exceeds maximum {}", price, self.config.max_price)
-            ));
+            return Err(ValidationError::PriceOutOfRange(format!(
+                "Price {} exceeds maximum {}",
+                price, self.config.max_price
+            )));
         }
 
         Ok(())
@@ -162,20 +165,22 @@ impl OrderValidator {
     fn validate_quantity(&self, quantity: u64) -> Result<(), ValidationError> {
         if quantity == 0 {
             return Err(ValidationError::InvalidQuantity(
-                "Quantity must be greater than zero".to_string()
+                "Quantity must be greater than zero".to_string(),
             ));
         }
 
         if quantity < self.config.min_quantity {
-            return Err(ValidationError::QuantityOutOfRange(
-                format!("Quantity {} is below minimum {}", quantity, self.config.min_quantity)
-            ));
+            return Err(ValidationError::QuantityOutOfRange(format!(
+                "Quantity {} is below minimum {}",
+                quantity, self.config.min_quantity
+            )));
         }
 
         if quantity > self.config.max_quantity {
-            return Err(ValidationError::QuantityOutOfRange(
-                format!("Quantity {} exceeds maximum {}", quantity, self.config.max_quantity)
-            ));
+            return Err(ValidationError::QuantityOutOfRange(format!(
+                "Quantity {} exceeds maximum {}",
+                quantity, self.config.max_quantity
+            )));
         }
 
         Ok(())
@@ -185,17 +190,22 @@ impl OrderValidator {
     fn validate_symbol(&self, symbol: &Arc<str>) -> Result<(), ValidationError> {
         if symbol.is_empty() {
             return Err(ValidationError::InvalidSymbol(
-                "Symbol cannot be empty".to_string()
+                "Symbol cannot be empty".to_string(),
             ));
         }
 
         // If allowed_symbols is configured, check if symbol is in the list
         if !self.config.allowed_symbols.is_empty()
-            && !self.config.allowed_symbols.iter().any(|s| s.as_ref() == symbol.as_ref()) {
-                return Err(ValidationError::InvalidSymbol(
-                    format!("Symbol '{}' is not in allowed list", symbol)
-                ));
-            }
+            && !self
+                .config
+                .allowed_symbols
+                .iter()
+                .any(|s| s.as_ref() == symbol.as_ref())
+        {
+            return Err(ValidationError::InvalidSymbol(format!(
+                "Symbol '{symbol}' is not in allowed list"
+            )));
+        }
 
         Ok(())
     }
@@ -237,7 +247,10 @@ mod tests {
 
         let result = validator.validate(&order);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::InvalidPrice(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::InvalidPrice(_)
+        ));
     }
 
     #[test]
@@ -248,7 +261,10 @@ mod tests {
 
         let result = validator.validate(&order);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::InvalidQuantity(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::InvalidQuantity(_)
+        ));
     }
 
     #[test]
@@ -259,14 +275,17 @@ mod tests {
 
         let result = validator.validate(&order);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::InvalidSymbol(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::InvalidSymbol(_)
+        ));
     }
 
     #[test]
     fn test_price_out_of_range() {
         let config = ValidationConfig {
             min_price: 100,
-            max_price: 100000,
+            max_price: 100_000,
             ..Default::default()
         };
         let validator = OrderValidator::with_config(config);

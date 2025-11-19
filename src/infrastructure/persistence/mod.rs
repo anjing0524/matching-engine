@@ -1,3 +1,7 @@
+pub mod async_wal;
+pub mod recovery;
+pub mod snapshot;
+pub mod types;
 /// 持久化基础设施模块
 ///
 /// 提供完整的持久化和灾难恢复能力：
@@ -10,18 +14,13 @@
 /// - **性能**: 最小化对撮合延迟的影响（<1μs overhead）
 /// - **可靠性**: 支持崩溃恢复和数据完整性验证
 /// - **效率**: 使用二进制格式和批量刷盘
-
 pub mod wal;
-pub mod async_wal;
-pub mod snapshot;
-pub mod recovery;
-pub mod types;
 
-pub use wal::{WalWriter, WalReader};
 pub use async_wal::AsyncWalWriter;
-pub use snapshot::{SnapshotWriter, SnapshotReader};
 pub use recovery::RecoveryManager;
-pub use types::{WalEntry, SnapshotData, PersistenceConfig, SnapshotMetadata, WalMetadata};
+pub use snapshot::{SnapshotReader, SnapshotWriter};
+pub use types::{PersistenceConfig, SnapshotData, SnapshotMetadata, WalEntry, WalMetadata};
+pub use wal::{WalReader, WalWriter};
 
 use std::path::PathBuf;
 use thiserror::Error;

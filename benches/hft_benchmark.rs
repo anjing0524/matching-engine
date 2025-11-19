@@ -20,15 +20,15 @@ use std::time::Duration;
 fn bench_single_order_latency_cold(c: &mut Criterion) {
     let mut group = c.benchmark_group("hft_latency_cold");
     group.measurement_time(Duration::from_secs(10));
-    group.sample_size(10000);
+    group.sample_size(10_000);
 
     group.bench_function("match_order_cold_start", |b| {
         b.iter_batched(
             || {
                 // Setup: 每次创建新订单簿
                 let spec = ContractSpec::new("BTC2501", 1, 40000, 70000);
-                let orderbook = TickBasedOrderBook::new(spec);
-                orderbook
+
+                TickBasedOrderBook::new(spec)
             },
             |mut orderbook| {
                 // Measure: 冷启动延迟
@@ -52,7 +52,7 @@ fn bench_single_order_latency_cold(c: &mut Criterion) {
 fn bench_single_order_latency_hot(c: &mut Criterion) {
     let mut group = c.benchmark_group("hft_latency_hot");
     group.measurement_time(Duration::from_secs(10));
-    group.sample_size(10000);
+    group.sample_size(10_000);
 
     // 预热订单簿：添加100个买卖单
     let spec = ContractSpec::new("BTC2501", 1, 40000, 70000);
@@ -103,7 +103,7 @@ fn bench_single_order_latency_hot(c: &mut Criterion) {
 fn bench_immediate_match_latency(c: &mut Criterion) {
     let mut group = c.benchmark_group("hft_latency_match");
     group.measurement_time(Duration::from_secs(10));
-    group.sample_size(10000);
+    group.sample_size(10_000);
 
     group.bench_function("immediate_match", |b| {
         b.iter_batched(
@@ -196,7 +196,7 @@ fn bench_orderbook_depth_stress(c: &mut Criterion) {
     let mut group = c.benchmark_group("hft_depth_stress");
     group.measurement_time(Duration::from_secs(15));
 
-    for &depth in &[100, 1000, 10000, 100000] {
+    for &depth in &[100, 1000, 10_000, 100_000] {
         group.bench_with_input(
             BenchmarkId::new("orderbook_depth", depth),
             &depth,
@@ -272,7 +272,7 @@ fn bench_best_price_lookup(c: &mut Criterion) {
                     orderbook.match_order(buy);
 
                     let sell = NewOrderRequest {
-                        user_id: (i + 10000) as u64,
+                        user_id: (i + 10_000) as u64,
                         symbol: Arc::from("BTC2501"),
                         order_type: OrderType::Sell,
                         price: 51000 + (i as u64) * 10,

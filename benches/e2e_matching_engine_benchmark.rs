@@ -10,10 +10,10 @@
 /// 4. 并发连接处理能力
 /// 5. 内存使用效率
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use matching_engine::infrastructure::network::buffer::SharedBuffer;
 use matching_engine::infrastructure::network::codec::{BincodeCodec, Codec, LengthDelimitedCodec};
 use matching_engine::infrastructure::network::traits::ZeroCopyBuffer;
-use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use matching_engine::shared::protocol::{ClientMessage, NewOrderRequest, OrderType};
 use std::sync::Arc;
 use std::time::Instant;
@@ -25,7 +25,7 @@ fn create_test_orderbook() -> TickBasedOrderBook {
         tick_size: 1,
         min_price: 40000,
         max_price: 70000,
-        queue_capacity: 10000,
+        queue_capacity: 10_000,
     };
     TickBasedOrderBook::new(spec)
 }
@@ -194,7 +194,7 @@ fn bench_e2e_order_processing(c: &mut Criterion) {
 fn bench_order_volumes(c: &mut Criterion) {
     let mut group = c.benchmark_group("order_volumes");
 
-    for qty in [10, 100, 1000, 10000].iter() {
+    for qty in [10, 100, 1000, 10_000].iter() {
         group.throughput(Throughput::Elements(*qty as u64));
 
         group.bench_with_input(BenchmarkId::new("batch_orders", qty), qty, |b, &qty| {

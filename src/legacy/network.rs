@@ -1,5 +1,6 @@
 use crate::engine::{EngineCommand, EngineOutput};
 use crate::shared::protocol::{ClientMessage, ServerMessage};
+use bincode::config;
 use bytes::Bytes;
 use futures::stream::StreamExt;
 use futures::SinkExt;
@@ -7,7 +8,6 @@ use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
-use bincode::config;
 
 // 启动网络服务器
 pub async fn run_server(
@@ -16,12 +16,10 @@ pub async fn run_server(
     mut output_receiver: mpsc::UnboundedReceiver<EngineOutput>,
 ) {
     let listener = TcpListener::bind(&addr).await.expect("无法绑定地址");
-    println!("服务器正在监听: {}", addr);
+    println!("服务器正在监听: {addr}");
 
     // 创建一个广播通道用于分发引擎的输出，现在使用 Bytes
     let (broadcast_tx, _) = broadcast::channel::<Bytes>(1024);
-
-
 
     // 这个任务负责将引擎的输出广播给所有连接的客户端
     let broadcaster_tx_clone = broadcast_tx.clone();
@@ -40,7 +38,7 @@ pub async fn run_server(
                     }
                 }
                 Err(e) => {
-                    eprintln!("Bincode encoding error in broadcaster: {:?}", e);
+                    eprintln!("Bincode encoding error in broadcaster: {e:?}");
                 }
             }
         }
@@ -85,12 +83,12 @@ async fn handle_connection(
                                 }
                             }
                             Err(e) => {
-                                eprintln!("Bincode decoding error in handle_connection: {:?}", e);
+                                eprintln!("Bincode decoding error in handle_connection: {e:?}");
                             }
                         }
                     }
                     Some(Err(e)) => {
-                        println!("处理连接时出错: {}", e);
+                        println!("处理连接时出错: {e}");
                         break;
                     }
                     None => break, // 连接已关闭

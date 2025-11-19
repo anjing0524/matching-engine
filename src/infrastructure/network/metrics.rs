@@ -1,5 +1,4 @@
 /// 网络性能指标
-
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -35,6 +34,7 @@ pub struct NetworkMetrics {
 
 impl NetworkMetrics {
     /// 创建新的指标
+    #[must_use]
     pub fn new() -> Self {
         Self {
             rx_packets: AtomicU64::new(0),
@@ -190,9 +190,19 @@ impl MetricsSnapshot {
         println!("Uptime: {:?}", self.uptime);
         println!("RX: {} packets ({} bytes)", self.rx_packets, self.rx_bytes);
         println!("TX: {} packets ({} bytes)", self.tx_packets, self.tx_bytes);
-        println!("RX Rate: {} pps ({:.2} Mbps)", self.rx_pps, self.rx_throughput_mbps);
-        println!("TX Rate: {} pps ({:.2} Mbps)", self.tx_pps, self.tx_throughput_mbps);
-        println!("Dropped: {} ({:.4}%)", self.dropped_packets, self.drop_rate * 100.0);
+        println!(
+            "RX Rate: {} pps ({:.2} Mbps)",
+            self.rx_pps, self.rx_throughput_mbps
+        );
+        println!(
+            "TX Rate: {} pps ({:.2} Mbps)",
+            self.tx_pps, self.tx_throughput_mbps
+        );
+        println!(
+            "Dropped: {} ({:.4}%)",
+            self.dropped_packets,
+            self.drop_rate * 100.0
+        );
         println!("Errors: {}", self.errors);
         println!("Avg Latency: {}µs", self.avg_latency_ns / 1000);
         println!("=======================");

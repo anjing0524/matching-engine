@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! 高负载基准测试 - 验证批量提交和多核扩展性
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
@@ -13,7 +14,7 @@ fn generate_orders(count: usize, symbol_count: usize) -> Vec<NewOrderRequest> {
 
     (0..count)
         .map(|i| NewOrderRequest {
-            user_id: (i as u64) % 10000,
+            user_id: (i as u64) % 10_000,
             symbol: symbols[i % symbols.len()].clone(),
             order_type: if i % 2 == 0 {
                 OrderType::Buy
@@ -30,7 +31,7 @@ fn bench_batch_vs_single(c: &mut Criterion) {
     let mut group = c.benchmark_group("Batch vs Single");
     group.measurement_time(Duration::from_secs(10));
 
-    for order_count in [1000, 5000, 10000] {
+    for order_count in [1000, 5000, 10_000] {
         let orders = generate_orders(order_count, 20);
         group.throughput(Throughput::Elements(order_count as u64));
 

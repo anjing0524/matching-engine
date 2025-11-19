@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 use matching_engine::legacy::orderbook::OrderBook;
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType};

@@ -15,7 +15,6 @@
 /// Header: magic(4B) | version(2B) | flags(2B)
 /// Entry:  length(4B) | seq(8B) | timestamp(8B) | crc32(4B) | data(length B)
 /// ```
-
 use super::{PersistenceError, Result, WalEntry};
 use bincode::config::standard;
 use std::fs::{File, OpenOptions};
@@ -24,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-const WAL_MAGIC: u32 = 0x57414C46; // "WALF"
+const WAL_MAGIC: u32 = 0x5741_4C46; // "WALF"
 const WAL_VERSION: u16 = 1;
 
 /// WAL写入器
@@ -53,7 +52,12 @@ pub struct WalWriter {
 
 impl WalWriter {
     /// 创建新的WAL写入器
-    pub fn new(data_dir: PathBuf, sync: bool, batch_size: usize, max_file_size: usize) -> Result<Self> {
+    pub fn new(
+        data_dir: PathBuf,
+        sync: bool,
+        batch_size: usize,
+        max_file_size: usize,
+    ) -> Result<Self> {
         std::fs::create_dir_all(&data_dir)?;
 
         let file_num = 0;
@@ -87,6 +91,7 @@ impl WalWriter {
     }
 
     /// 从指定序列号恢复
+    #[must_use]
     pub fn with_seq(self, seq: u64) -> Self {
         self.seq.store(seq, Ordering::SeqCst);
         self
@@ -184,15 +189,17 @@ impl WalWriter {
 
     /// 获取WAL文件路径
     fn wal_path(data_dir: &Path, file_num: u64) -> PathBuf {
-        data_dir.join(format!("wal.{:06}.log", file_num))
+        data_dir.join(format!("wal.{file_num:06}.log"))
     }
 
     /// 获取下一个序列号
+    #[must_use]
     pub fn next_seq(&self) -> u64 {
         self.seq.fetch_add(1, Ordering::SeqCst)
     }
 
     /// 获取当前序列号
+    #[must_use]
     pub fn current_seq(&self) -> u64 {
         self.seq.load(Ordering::SeqCst)
     }
@@ -206,6 +213,7 @@ pub struct WalReader {
 
 impl WalReader {
     /// 创建新的WAL读取器
+    #[must_use]
     pub fn new(data_dir: PathBuf) -> Self {
         Self { data_dir }
     }
@@ -285,14 +293,13 @@ impl WalReader {
             // 验证CRC32
             let actual_crc = crc32fast::hash(&data);
             if actual_crc != expected_crc {
-                return Err(PersistenceError::Corruption(
-                    "CRC32 mismatch".into(),
-                ));
+                return Err(PersistenceError::Corruption("CRC32 mismatch".into()));
             }
 
             // 反序列化条目
-            let (entry, _): (WalEntry, usize) = bincode::serde::decode_from_slice(&data, standard())
-                .map_err(|e| PersistenceError::Deserialization(e.to_string()))?;
+            let (entry, _): (WalEntry, usize) =
+                bincode::serde::decode_from_slice(&data, standard())
+                    .map_err(|e| PersistenceError::Deserialization(e.to_string()))?;
 
             entries.push(entry);
         }
@@ -302,7 +309,7 @@ impl WalReader {
 
     /// 获取WAL文件路径
     fn wal_path(&self, file_num: u64) -> PathBuf {
-        self.data_dir.join(format!("wal.{:06}.log", file_num))
+        self.data_dir.join(format!("wal.{file_num:06}.log"))
     }
 }
 

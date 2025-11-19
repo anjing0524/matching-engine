@@ -1,5 +1,4 @@
 /// 零拷贝缓冲区实现
-
 use super::traits::ZeroCopyBuffer;
 use std::sync::Arc;
 
@@ -14,6 +13,7 @@ pub struct SharedBuffer {
 
 impl SharedBuffer {
     /// 从Vec创建
+    #[must_use]
     pub fn from_vec(data: Vec<u8>) -> Self {
         let len = data.len();
         Self {
@@ -24,11 +24,13 @@ impl SharedBuffer {
     }
 
     /// 创建指定大小的缓冲区
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self::from_vec(vec![0u8; capacity])
     }
 
     /// 创建切片视图（零拷贝）
+    #[must_use]
     pub fn slice(&self, start: usize, end: usize) -> Self {
         assert!(end <= self.len);
         assert!(start <= end);
@@ -48,8 +50,8 @@ impl ZeroCopyBuffer for SharedBuffer {
 
     fn as_mut_slice(&mut self) -> &mut [u8] {
         // 只有当Arc引用计数为1时才允许可变访问
-        let inner = Arc::get_mut(&mut self.inner)
-            .expect("Cannot get mutable access: buffer is shared");
+        let inner =
+            Arc::get_mut(&mut self.inner).expect("Cannot get mutable access: buffer is shared");
         &mut inner[self.offset..self.offset + self.len]
     }
 
@@ -83,6 +85,7 @@ impl AlignedBuffer {
     /// # 参数
     /// * `size` - 缓冲区大小
     /// * `alignment` - 对齐边界（必须是2的幂）
+    #[must_use]
     pub fn new(size: usize, alignment: usize) -> Self {
         assert!(alignment.is_power_of_two(), "Alignment must be power of 2");
 
@@ -103,6 +106,7 @@ impl AlignedBuffer {
     }
 
     /// 获取虚拟地址
+    #[must_use]
     pub fn virt_addr(&self) -> usize {
         (self.data.as_ptr() as usize) + self.offset
     }
@@ -143,13 +147,13 @@ pub struct BufferPool {
 
 impl BufferPool {
     /// 创建缓冲区池
+    #[must_use]
     pub fn new(buffer_size: usize, capacity: usize) -> Self {
         let mut free_list = Vec::with_capacity(capacity);
 
         // 预分配所有缓冲区
         for _ in 0..capacity {
-            let buf = Box::new(SharedBuffer::with_capacity(buffer_size))
-                as Box<dyn ZeroCopyBuffer>;
+            let buf = Box::new(SharedBuffer::with_capacity(buffer_size)) as Box<dyn ZeroCopyBuffer>;
             free_list.push(buf);
         }
 

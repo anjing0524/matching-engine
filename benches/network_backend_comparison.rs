@@ -118,7 +118,7 @@ fn bench_tokio_throughput(c: &mut Criterion) {
         .build()
         .unwrap();
 
-    for msg_count in [1000, 10000, 100000].iter() {
+    for msg_count in [1000, 10_000, 100_000].iter() {
         group.throughput(Throughput::Elements(*msg_count as u64));
 
         group.bench_with_input(

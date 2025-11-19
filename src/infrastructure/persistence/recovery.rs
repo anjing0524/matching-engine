@@ -8,10 +8,7 @@
 /// 3. 从快照对应的WAL序列号开始重放日志
 /// 4. 验证数据完整性
 /// 5. 恢复完成
-
-use super::{
-    Result, SnapshotData, SnapshotReader, WalEntry, WalReader,
-};
+use super::{Result, SnapshotData, SnapshotReader, WalEntry, WalReader};
 use std::path::PathBuf;
 use tracing::{info, warn};
 
@@ -97,7 +94,10 @@ impl RecoveryManager {
 
         let entry_count = wal_entries.len();
 
-        info!("状态恢复完成: last_seq={}, entry_count={}", last_seq, entry_count);
+        info!(
+            "状态恢复完成: last_seq={}, entry_count={}",
+            last_seq, entry_count
+        );
 
         Ok(RecoveryResult {
             snapshot,
@@ -154,8 +154,7 @@ impl RecoveryManager {
 }
 
 /// 恢复策略
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RecoveryStrategy {
     /// 快速恢复：仅使用快照
     Fast,
@@ -165,7 +164,6 @@ pub enum RecoveryStrategy {
     /// 验证恢复：完整恢复 + 数据验证
     Verified,
 }
-
 
 /// 恢复选项
 #[derive(Debug, Clone)]
@@ -191,9 +189,7 @@ impl Default for RecoveryOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infrastructure::persistence::{
-        snapshot::create_snapshot, wal::WalWriter, WalEntry,
-    };
+    use crate::infrastructure::persistence::{snapshot::create_snapshot, wal::WalWriter, WalEntry};
     use crate::shared::protocol::{NewOrderRequest, OrderType};
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -205,8 +201,7 @@ mod tests {
 
         // 写入WAL
         {
-            let mut writer =
-                WalWriter::new(data_dir.clone(), false, 10, 1024 * 1024).unwrap();
+            let mut writer = WalWriter::new(data_dir.clone(), false, 10, 1024 * 1024).unwrap();
 
             for i in 0..10 {
                 let seq = writer.next_seq();
@@ -244,8 +239,7 @@ mod tests {
 
         // 写入WAL
         {
-            let mut writer =
-                WalWriter::new(data_dir.clone(), false, 10, 1024 * 1024).unwrap();
+            let mut writer = WalWriter::new(data_dir.clone(), false, 10, 1024 * 1024).unwrap();
 
             for i in 0..20 {
                 let seq = writer.next_seq();

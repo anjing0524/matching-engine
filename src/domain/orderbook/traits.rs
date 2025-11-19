@@ -26,11 +26,10 @@
 /// }
 ///
 /// // Use with any implementation
-/// let spec = ContractSpec::new("BTC/USD", 1, 10000, 100000);
+/// let spec = ContractSpec::new("BTC/USD", 1, 10_000, 100_000);
 /// let mut ob = TickBasedOrderBook::new(spec);
 /// // process_order(&mut ob, request);
 /// ```
-
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
 use smallvec::SmallVec;
 
@@ -110,7 +109,7 @@ pub trait OrderBook {
     /// ```
     fn cancel_order(&mut self, order_id: u64) -> Result<(), String> {
         // Default implementation returns "not implemented"
-        Err(format!("Cancel order {} not yet implemented", order_id))
+        Err(format!("Cancel order {order_id} not yet implemented"))
     }
 
     /// Gets the best (highest) bid price
@@ -169,8 +168,6 @@ pub trait OrderBook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::protocol::OrderType;
-    use std::sync::Arc;
 
     // Mock implementation for testing
     struct MockOrderBook {
@@ -197,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_trait_spread_calculation() {
-        let mut mock = MockOrderBook {
+        let mock = MockOrderBook {
             best_bid: Some(99),
             best_ask: Some(101),
         };
@@ -208,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_trait_empty_orderbook() {
-        let mut mock = MockOrderBook {
+        let mock = MockOrderBook {
             best_bid: None,
             best_ask: None,
         };
