@@ -107,6 +107,10 @@ harness = false
 name = "multicore_benchmark"
 harness = false
 
+[[bench]]
+name = "hft_benchmark"
+harness = false
+
 # 性能优化配置
 [profile.release]
 opt-level = 3           # 最大性能优化
