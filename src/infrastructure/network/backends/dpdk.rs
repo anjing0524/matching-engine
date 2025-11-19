@@ -118,6 +118,7 @@ impl DpdkTransport {
         })
     }
 
+    #[must_use]
     pub fn metrics(&self) -> Arc<NetworkMetrics> {
         Arc::clone(&self.metrics)
     }
@@ -279,6 +280,7 @@ pub struct DmaBufferPool {
 }
 
 impl DmaBufferPool {
+    #[must_use]
     pub fn new(capacity: usize, buffer_size: usize) -> Self {
         let mut free_list = Vec::with_capacity(capacity);
 

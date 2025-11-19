@@ -186,6 +186,7 @@ pub struct SnapshotReader {
 
 impl SnapshotReader {
     /// 创建新的快照读取器
+    #[must_use]
     pub fn new(data_dir: PathBuf) -> Self {
         Self { data_dir }
     }
@@ -306,6 +307,7 @@ impl SnapshotReader {
 }
 
 /// 创建快照数据
+#[must_use]
 pub fn create_snapshot(wal_seq: u64, orderbook_state: Vec<u8>) -> SnapshotData {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)

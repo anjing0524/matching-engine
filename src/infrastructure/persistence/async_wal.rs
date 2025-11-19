@@ -220,16 +220,19 @@ impl AsyncWalWriter {
     }
 
     /// 获取下一个序列号
+    #[must_use]
     pub fn next_seq(&self) -> u64 {
         self.seq.fetch_add(1, Ordering::SeqCst)
     }
 
     /// 获取当前序列号
+    #[must_use]
     pub fn current_seq(&self) -> u64 {
         self.seq.load(Ordering::SeqCst)
     }
 
     /// 设置序列号
+    #[must_use]
     pub fn with_seq(self, seq: u64) -> Self {
         self.seq.store(seq, Ordering::SeqCst);
         self

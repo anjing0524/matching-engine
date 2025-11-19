@@ -13,6 +13,7 @@ pub struct SharedBuffer {
 
 impl SharedBuffer {
     /// 从Vec创建
+    #[must_use]
     pub fn from_vec(data: Vec<u8>) -> Self {
         let len = data.len();
         Self {
@@ -23,11 +24,13 @@ impl SharedBuffer {
     }
 
     /// 创建指定大小的缓冲区
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self::from_vec(vec![0u8; capacity])
     }
 
     /// 创建切片视图（零拷贝）
+    #[must_use]
     pub fn slice(&self, start: usize, end: usize) -> Self {
         assert!(end <= self.len);
         assert!(start <= end);
@@ -82,6 +85,7 @@ impl AlignedBuffer {
     /// # 参数
     /// * `size` - 缓冲区大小
     /// * `alignment` - 对齐边界（必须是2的幂）
+    #[must_use]
     pub fn new(size: usize, alignment: usize) -> Self {
         assert!(alignment.is_power_of_two(), "Alignment must be power of 2");
 
@@ -102,6 +106,7 @@ impl AlignedBuffer {
     }
 
     /// 获取虚拟地址
+    #[must_use]
     pub fn virt_addr(&self) -> usize {
         (self.data.as_ptr() as usize) + self.offset
     }
@@ -142,6 +147,7 @@ pub struct BufferPool {
 
 impl BufferPool {
     /// 创建缓冲区池
+    #[must_use]
     pub fn new(buffer_size: usize, capacity: usize) -> Self {
         let mut free_list = Vec::with_capacity(capacity);
 

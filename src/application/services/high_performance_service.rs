@@ -295,6 +295,7 @@ impl HighPerformanceService {
     }
 
     /// 获取订单簿引用
+    #[must_use]
     pub fn orderbook(&self) -> &TickBasedOrderBook {
         &self.orderbook
     }

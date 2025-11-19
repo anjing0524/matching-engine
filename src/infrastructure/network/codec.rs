@@ -23,6 +23,7 @@ pub struct BincodeCodec<T> {
 }
 
 impl<T> BincodeCodec<T> {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             _phantom: PhantomData,

@@ -22,6 +22,7 @@ pub struct SymbolPool {
 
 impl SymbolPool {
     /// 创建新的符号池
+    #[must_use]
     pub fn new() -> Self {
         Self {
             symbols: RwLock::new(HashMap::new()),
@@ -32,6 +33,7 @@ impl SymbolPool {
     ///
     /// # 参数
     /// * `capacity` - 预期的唯一符号数量
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             symbols: RwLock::new(HashMap::with_capacity(capacity)),

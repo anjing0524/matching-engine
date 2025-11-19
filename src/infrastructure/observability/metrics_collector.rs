@@ -73,6 +73,7 @@ impl LatencyTracker {
 
 impl MetricsCollector {
     /// 创建新的指标收集器
+    #[must_use]
     pub fn new() -> Self {
         Self {
             active_connections: AtomicUsize::new(0),

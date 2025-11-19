@@ -66,6 +66,7 @@ pub struct Metrics {
 
 impl Metrics {
     /// 创建新的Metrics实例
+    #[must_use]
     pub fn new() -> Self {
         Self {
             orders_total: register_counter_vec!(
@@ -143,6 +144,7 @@ impl Metrics {
     }
 
     /// 导出Prometheus格式的指标
+    #[must_use]
     pub fn export(&self) -> String {
         let encoder = TextEncoder::new();
         let metric_families = prometheus::gather();

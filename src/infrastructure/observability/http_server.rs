@@ -36,6 +36,7 @@ pub struct ObservabilityServer {
 
 impl ObservabilityServer {
     /// 创建新的可观测性服务器
+    #[must_use]
     pub fn new(port: u16) -> Self {
         let addr = SocketAddr::from(([0, 0, 0, 0], port));
         Self {
@@ -45,6 +46,7 @@ impl ObservabilityServer {
     }
 
     /// 获取健康检查器
+    #[must_use]
     pub fn health_checker(&self) -> Arc<HealthChecker> {
         self.health_checker.clone()
     }

@@ -91,6 +91,7 @@ impl WalWriter {
     }
 
     /// 从指定序列号恢复
+    #[must_use]
     pub fn with_seq(self, seq: u64) -> Self {
         self.seq.store(seq, Ordering::SeqCst);
         self
@@ -192,11 +193,13 @@ impl WalWriter {
     }
 
     /// 获取下一个序列号
+    #[must_use]
     pub fn next_seq(&self) -> u64 {
         self.seq.fetch_add(1, Ordering::SeqCst)
     }
 
     /// 获取当前序列号
+    #[must_use]
     pub fn current_seq(&self) -> u64 {
         self.seq.load(Ordering::SeqCst)
     }
@@ -210,6 +213,7 @@ pub struct WalReader {
 
 impl WalReader {
     /// 创建新的WAL读取器
+    #[must_use]
     pub fn new(data_dir: PathBuf) -> Self {
         Self { data_dir }
     }

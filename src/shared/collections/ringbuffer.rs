@@ -49,6 +49,7 @@ impl<T> RingBuffer<T> {
     ///
     /// # 性能
     /// 一次性分配所有内存，后续操作零分配
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         assert!(capacity > 0, "Capacity must be greater than 0");
 
@@ -120,6 +121,7 @@ impl<T> RingBuffer<T> {
 
     /// 查看队首元素（不移除）
     #[inline]
+    #[must_use]
     pub fn front(&self) -> Option<&T> {
         if self.len == 0 {
             return None;
@@ -146,24 +148,28 @@ impl<T> RingBuffer<T> {
 
     /// 获取当前元素数量
     #[inline]
+    #[must_use]
     pub fn len(&self) -> usize {
         self.len
     }
 
     /// 检查是否为空
     #[inline]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
     /// 检查是否已满
     #[inline]
+    #[must_use]
     pub fn is_full(&self) -> bool {
         self.len >= self.capacity
     }
 
     /// 获取容量
     #[inline]
+    #[must_use]
     pub fn capacity(&self) -> usize {
         self.capacity
     }

@@ -45,6 +45,7 @@ pub enum WalEntry {
 
 impl WalEntry {
     /// 获取序列号
+    #[must_use]
     pub fn seq(&self) -> u64 {
         match self {
             WalEntry::NewOrder { seq, .. }
@@ -56,6 +57,7 @@ impl WalEntry {
     }
 
     /// 获取时间戳
+    #[must_use]
     pub fn timestamp(&self) -> u64 {
         match self {
             WalEntry::NewOrder { timestamp, .. }

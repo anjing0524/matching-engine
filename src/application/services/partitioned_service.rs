@@ -202,6 +202,7 @@ impl PartitionedService {
     ///
     /// # Arguments
     /// * `config` - Configuration for partitioning and performance tuning
+    #[must_use]
     pub fn new(config: PartitionConfig) -> Self {
         // Use global symbol pool, shared across all partitions
         let symbol_pool = Arc::clone(crate::shared::symbol_pool::global_symbol_pool());
@@ -360,11 +361,13 @@ impl PartitionedService {
     }
 
     /// Gets a reference to the symbol pool
+    #[must_use]
     pub fn symbol_pool(&self) -> &Arc<SymbolPool> {
         &self.symbol_pool
     }
 
     /// Gets the number of partitions
+    #[must_use]
     pub fn partition_count(&self) -> usize {
         self.config.partition_count
     }

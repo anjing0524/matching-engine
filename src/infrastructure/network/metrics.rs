@@ -34,6 +34,7 @@ pub struct NetworkMetrics {
 
 impl NetworkMetrics {
     /// 创建新的指标
+    #[must_use]
     pub fn new() -> Self {
         Self {
             rx_packets: AtomicU64::new(0),

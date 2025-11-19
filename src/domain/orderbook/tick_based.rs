@@ -56,6 +56,7 @@ impl ContractSpec {
     /// // 沪深300指数: tick=0.2, 价格范围2000-6000
     /// let if_spec = ContractSpec::new("IF2501", 1, 20000, 60000);
     /// ```
+    #[must_use]
     pub fn new(symbol: &str, tick_size: u64, min_price: u64, max_price: u64) -> Self {
         assert!(tick_size > 0, "Tick size must be positive");
         assert!(max_price > min_price, "Max price must be greater than min");
@@ -122,6 +123,7 @@ pub struct TickBasedOrderBook {
 
 impl TickBasedOrderBook {
     /// 创建新的订单簿
+    #[must_use]
     pub fn new(spec: ContractSpec) -> Self {
         Self::with_symbol_pool(
             spec,
@@ -171,6 +173,168 @@ impl TickBasedOrderBook {
         self.spec.min_price + (index as u64) * self.spec.tick_size
     }
 
+    /// 买单撮合：匹配卖单
+    #[allow(clippy::too_many_arguments)]
+    fn match_buy_order(
+        &mut self,
+        request_idx: usize,
+        request_price: u64,
+        user_id: u64,
+        new_order_id: u64,
+        remaining_quantity: &mut u64,
+        symbol: &Arc<str>,
+        trades: &mut SmallVec<[TradeNotification; 8]>,
+    ) {
+        let mut current_idx = self.best_ask_idx;
+
+        while let Some(idx) = current_idx {
+            if *remaining_quantity == 0 {
+                break;
+            }
+
+            let price = self.index_to_price(idx);
+            if price > request_price {
+                break;
+            }
+
+            // 处理该价格层
+            if let Some(queue) = &mut self.ask_levels[idx] {
+                while let Some(counter_order) = queue.front_mut() {
+                    if *remaining_quantity == 0 {
+                        break;
+                    }
+
+                    // 跳过已取消的订单
+                    if counter_order.cancelled {
+                        let order_id_to_remove = counter_order.order_id;
+                        queue.pop();
+                        self.order_locations.remove(&order_id_to_remove);
+                        continue;
+                    }
+
+                    let trade_qty = std::cmp::min(*remaining_quantity, counter_order.quantity);
+
+                    trades.push(TradeNotification {
+                        trade_id: 0,
+                        symbol: symbol.clone(),
+                        matched_price: price,
+                        matched_quantity: trade_qty,
+                        buyer_user_id: user_id,
+                        buyer_order_id: new_order_id,
+                        seller_user_id: counter_order.user_id,
+                        seller_order_id: counter_order.order_id,
+                        timestamp: 0,
+                    });
+
+                    *remaining_quantity -= trade_qty;
+                    counter_order.quantity -= trade_qty;
+
+                    if counter_order.quantity == 0 {
+                        let order_id_to_remove = counter_order.order_id;
+                        queue.pop();
+                        self.order_locations.remove(&order_id_to_remove);
+                    } else {
+                        break;
+                    }
+                }
+
+                if queue.is_empty() {
+                    self.ask_levels[idx] = None;
+                    self.ask_bitmap.set(idx, false);
+                }
+            }
+
+            current_idx = self.find_next_ask(idx);
+        }
+
+        self.best_ask_idx = self.find_best_ask();
+
+        if *remaining_quantity > 0 {
+            self.add_bid_order(request_idx, user_id, *remaining_quantity, new_order_id);
+        }
+    }
+
+    /// 卖单撮合：匹配买单
+    #[allow(clippy::too_many_arguments)]
+    fn match_sell_order(
+        &mut self,
+        request_idx: usize,
+        request_price: u64,
+        user_id: u64,
+        new_order_id: u64,
+        remaining_quantity: &mut u64,
+        symbol: &Arc<str>,
+        trades: &mut SmallVec<[TradeNotification; 8]>,
+    ) {
+        let mut current_idx = self.best_bid_idx;
+
+        while let Some(idx) = current_idx {
+            if *remaining_quantity == 0 {
+                break;
+            }
+
+            let price = self.index_to_price(idx);
+            if price < request_price {
+                break;
+            }
+
+            // 处理该价格层
+            if let Some(queue) = &mut self.bid_levels[idx] {
+                while let Some(counter_order) = queue.front_mut() {
+                    if *remaining_quantity == 0 {
+                        break;
+                    }
+
+                    // 跳过已取消的订单
+                    if counter_order.cancelled {
+                        let order_id_to_remove = counter_order.order_id;
+                        queue.pop();
+                        self.order_locations.remove(&order_id_to_remove);
+                        continue;
+                    }
+
+                    let trade_qty = std::cmp::min(*remaining_quantity, counter_order.quantity);
+
+                    trades.push(TradeNotification {
+                        trade_id: 0,
+                        symbol: symbol.clone(),
+                        matched_price: price,
+                        matched_quantity: trade_qty,
+                        buyer_user_id: counter_order.user_id,
+                        buyer_order_id: counter_order.order_id,
+                        seller_user_id: user_id,
+                        seller_order_id: new_order_id,
+                        timestamp: 0,
+                    });
+
+                    *remaining_quantity -= trade_qty;
+                    counter_order.quantity -= trade_qty;
+
+                    if counter_order.quantity == 0 {
+                        let order_id_to_remove = counter_order.order_id;
+                        queue.pop();
+                        self.order_locations.remove(&order_id_to_remove);
+                    } else {
+                        break;
+                    }
+                }
+
+                if queue.is_empty() {
+                    self.bid_levels[idx] = None;
+                    self.bid_bitmap.set(idx, false);
+                }
+            }
+
+            current_idx = self.find_next_bid(idx);
+        }
+
+        self.best_bid_idx = self.find_best_bid();
+
+        if *remaining_quantity > 0 {
+            self.add_ask_order(request_idx, user_id, *remaining_quantity, new_order_id);
+        }
+    }
+
     /// 撮合订单
     pub fn match_order(
         &mut self,
@@ -192,177 +356,33 @@ impl TickBasedOrderBook {
             }
         };
 
-        // 预先为新订单分配order_id（如果订单可能挂单）
-        // 这样可以确保TradeNotification和OrderConfirmation使用同一个ID
+        // 预先为新订单分配order_id
         let new_order_id = self.next_order_id;
         self.next_order_id += 1;
 
+        // 执行撮合
         match request.order_type {
             OrderType::Buy => {
-                // 匹配卖单：从最优卖价开始
-                let mut current_idx = self.best_ask_idx;
-
-                while let Some(idx) = current_idx {
-                    if remaining_quantity == 0 {
-                        break;
-                    }
-
-                    let price = self.index_to_price(idx);
-                    if price > request.price {
-                        break; // 价格太高，停止匹配
-                    }
-
-                    // 处理该价格层
-                    if let Some(queue) = &mut self.ask_levels[idx] {
-                        while let Some(counter_order) = queue.front_mut() {
-                            if remaining_quantity == 0 {
-                                break;
-                            }
-
-                            // 跳过已取消的订单
-                            if counter_order.cancelled {
-                                let order_id_to_remove = counter_order.order_id;
-                                queue.pop();
-                                // 清理order_locations防止内存泄漏
-                                self.order_locations.remove(&order_id_to_remove);
-                                continue;
-                            }
-
-                            let trade_qty =
-                                std::cmp::min(remaining_quantity, counter_order.quantity);
-
-                            trades.push(TradeNotification {
-                                trade_id: 0,
-                                symbol: symbol.clone(),
-                                matched_price: price,
-                                matched_quantity: trade_qty,
-                                buyer_user_id: request.user_id,
-                                buyer_order_id: new_order_id, // 使用预先分配的order_id
-                                seller_user_id: counter_order.user_id,
-                                seller_order_id: counter_order.order_id,
-                                timestamp: 0,
-                            });
-
-                            remaining_quantity -= trade_qty;
-                            counter_order.quantity -= trade_qty;
-
-                            if counter_order.quantity == 0 {
-                                // 保存order_id后再pop
-                                let order_id_to_remove = counter_order.order_id;
-                                queue.pop();
-                                // 从位置映射中删除已成交订单
-                                self.order_locations.remove(&order_id_to_remove);
-                            } else {
-                                break;
-                            }
-                        }
-
-                        // 如果队列空了，清理
-                        if queue.is_empty() {
-                            self.ask_levels[idx] = None;
-                            self.ask_bitmap.set(idx, false); // 清除位图标记
-                        }
-                    }
-
-                    // 移动到下一个价格（向上）
-                    current_idx = self.find_next_ask(idx);
-                }
-
-                // 更新最优卖价
-                self.best_ask_idx = self.find_best_ask();
-
-                // 添加剩余订单到买单
-                if remaining_quantity > 0 {
-                    self.add_bid_order(
-                        request_idx,
-                        request.user_id,
-                        remaining_quantity,
-                        new_order_id,
-                    );
-                }
+                self.match_buy_order(
+                    request_idx,
+                    request.price,
+                    request.user_id,
+                    new_order_id,
+                    &mut remaining_quantity,
+                    &symbol,
+                    &mut trades,
+                );
             }
             OrderType::Sell => {
-                // 匹配买单：从最优买价开始
-                let mut current_idx = self.best_bid_idx;
-
-                while let Some(idx) = current_idx {
-                    if remaining_quantity == 0 {
-                        break;
-                    }
-
-                    let price = self.index_to_price(idx);
-                    if price < request.price {
-                        break; // 价格太低，停止匹配
-                    }
-
-                    // 处理该价格层
-                    if let Some(queue) = &mut self.bid_levels[idx] {
-                        while let Some(counter_order) = queue.front_mut() {
-                            if remaining_quantity == 0 {
-                                break;
-                            }
-
-                            // 跳过已取消的订单
-                            if counter_order.cancelled {
-                                let order_id_to_remove = counter_order.order_id;
-                                queue.pop();
-                                // 清理order_locations防止内存泄漏
-                                self.order_locations.remove(&order_id_to_remove);
-                                continue;
-                            }
-
-                            let trade_qty =
-                                std::cmp::min(remaining_quantity, counter_order.quantity);
-
-                            trades.push(TradeNotification {
-                                trade_id: 0,
-                                symbol: symbol.clone(),
-                                matched_price: price,
-                                matched_quantity: trade_qty,
-                                buyer_user_id: counter_order.user_id,
-                                buyer_order_id: counter_order.order_id,
-                                seller_user_id: request.user_id,
-                                seller_order_id: new_order_id, // 使用预先分配的order_id
-                                timestamp: 0,
-                            });
-
-                            remaining_quantity -= trade_qty;
-                            counter_order.quantity -= trade_qty;
-
-                            if counter_order.quantity == 0 {
-                                // 保存order_id后再pop
-                                let order_id_to_remove = counter_order.order_id;
-                                queue.pop();
-                                // 从位置映射中删除已成交订单
-                                self.order_locations.remove(&order_id_to_remove);
-                            } else {
-                                break;
-                            }
-                        }
-
-                        // 如果队列空了，清理
-                        if queue.is_empty() {
-                            self.bid_levels[idx] = None;
-                            self.bid_bitmap.set(idx, false); // 清除位图标记
-                        }
-                    }
-
-                    // 移动到下一个价格（向下）
-                    current_idx = self.find_next_bid(idx);
-                }
-
-                // 更新最优买价
-                self.best_bid_idx = self.find_best_bid();
-
-                // 添加剩余订单到卖单
-                if remaining_quantity > 0 {
-                    self.add_ask_order(
-                        request_idx,
-                        request.user_id,
-                        remaining_quantity,
-                        new_order_id,
-                    );
-                }
+                self.match_sell_order(
+                    request_idx,
+                    request.price,
+                    request.user_id,
+                    new_order_id,
+                    &mut remaining_quantity,
+                    &symbol,
+                    &mut trades,
+                );
             }
         }
 
@@ -370,7 +390,7 @@ impl TickBasedOrderBook {
         let confirmation = if remaining_quantity > 0 {
             Some(OrderConfirmation {
                 user_id: request.user_id,
-                order_id: new_order_id, // 使用预先分配的order_id
+                order_id: new_order_id,
             })
         } else {
             None
@@ -496,6 +516,7 @@ impl TickBasedOrderBook {
     }
 
     /// 获取买卖价差（最优买卖价之间的tick数）
+    #[must_use]
     pub fn spread_ticks(&self) -> Option<usize> {
         match (self.best_bid_idx, self.best_ask_idx) {
             (Some(bid), Some(ask)) => {
@@ -510,11 +531,13 @@ impl TickBasedOrderBook {
     }
 
     /// 获取最优买价
+    #[must_use]
     pub fn best_bid(&self) -> Option<u64> {
         self.best_bid_idx.map(|idx| self.index_to_price(idx))
     }
 
     /// 获取最优卖价
+    #[must_use]
     pub fn best_ask(&self) -> Option<u64> {
         self.best_ask_idx.map(|idx| self.index_to_price(idx))
     }

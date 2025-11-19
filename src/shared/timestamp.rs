@@ -31,6 +31,7 @@ const UPDATE_INTERVAL: u32 = 100;
 /// - 对于交易撮合场景，使用相对顺序更重要
 /// - 如需精确时间戳，使用get_precise_timestamp()
 #[inline]
+#[must_use]
 pub fn get_fast_timestamp() -> u64 {
     UPDATE_COUNTER.with(|counter| {
         let count = counter.get();
@@ -56,6 +57,7 @@ pub fn get_fast_timestamp() -> u64 {
 ///
 /// 用于需要精确时间的场景
 #[inline]
+#[must_use]
 pub fn get_precise_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

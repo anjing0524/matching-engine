@@ -96,6 +96,7 @@ pub struct OrderValidator {
 
 impl OrderValidator {
     /// Creates a new validator with default configuration
+    #[must_use]
     pub fn new() -> Self {
         Self {
             config: ValidationConfig::default(),
@@ -103,6 +104,7 @@ impl OrderValidator {
     }
 
     /// Creates a new validator with custom configuration
+    #[must_use]
     pub fn with_config(config: ValidationConfig) -> Self {
         Self { config }
     }
