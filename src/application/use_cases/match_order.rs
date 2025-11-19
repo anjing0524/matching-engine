@@ -26,7 +26,6 @@
 ///
 /// let result = use_case.execute(order_request)?;
 /// ```
-
 use crate::domain::orderbook::OrderBook;
 use crate::domain::validation::{OrderValidator, ValidationError};
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
@@ -106,7 +105,10 @@ impl<OB: OrderBook> MatchOrderUseCase<OB> {
     /// 1. Validate the order request
     /// 2. Submit to orderbook for matching
     /// 3. Return results
-    pub fn execute(&mut self, request: NewOrderRequest) -> Result<MatchOrderResult, MatchOrderError> {
+    pub fn execute(
+        &mut self,
+        request: NewOrderRequest,
+    ) -> Result<MatchOrderResult, MatchOrderError> {
         // Step 1: Validate the order
         self.validator.validate(&request)?;
 
@@ -134,7 +136,7 @@ impl<OB: OrderBook> MatchOrderUseCase<OB> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::orderbook::{TickBasedOrderBook, ContractSpec};
+    use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
     use crate::shared::protocol::OrderType;
     use std::sync::Arc;
 
@@ -166,7 +168,10 @@ mod tests {
 
         let result = use_case.execute(invalid_order);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), MatchOrderError::ValidationFailed(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            MatchOrderError::ValidationFailed(_)
+        ));
     }
 
     #[test]

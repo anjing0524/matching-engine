@@ -7,7 +7,6 @@
 /// - 校验和验证
 /// - 原子性写入（先写临时文件，然后重命名）
 /// - 自动清理旧快照
-
 use super::{PersistenceError, Result, SnapshotData};
 use crate::infrastructure::persistence::types::SnapshotMetadata;
 use bincode::config::standard;
@@ -174,7 +173,8 @@ impl SnapshotWriter {
 
     /// 获取元数据文件路径
     fn metadata_path(&self, snapshot_id: u64) -> PathBuf {
-        self.data_dir.join(format!("snapshot.{}.snap.meta", snapshot_id))
+        self.data_dir
+            .join(format!("snapshot.{}.snap.meta", snapshot_id))
     }
 }
 
@@ -223,8 +223,9 @@ impl SnapshotReader {
         }
 
         // 反序列化
-        let (snapshot, _): (SnapshotData, usize) = bincode::serde::decode_from_slice(&data, standard())
-            .map_err(|e| PersistenceError::Deserialization(e.to_string()))?;
+        let (snapshot, _): (SnapshotData, usize) =
+            bincode::serde::decode_from_slice(&data, standard())
+                .map_err(|e| PersistenceError::Deserialization(e.to_string()))?;
 
         // 验证校验和
         let actual_checksum = self.calculate_checksum(&snapshot.orderbook_state);

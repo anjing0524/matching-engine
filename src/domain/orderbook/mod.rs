@@ -31,7 +31,6 @@
 /// let mut ob = TickBasedOrderBook::new(spec);
 /// process_orders(&mut ob);
 /// ```
-
 pub mod tick_based;
 pub mod traits;
 
@@ -39,4 +38,4 @@ pub mod traits;
 pub use traits::OrderBook;
 
 // Re-export the production implementation
-pub use tick_based::{TickBasedOrderBook, ContractSpec, OrderNode};
+pub use tick_based::{ContractSpec, OrderNode, TickBasedOrderBook};

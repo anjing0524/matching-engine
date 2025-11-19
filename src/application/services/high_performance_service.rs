@@ -14,14 +14,13 @@
 /// - 传统WAL (batch=10): 2,237 ops/s
 /// - 传统WAL (batch=1000): 111,045 ops/s
 /// - **异步WAL: >6,000,000 ops/s** 🚀
-
-use crate::domain::orderbook::{TickBasedOrderBook, ContractSpec};
-use crate::infrastructure::persistence::{
-    AsyncWalWriter, WalEntry, SnapshotWriter, RecoveryManager, PersistenceError,
-};
+use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use crate::infrastructure::persistence::snapshot::create_snapshot;
+use crate::infrastructure::persistence::{
+    AsyncWalWriter, PersistenceError, RecoveryManager, SnapshotWriter, WalEntry,
+};
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 /// 高性能匹配服务配置
@@ -77,7 +76,10 @@ pub struct HighPerformanceService {
 
 impl HighPerformanceService {
     /// 创建新的高性能匹配服务
-    pub fn new(spec: ContractSpec, config: HighPerformanceConfig) -> Result<Self, PersistenceError> {
+    pub fn new(
+        spec: ContractSpec,
+        config: HighPerformanceConfig,
+    ) -> Result<Self, PersistenceError> {
         info!("创建高性能匹配服务 (异步WAL)");
         info!("  刷盘间隔: {}ms", config.flush_interval_ms);
         info!("  缓冲区阈值: {}条", config.buffer_threshold);
@@ -113,7 +115,10 @@ impl HighPerformanceService {
     }
 
     /// 从持久化状态恢复（使用传统WAL）
-    pub fn recover(spec: ContractSpec, config: HighPerformanceConfig) -> Result<Self, PersistenceError> {
+    pub fn recover(
+        spec: ContractSpec,
+        config: HighPerformanceConfig,
+    ) -> Result<Self, PersistenceError> {
         info!("开始从持久化状态恢复...");
 
         // 创建恢复管理器（使用传统WAL读取）
@@ -122,7 +127,10 @@ impl HighPerformanceService {
         // 执行恢复
         let result = recovery.recover()?;
 
-        info!("恢复完成: last_seq={}, entries={}", result.last_seq, result.entry_count);
+        info!(
+            "恢复完成: last_seq={}, entries={}",
+            result.last_seq, result.entry_count
+        );
 
         // 创建订单簿
         let mut orderbook = TickBasedOrderBook::new(spec.clone());
@@ -158,14 +166,11 @@ impl HighPerformanceService {
             config.flush_interval_ms,
             config.buffer_threshold,
             config.wal_max_size,
-        )?.with_seq(result.last_seq + 1);
+        )?
+        .with_seq(result.last_seq + 1);
 
         // 创建快照写入器
-        let snapshot_writer = SnapshotWriter::new(
-            config.data_dir.clone(),
-            true,
-            3,
-        )?;
+        let snapshot_writer = SnapshotWriter::new(config.data_dir.clone(), true, 3)?;
 
         Ok(Self {
             orderbook,
@@ -262,10 +267,7 @@ impl HighPerformanceService {
         let wal_seq = self.wal_writer.current_seq();
 
         // TODO: 序列化订单簿状态
-        let orderbook_state = format!(
-            "Placeholder snapshot at seq {}",
-            wal_seq
-        ).into_bytes();
+        let orderbook_state = format!("Placeholder snapshot at seq {}", wal_seq).into_bytes();
 
         let snapshot = create_snapshot(wal_seq, orderbook_state);
         self.snapshot_writer.write(snapshot)?;
@@ -378,7 +380,10 @@ mod tests {
         let ops_per_sec = count as f64 / elapsed.as_secs_f64();
 
         println!("高性能服务吞吐量: {:.0} ops/s", ops_per_sec);
-        println!("平均延迟: {:.2}μs", elapsed.as_micros() as f64 / count as f64);
+        println!(
+            "平均延迟: {:.2}μs",
+            elapsed.as_micros() as f64 / count as f64
+        );
 
         // 等待刷盘
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;

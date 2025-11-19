@@ -10,10 +10,10 @@
 /// 4. 并发连接处理能力
 /// 5. 内存使用效率
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use matching_engine::infrastructure::network::buffer::SharedBuffer;
 use matching_engine::infrastructure::network::codec::{BincodeCodec, Codec, LengthDelimitedCodec};
 use matching_engine::infrastructure::network::traits::ZeroCopyBuffer;
-use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use matching_engine::shared::protocol::{ClientMessage, NewOrderRequest, OrderType};
 use std::sync::Arc;
 use std::time::Instant;

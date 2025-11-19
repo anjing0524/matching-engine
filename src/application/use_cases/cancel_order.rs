@@ -25,7 +25,6 @@
 ///
 /// let result = use_case.execute(cancel_request)?;
 /// ```
-
 use crate::domain::orderbook::OrderBook;
 use crate::shared::protocol::CancelOrderRequest;
 
@@ -60,7 +59,11 @@ impl std::fmt::Display for CancelOrderError {
         match self {
             CancelOrderError::OrderNotFound(id) => write!(f, "Order {} not found", id),
             CancelOrderError::Unauthorized { order_id, user_id } => {
-                write!(f, "User {} not authorized to cancel order {}", user_id, order_id)
+                write!(
+                    f,
+                    "User {} not authorized to cancel order {}",
+                    user_id, order_id
+                )
             }
             CancelOrderError::OrderbookError(e) => write!(f, "Orderbook error: {}", e),
         }
@@ -121,7 +124,10 @@ impl<OB: OrderBook> CancelOrderUseCase<OB> {
     /// 1. Optionally check authorization
     /// 2. Cancel the order via orderbook
     /// 3. Return result
-    pub fn execute(&mut self, request: CancelOrderRequest) -> Result<CancelOrderResult, CancelOrderError> {
+    pub fn execute(
+        &mut self,
+        request: CancelOrderRequest,
+    ) -> Result<CancelOrderResult, CancelOrderError> {
         // Step 1: Authorization check (if enabled)
         if self.check_authorization {
             // TODO: Implement authorization check
@@ -165,7 +171,7 @@ impl<OB: OrderBook> CancelOrderUseCase<OB> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::orderbook::{TickBasedOrderBook, ContractSpec};
+    use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 
     #[test]
     fn test_cancel_order_use_case_creation() {

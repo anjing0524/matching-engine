@@ -14,7 +14,6 @@
 /// - 高性能交易系统
 /// - 可以容忍极小概率的数据丢失（10ms窗口）
 /// - 需要百万级吞吐量
-
 use super::{PersistenceError, Result, WalEntry};
 use bincode::config::standard;
 use std::fs::{File, OpenOptions};
@@ -197,16 +196,12 @@ impl AsyncWalWriter {
     /// 写入WAL条目（异步，不阻塞）
     pub fn write(&mut self, entry: WalEntry) -> Result<u64> {
         if self.closed.load(Ordering::SeqCst) {
-            return Err(PersistenceError::Io(std::io::Error::other(
-                "WAL已关闭",
-            )));
+            return Err(PersistenceError::Io(std::io::Error::other("WAL已关闭")));
         }
 
         self.tx
             .send(WalMessage::Write(entry))
-            .map_err(|_| PersistenceError::Io(std::io::Error::other(
-                "后台任务已停止",
-            )))?;
+            .map_err(|_| PersistenceError::Io(std::io::Error::other("后台任务已停止")))?;
 
         Ok(self.seq.fetch_add(1, Ordering::SeqCst))
     }
@@ -219,9 +214,7 @@ impl AsyncWalWriter {
 
         self.tx
             .send(WalMessage::Flush)
-            .map_err(|_| PersistenceError::Io(std::io::Error::other(
-                "后台任务已停止",
-            )))?;
+            .map_err(|_| PersistenceError::Io(std::io::Error::other("后台任务已停止")))?;
 
         Ok(())
     }
@@ -475,7 +468,10 @@ mod tests {
         let ops_per_sec = count as f64 / elapsed.as_secs_f64();
 
         println!("异步WAL性能: {:.0} ops/s", ops_per_sec);
-        println!("平均延迟: {:.2}μs", elapsed.as_micros() as f64 / count as f64);
+        println!(
+            "平均延迟: {:.2}μs",
+            elapsed.as_micros() as f64 / count as f64
+        );
 
         // 等待刷盘
         tokio::time::sleep(Duration::from_millis(100)).await;

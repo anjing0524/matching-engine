@@ -1,5 +1,4 @@
 /// 零拷贝缓冲区实现
-
 use super::traits::ZeroCopyBuffer;
 use std::sync::Arc;
 
@@ -48,8 +47,8 @@ impl ZeroCopyBuffer for SharedBuffer {
 
     fn as_mut_slice(&mut self) -> &mut [u8] {
         // 只有当Arc引用计数为1时才允许可变访问
-        let inner = Arc::get_mut(&mut self.inner)
-            .expect("Cannot get mutable access: buffer is shared");
+        let inner =
+            Arc::get_mut(&mut self.inner).expect("Cannot get mutable access: buffer is shared");
         &mut inner[self.offset..self.offset + self.len]
     }
 
@@ -148,8 +147,7 @@ impl BufferPool {
 
         // 预分配所有缓冲区
         for _ in 0..capacity {
-            let buf = Box::new(SharedBuffer::with_capacity(buffer_size))
-                as Box<dyn ZeroCopyBuffer>;
+            let buf = Box::new(SharedBuffer::with_capacity(buffer_size)) as Box<dyn ZeroCopyBuffer>;
             free_list.push(buf);
         }
 

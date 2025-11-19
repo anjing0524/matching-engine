@@ -1,3 +1,6 @@
+// 允许使用废弃的 legacy 模块（向后兼容）
+#![allow(deprecated)]
+
 // 全局内存分配器：使用 jemalloc 提升性能
 // jemalloc 在高并发场景下比系统分配器快 8-15%
 #[cfg(not(target_env = "msvc"))]
@@ -73,18 +76,17 @@ pub use shared::collections::fast_bitmap;
 // ===================================================================
 
 // 域层核心类型和 trait
-pub use domain::orderbook::{OrderBook, TickBasedOrderBook, ContractSpec};
+pub use domain::orderbook::{ContractSpec, OrderBook, TickBasedOrderBook};
 
 // 应用层服务
 // Note: MatchingService is now generic over OrderBook implementation
 pub use application::services::{MatchingService, PartitionedService};
 
 // 基础设施
-pub use infrastructure::network::{NetworkTransport, Connection, ZeroCopyBuffer};
+pub use infrastructure::network::{Connection, NetworkTransport, ZeroCopyBuffer};
 
 // 共享协议
 pub use shared::protocol::{
-    ClientMessage, ServerMessage,
-    NewOrderRequest, CancelOrderRequest,
-    OrderType, OrderConfirmation, TradeNotification,
+    CancelOrderRequest, ClientMessage, NewOrderRequest, OrderConfirmation, OrderType,
+    ServerMessage, TradeNotification,
 };

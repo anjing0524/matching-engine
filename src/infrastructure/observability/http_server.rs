@@ -14,9 +14,9 @@
 //! server.run().await?;
 //! ```
 
-use crate::shared::metrics::METRICS;
 use super::health::{HealthChecker, HealthDetails};
 use super::metrics_collector::GLOBAL_METRICS;
+use crate::shared::metrics::METRICS;
 use axum::{
     extract::State,
     http::StatusCode,
@@ -128,17 +128,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_handler() {
-        let response = metrics_handler().await;
+        let _response = metrics_handler().await;
         // Response type doesn't have a direct body() method in axum 0.7
         // This test verifies the handler compiles and runs
-        assert!(true);
     }
 
     #[tokio::test]
     async fn test_liveness_handler() {
         let checker = Arc::new(HealthChecker::new("1.0.0"));
-        let response = liveness_handler(State(checker)).await;
+        let _response = liveness_handler(State(checker)).await;
         // Verify the handler runs without errors
-        assert!(true);
     }
 }

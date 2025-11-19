@@ -1,3 +1,4 @@
+pub mod cancel_order;
 /// Use Cases - High-level business operations
 ///
 /// Each use case represents a specific business operation that the
@@ -12,10 +13,8 @@
 /// - Query depth/orderbook state
 /// - Batch order operations
 /// - Market data queries
-
 pub mod match_order;
-pub mod cancel_order;
 
 // Re-export key types
-pub use match_order::{MatchOrderUseCase, MatchOrderResult};
-pub use cancel_order::{CancelOrderUseCase, CancelOrderResult};
+pub use cancel_order::{CancelOrderResult, CancelOrderUseCase};
+pub use match_order::{MatchOrderResult, MatchOrderUseCase};

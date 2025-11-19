@@ -1,6 +1,7 @@
 use futures::{SinkExt, StreamExt};
-use matching_engine::shared::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
-use serde_json;
+use matching_engine::shared::protocol::{
+    NewOrderRequest, OrderConfirmation, OrderType, TradeNotification,
+};
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};

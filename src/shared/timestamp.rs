@@ -5,7 +5,6 @@
 /// - 每100次调用才真正获取系统时间
 /// - 中间使用缓存的时间戳
 /// - 对于高频场景，节省90-100ns/次
-
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 

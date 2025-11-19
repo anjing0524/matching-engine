@@ -1,3 +1,5 @@
+use parking_lot::RwLock;
+use std::collections::HashMap;
 /// Symbol字符串池 - 用于高效管理交易对符号
 ///
 /// 设计目标：
@@ -9,10 +11,7 @@
 /// - 首次访问：~100-200ns（写锁 + 堆分配）
 /// - 后续访问：~10-20ns（读锁 + Arc克隆）
 /// - 预期性能提升：15-20%
-
 use std::sync::{Arc, OnceLock};
-use std::collections::HashMap;
-use parking_lot::RwLock;
 
 /// 全局符号池，用于intern交易对符号字符串
 pub struct SymbolPool {
@@ -66,7 +65,8 @@ impl SymbolPool {
         let mut write_guard = self.symbols.write();
 
         // Double-check：可能在获取写锁期间其他线程已插入
-        write_guard.entry(symbol.to_string())
+        write_guard
+            .entry(symbol.to_string())
             .or_insert_with(|| Arc::from(symbol))
             .clone()
     }
@@ -83,7 +83,8 @@ impl SymbolPool {
     pub fn preload(&self, symbols: &[&str]) {
         let mut write_guard = self.symbols.write();
         for &symbol in symbols {
-            write_guard.entry(symbol.to_string())
+            write_guard
+                .entry(symbol.to_string())
                 .or_insert_with(|| Arc::from(symbol));
         }
     }

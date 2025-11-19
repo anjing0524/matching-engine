@@ -22,8 +22,8 @@
 
 use lazy_static::lazy_static;
 use prometheus::{
-    register_counter_vec, register_gauge_vec, register_histogram_vec,
-    CounterVec, Encoder, GaugeVec, HistogramVec, TextEncoder,
+    register_counter_vec, register_gauge_vec, register_histogram_vec, CounterVec, Encoder,
+    GaugeVec, HistogramVec, TextEncoder,
 };
 
 lazy_static! {
@@ -178,7 +178,10 @@ mod tests {
     #[test]
     fn test_metrics_global() {
         // 使用全局METRICS实例而不是创建新的
-        METRICS.orders_total.with_label_values(&["buy", "TEST"]).inc();
+        METRICS
+            .orders_total
+            .with_label_values(&["buy", "TEST"])
+            .inc();
 
         // 测试导出
         let output = METRICS.export();
@@ -188,7 +191,8 @@ mod tests {
     #[test]
     fn test_histogram_global() {
         // 使用全局实例
-        METRICS.matching_duration
+        METRICS
+            .matching_duration
             .with_label_values(&["TEST"])
             .observe(125.5);
 
@@ -199,7 +203,8 @@ mod tests {
     #[test]
     fn test_gauge_global() {
         // 使用全局实例
-        METRICS.orderbook_depth
+        METRICS
+            .orderbook_depth
             .with_label_values(&["TEST", "bid"])
             .set(100.0);
 

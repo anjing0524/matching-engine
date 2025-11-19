@@ -1,5 +1,10 @@
+use bincode::{
+    de::Decoder,
+    enc::Encoder,
+    error::{DecodeError, EncodeError},
+    Decode, Encode,
+};
 use serde::{Deserialize, Serialize};
-use bincode::{Encode, Decode, enc::Encoder, de::Decoder, error::{EncodeError, DecodeError}};
 use std::sync::Arc;
 
 /// 订单类型，区分买单和卖单
@@ -205,7 +210,9 @@ impl<Context> Decode<Context> for ClientMessage {
         let tag = u32::decode(decoder)?;
         match tag {
             0 => Ok(ClientMessage::NewOrder(NewOrderRequest::decode(decoder)?)),
-            1 => Ok(ClientMessage::CancelOrder(CancelOrderRequest::decode(decoder)?)),
+            1 => Ok(ClientMessage::CancelOrder(CancelOrderRequest::decode(
+                decoder,
+            )?)),
             _ => Err(DecodeError::UnexpectedVariant {
                 found: tag,
                 type_name: "ClientMessage",
@@ -238,7 +245,9 @@ impl<Context> Decode<Context> for ServerMessage {
         let tag = u32::decode(decoder)?;
         match tag {
             0 => Ok(ServerMessage::Trade(TradeNotification::decode(decoder)?)),
-            1 => Ok(ServerMessage::Confirmation(OrderConfirmation::decode(decoder)?)),
+            1 => Ok(ServerMessage::Confirmation(OrderConfirmation::decode(
+                decoder,
+            )?)),
             _ => Err(DecodeError::UnexpectedVariant {
                 found: tag,
                 type_name: "ServerMessage",
@@ -247,4 +256,3 @@ impl<Context> Decode<Context> for ServerMessage {
         }
     }
 }
-

@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! 高负载基准测试 - 验证批量提交和多核扩展性
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};

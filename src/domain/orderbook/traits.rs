@@ -30,7 +30,6 @@
 /// let mut ob = TickBasedOrderBook::new(spec);
 /// // process_order(&mut ob, request);
 /// ```
-
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
 use smallvec::SmallVec;
 
@@ -169,8 +168,6 @@ pub trait OrderBook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::protocol::OrderType;
-    use std::sync::Arc;
 
     // Mock implementation for testing
     struct MockOrderBook {
@@ -197,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_trait_spread_calculation() {
-        let mut mock = MockOrderBook {
+        let mock = MockOrderBook {
             best_bid: Some(99),
             best_ask: Some(101),
         };
@@ -208,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_trait_empty_orderbook() {
-        let mut mock = MockOrderBook {
+        let mock = MockOrderBook {
             best_bid: None,
             best_ask: None,
         };

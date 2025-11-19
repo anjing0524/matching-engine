@@ -1,3 +1,4 @@
+use crate::ringbuffer::RingBuffer;
 /// OrderBook v2 - 使用 RingBuffer 的高性能实现
 ///
 /// 关键改进：
@@ -10,9 +11,7 @@
 /// - 比 VecDeque 快 30-50%
 /// - 比手动链表快 20-30%
 /// - 更好的缓存局部性
-
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
-use crate::ringbuffer::RingBuffer;
 use crate::shared::symbol_pool::SymbolPool;
 use smallvec::SmallVec;
 use std::collections::BTreeMap;

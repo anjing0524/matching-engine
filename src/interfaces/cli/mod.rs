@@ -8,7 +8,6 @@
 /// - Initialize application services
 /// - Configure and start the matching engine
 /// - Handle graceful shutdown
-
 use clap::Parser;
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -108,11 +107,28 @@ pub async fn run() {
     println!("分区数量:     {}", partition_count);
     println!("网络后端:     {}", config.network_backend);
     println!("队列容量:     {}", config.queue_capacity);
-    println!("CPU亲和性:    {}", if config.cpu_affinity { "启用" } else { "禁用" });
+    println!(
+        "CPU亲和性:    {}",
+        if config.cpu_affinity {
+            "启用"
+        } else {
+            "禁用"
+        }
+    );
     println!("日志级别:     {}", config.log_level);
-    println!("持久化:       {}", if config.persistence { "启用" } else { "禁用" });
+    println!(
+        "持久化:       {}",
+        if config.persistence {
+            "启用"
+        } else {
+            "禁用"
+        }
+    );
     println!("数据目录:     {}", config.data_dir.display());
-    println!("合约:         {} ({}-{})", config.symbol, config.min_price, config.max_price);
+    println!(
+        "合约:         {} ({}-{})",
+        config.symbol, config.min_price, config.max_price
+    );
     println!("========================================");
 
     // 如果是dry-run模式，仅显示配置
@@ -140,12 +156,10 @@ pub async fn run() {
 async fn run_persistent_server(config: CliConfig) -> Result<(), Box<dyn std::error::Error>> {
     use crate::application::services::PersistentMatchingService;
     use crate::domain::orderbook::ContractSpec;
-    use crate::infrastructure::persistence::PersistenceConfig;
     use crate::infrastructure::network::backends::TokioTransport;
     use crate::infrastructure::network::traits::NetworkTransport;
-    
-    
-    
+    use crate::infrastructure::persistence::PersistenceConfig;
+
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -268,9 +282,11 @@ async fn run_persistent_server(config: CliConfig) -> Result<(), Box<dyn std::err
 /// 处理单个客户端连接
 async fn handle_connection(
     mut conn: Box<dyn crate::infrastructure::network::traits::Connection>,
-    service: std::sync::Arc<tokio::sync::RwLock<crate::application::services::PersistentMatchingService>>,
+    service: std::sync::Arc<
+        tokio::sync::RwLock<crate::application::services::PersistentMatchingService>,
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::infrastructure::network::codec::{Codec, BincodeCodec, LengthDelimitedCodec};
+    use crate::infrastructure::network::codec::{BincodeCodec, Codec, LengthDelimitedCodec};
     use crate::shared::protocol::ClientMessage;
 
     let peer_addr = conn.peer_addr().ok();
@@ -328,8 +344,7 @@ async fn handle_connection(
 fn init_logging(level: &str) {
     use tracing_subscriber::EnvFilter;
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -344,7 +359,7 @@ mod tests {
     #[test]
     fn test_cli_config_default() {
         // 测试默认配置
-        let config = CliConfig::parse_from(&["matching-engine"]);
+        let config = CliConfig::parse_from(["matching-engine"]);
         assert_eq!(config.port, 8080);
         assert_eq!(config.partitions, 0);
         assert_eq!(config.network_backend, "tokio");
@@ -357,15 +372,21 @@ mod tests {
     #[test]
     fn test_cli_config_custom() {
         // 测试自定义配置
-        let config = CliConfig::parse_from(&[
+        let config = CliConfig::parse_from([
             "matching-engine",
-            "--host", "0.0.0.0",
-            "--port", "9000",
-            "--partitions", "8",
-            "--network-backend", "uring",
-            "--queue-capacity", "2048",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "9000",
+            "--partitions",
+            "8",
+            "--network-backend",
+            "uring",
+            "--queue-capacity",
+            "2048",
             "--cpu-affinity",
-            "--log-level", "debug",
+            "--log-level",
+            "debug",
             "--dry-run",
         ]);
 
@@ -382,14 +403,20 @@ mod tests {
     #[test]
     fn test_cli_config_short_flags() {
         // 测试短参数
-        let config = CliConfig::parse_from(&[
+        let config = CliConfig::parse_from([
             "matching-engine",
-            "-H", "192.168.1.1",
-            "-p", "7000",
-            "-n", "4",
-            "-b", "tokio",
-            "-q", "512",
-            "-l", "warn",
+            "-H",
+            "192.168.1.1",
+            "-p",
+            "7000",
+            "-n",
+            "4",
+            "-b",
+            "tokio",
+            "-q",
+            "512",
+            "-l",
+            "warn",
         ]);
 
         assert_eq!(config.host.to_string(), "192.168.1.1");

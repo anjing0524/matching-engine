@@ -4,7 +4,6 @@
 /// - tokio: Async I/O with Tokio runtime (baseline, development)
 /// - io_uring: Linux zero-syscall async I/O (production)
 /// - dpdk: Userspace network stack with Poll Mode Drivers (ultra-low latency)
-
 pub mod tokio;
 
 #[cfg(feature = "io-uring")]
@@ -17,7 +16,7 @@ pub mod dpdk;
 pub use tokio::TokioTransport;
 
 #[cfg(feature = "io-uring")]
-pub use io_uring::{IoUringTransport, IoUringConfig};
+pub use io_uring::{IoUringConfig, IoUringTransport};
 
 #[cfg(feature = "dpdk")]
-pub use dpdk::{DpdkTransport, DpdkConfig};
+pub use dpdk::{DpdkConfig, DpdkTransport};

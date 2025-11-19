@@ -10,17 +10,15 @@
 ///
 /// 注意: 这是一个模拟实现，用于演示架构。
 /// 真实的DPDK集成需要C FFI绑定和实际的DPDK库。
-
-use crate::infrastructure::network::buffer::{AlignedBuffer, BufferPool, SharedBuffer};
 use crate::infrastructure::network::metrics::NetworkMetrics;
 use crate::infrastructure::network::traits::{Connection, NetworkTransport, ZeroCopyBuffer};
 use async_trait::async_trait;
+use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use parking_lot::Mutex;
-use std::collections::VecDeque;
 
 /// DPDK配置
 #[derive(Debug, Clone)]
@@ -74,7 +72,7 @@ impl Default for DpdkConfig {
                 "--file-prefix=dpdk".to_string(),
             ],
             port_id: 0,
-            rx_queues: 4,  // 多队列以支持RSS
+            rx_queues: 4, // 多队列以支持RSS
             tx_queues: 4,
             rx_desc: 2048,
             tx_desc: 2048,
@@ -83,7 +81,7 @@ impl Default for DpdkConfig {
             mtu: 1500,
             enable_rss: true,
             enable_checksum_offload: true,
-            rx_burst_size: 32,  // 一次接收32个包
+            rx_burst_size: 32, // 一次接收32个包
             tx_burst_size: 32,
         }
     }
@@ -242,8 +240,8 @@ impl Connection for DpdkConnection {
 /// DMA缓冲区（模拟rte_mbuf）
 pub struct DmaBuffer {
     data: Vec<u8>,
-    phys_addr: u64,   // 物理地址
-    iova_addr: u64,   // IOVA地址
+    phys_addr: u64, // 物理地址
+    iova_addr: u64, // IOVA地址
 }
 
 impl ZeroCopyBuffer for DmaBuffer {

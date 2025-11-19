@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 /// Comprehensive Performance Benchmark Suite
 /// Tests all key components of the matching engine based on system design principles:
 /// 1. OrderBook matching (core latency)
@@ -9,7 +10,9 @@ use criterion::{
     black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
 };
 use matching_engine::legacy::orderbook::OrderBook;
-use matching_engine::shared::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
+use matching_engine::shared::protocol::{
+    NewOrderRequest, OrderConfirmation, OrderType, TradeNotification,
+};
 use std::sync::Arc;
 
 /// ============================================================================
@@ -24,7 +27,7 @@ fn bench_order_add_no_match(c: &mut Criterion) {
 
     group.bench_function("single_order_add", |b| {
         b.iter_batched(
-            || OrderBook::new(),
+            OrderBook::new,
             |mut book| {
                 let order = NewOrderRequest {
                     user_id: 1,
@@ -126,7 +129,7 @@ fn bench_memory_pool_reuse(c: &mut Criterion) {
 
     group.bench_function("add_remove_add_sequence", |b| {
         b.iter_batched(
-            || OrderBook::new(),
+            OrderBook::new,
             |mut book| {
                 // Add order 1
                 let order1 = NewOrderRequest {

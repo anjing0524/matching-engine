@@ -1,23 +1,22 @@
+pub mod backends;
+pub mod buffer;
+pub mod codec;
+pub mod metrics;
 /// 高性能网络中间件模块
 ///
 /// 提供统一的网络抽象层，支持多种后端：
 /// - Tokio: 异步I/O (开发/测试)
 /// - DPDK: 零拷贝用户态网络栈 (生产环境)
 /// - FPGA: 硬件加速 (超高频场景)
-
 pub mod traits;
-pub mod buffer;
-pub mod codec;
-pub mod backends;
-pub mod metrics;
 
 #[cfg(feature = "fpga")]
 pub mod fpga_backend;
 
-pub use traits::{NetworkTransport, ZeroCopyBuffer, Connection};
 pub use buffer::SharedBuffer;
-pub use codec::{Codec, BincodeCodec, LengthDelimitedCodec};
+pub use codec::{BincodeCodec, Codec, LengthDelimitedCodec};
 pub use metrics::NetworkMetrics;
+pub use traits::{Connection, NetworkTransport, ZeroCopyBuffer};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -61,7 +60,8 @@ impl Default for MiddlewareConfig {
     fn default() -> Self {
         Self {
             backend: BackendType::Tokio,
-            listen_addr: "127.0.0.1:8080".parse()
+            listen_addr: "127.0.0.1:8080"
+                .parse()
                 .expect("Default listen address should be valid"),
             buffer_size: 65536,
             rx_queue_depth: 1024,
@@ -114,11 +114,17 @@ impl<C: Codec> NetworkMiddleware<C> {
                     tx_queues: (config.tx_queue_depth / 512).max(1) as u16,
                     ..Default::default()
                 };
-                Box::new(backends::dpdk::DpdkTransport::new(dpdk_config)?) as Box<dyn NetworkTransport>
+                Box::new(backends::dpdk::DpdkTransport::new(dpdk_config)?)
+                    as Box<dyn NetworkTransport>
             }
             #[cfg(feature = "fpga")]
             BackendType::Fpga => {
-                Box::new(fpga_backend::FpgaTransport::new()?) as Box<dyn NetworkTransport>
+                let fpga_config = fpga_backend::FpgaConfig {
+                    device_id: 0,
+                    ring_size: 1024,
+                };
+                Box::new(fpga_backend::FpgaTransport::new(fpga_config)?)
+                    as Box<dyn NetworkTransport>
             }
             _ => {
                 return Err(MiddlewareError::UnsupportedBackend(config.backend));

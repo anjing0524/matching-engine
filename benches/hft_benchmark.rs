@@ -27,8 +27,8 @@ fn bench_single_order_latency_cold(c: &mut Criterion) {
             || {
                 // Setup: 每次创建新订单簿
                 let spec = ContractSpec::new("BTC2501", 1, 40000, 70000);
-                let orderbook = TickBasedOrderBook::new(spec);
-                orderbook
+
+                TickBasedOrderBook::new(spec)
             },
             |mut orderbook| {
                 // Measure: 冷启动延迟

@@ -1,3 +1,4 @@
+use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 /// 网络中间件 + 匹配引擎集成示例
 ///
 /// 演示如何将网络中间件与高性能匹配引擎集成
@@ -6,7 +7,6 @@ use matching_engine::infrastructure::network::{
     BackendType, BincodeCodec, Codec, Connection, LengthDelimitedCodec, MiddlewareConfig,
     NetworkTransport,
 };
-use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use matching_engine::shared::protocol::ClientMessage;
 use std::sync::Arc;
 use tokio::sync::RwLock;

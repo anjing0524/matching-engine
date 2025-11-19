@@ -17,10 +17,10 @@
 //! }
 //! ```
 
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use parking_lot::RwLock;
 
 /// 健康状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,10 +87,7 @@ impl HealthChecker {
 
     /// 获取运行时间（秒）
     pub fn uptime_seconds(&self) -> u64 {
-        self.start_time
-            .elapsed()
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
+        self.start_time.elapsed().map(|d| d.as_secs()).unwrap_or(0)
     }
 
     /// 获取当前时间戳
@@ -170,7 +167,8 @@ mod tests {
     fn test_uptime() {
         let checker = HealthChecker::new("1.0.0");
         thread::sleep(Duration::from_millis(100));
-        assert!(checker.uptime_seconds() >= 0);
+        // uptime_seconds 返回 u64，总是非负
+        assert!(checker.uptime_seconds() < u64::MAX);
     }
 
     #[test]
@@ -192,7 +190,8 @@ mod tests {
 
         assert_eq!(response.status, HealthStatus::Healthy);
         assert_eq!(response.version, "1.0.0");
-        assert!(response.uptime_seconds >= 0);
+        // uptime_seconds 是 u64，总是非负
+        assert!(response.uptime_seconds < u64::MAX);
         assert!(response.timestamp > 0);
         assert!(response.details.is_none());
     }

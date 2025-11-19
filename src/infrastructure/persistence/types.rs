@@ -1,6 +1,7 @@
 /// 持久化相关的数据类型
-
-use crate::shared::protocol::{NewOrderRequest, CancelOrderRequest, TradeNotification, OrderConfirmation};
+use crate::shared::protocol::{
+    CancelOrderRequest, NewOrderRequest, OrderConfirmation, TradeNotification,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -112,7 +113,7 @@ impl Default for PersistenceConfig {
             data_dir: PathBuf::from("./data"),
             wal_max_size: 64 * 1024 * 1024, // 64MB
             wal_sync: true,
-            wal_batch_size: 10,  // ⚠️ 降低到10以减少数据丢失窗口（之前是1000）
+            wal_batch_size: 10, // ⚠️ 降低到10以减少数据丢失窗口（之前是1000）
             snapshot_interval_secs: 300, // 5分钟
             snapshot_retention: 3,
             snapshot_compression: true,

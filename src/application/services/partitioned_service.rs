@@ -23,16 +23,15 @@
 ///
 /// service.submit_order(order).unwrap();
 /// ```
-
-use crate::domain::orderbook::{TickBasedOrderBook, ContractSpec};
+use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
 use crate::shared::symbol_pool::SymbolPool;
-use crossbeam::channel::{bounded, Sender, Receiver};
+use crossbeam::channel::{bounded, Receiver, Sender};
 use smallvec::SmallVec;
-use std::sync::Arc;
-use std::thread;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use std::thread;
 
 /// Configuration for the partitioned service
 #[derive(Clone, Debug)]
@@ -132,10 +131,8 @@ impl PartitionWorker {
 
         loop {
             // Batch receive orders to reduce context switching
-            let batch: Vec<OrderRequest> = self.rx
-                .try_iter()
-                .take(self.config.batch_size)
-                .collect();
+            let batch: Vec<OrderRequest> =
+                self.rx.try_iter().take(self.config.batch_size).collect();
 
             if batch.is_empty() {
                 // Adaptive wait strategy
@@ -171,7 +168,10 @@ impl PartitionWorker {
 
         // Send response if requested
         if let Some(response_tx) = order_req.response_tx {
-            let response = OrderResponse::Matched { trades: Box::new(trades), confirmation };
+            let response = OrderResponse::Matched {
+                trades: Box::new(trades),
+                confirmation,
+            };
             let _ = response_tx.send(response);
         }
     }
@@ -208,8 +208,14 @@ impl PartitionedService {
 
         // Preload common trading pairs
         symbol_pool.preload(&[
-            "BTC/USD", "ETH/USD", "BNB/USD", "SOL/USD",
-            "ADA/USD", "XRP/USD", "DOT/USD", "MATIC/USD",
+            "BTC/USD",
+            "ETH/USD",
+            "BNB/USD",
+            "SOL/USD",
+            "ADA/USD",
+            "XRP/USD",
+            "DOT/USD",
+            "MATIC/USD",
         ]);
 
         let mut partitions = Vec::with_capacity(config.partition_count);
@@ -220,12 +226,8 @@ impl PartitionedService {
             let (tx, rx) = bounded(config.queue_capacity);
             partitions.push(tx);
 
-            let worker = PartitionWorker::new(
-                partition_id,
-                rx,
-                symbol_pool.clone(),
-                config.clone(),
-            );
+            let worker =
+                PartitionWorker::new(partition_id, rx, symbol_pool.clone(), config.clone());
 
             // Spawn worker thread
             let handle = thread::Builder::new()
@@ -455,8 +457,14 @@ mod tests {
         let service = PartitionedService::new(config);
 
         let symbols = vec![
-            "BTC/USD", "ETH/USD", "BNB/USD", "SOL/USD",
-            "ADA/USD", "XRP/USD", "DOT/USD", "MATIC/USD",
+            "BTC/USD",
+            "ETH/USD",
+            "BNB/USD",
+            "SOL/USD",
+            "ADA/USD",
+            "XRP/USD",
+            "DOT/USD",
+            "MATIC/USD",
         ];
 
         let mut partition_counts = vec![0; 4];
@@ -489,7 +497,11 @@ mod tests {
             .map(|i| NewOrderRequest {
                 user_id: i,
                 symbol: Arc::from("BTC/USD"),
-                order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+                order_type: if i % 2 == 0 {
+                    OrderType::Buy
+                } else {
+                    OrderType::Sell
+                },
                 price: 50000,
                 quantity: 1,
             })

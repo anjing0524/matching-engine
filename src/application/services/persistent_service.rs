@@ -4,16 +4,14 @@
 /// - WAL记录所有订单操作
 /// - 定期创建快照
 /// - 启动时自动恢复状态
-
-use crate::domain::orderbook::{TickBasedOrderBook, ContractSpec};
-use crate::infrastructure::persistence::{
-    WalWriter, WalEntry, SnapshotWriter, RecoveryManager,
-    PersistenceConfig, PersistenceError,
-};
+use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use crate::infrastructure::persistence::snapshot::create_snapshot;
+use crate::infrastructure::persistence::{
+    PersistenceConfig, PersistenceError, RecoveryManager, SnapshotWriter, WalEntry, WalWriter,
+};
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
-use tracing::{info, warn, error};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tracing::{error, info, warn};
 
 /// 带持久化的匹配服务
 pub struct PersistentMatchingService {
@@ -68,7 +66,10 @@ impl PersistentMatchingService {
     }
 
     /// 从持久化状态恢复
-    pub fn recover(spec: ContractSpec, config: PersistenceConfig) -> Result<Self, PersistenceError> {
+    pub fn recover(
+        spec: ContractSpec,
+        config: PersistenceConfig,
+    ) -> Result<Self, PersistenceError> {
         info!("开始从持久化状态恢复...");
 
         // 创建恢复管理器
@@ -77,7 +78,10 @@ impl PersistentMatchingService {
         // 执行恢复
         let result = recovery.recover()?;
 
-        info!("恢复完成: last_seq={}, entries={}", result.last_seq, result.entry_count);
+        info!(
+            "恢复完成: last_seq={}, entries={}",
+            result.last_seq, result.entry_count
+        );
 
         // 创建订单簿
         let mut orderbook = TickBasedOrderBook::new(spec.clone());
@@ -116,7 +120,8 @@ impl PersistentMatchingService {
             config.wal_sync,
             config.wal_batch_size,
             config.wal_max_size,
-        )?.with_seq(result.last_seq + 1);
+        )?
+        .with_seq(result.last_seq + 1);
 
         // 创建快照写入器
         let snapshot_writer = SnapshotWriter::new(
@@ -222,10 +227,7 @@ impl PersistentMatchingService {
 
         // TODO: 序列化订单簿状态
         // 现在使用占位符数据
-        let orderbook_state = format!(
-            "Placeholder snapshot at seq {}",
-            wal_seq
-        ).into_bytes();
+        let orderbook_state = format!("Placeholder snapshot at seq {}", wal_seq).into_bytes();
 
         let snapshot = create_snapshot(wal_seq, orderbook_state);
         self.snapshot_writer.write(snapshot)?;
@@ -278,7 +280,7 @@ mod tests {
         let spec = ContractSpec::new("BTCUSDT", 1, 40000, 70000);
         let config = PersistenceConfig {
             data_dir: temp_dir.path().to_path_buf(),
-            wal_sync: false,  // 测试时禁用fsync以加快速度
+            wal_sync: false, // 测试时禁用fsync以加快速度
             ..Default::default()
         };
 
@@ -303,7 +305,7 @@ mod tests {
         drop(service);
 
         // 从持久化状态恢复
-        let recovered = PersistentMatchingService::recover(spec, config).unwrap();
+        let _recovered = PersistentMatchingService::recover(spec, config).unwrap();
 
         // 验证订单簿状态
         // TODO: 添加更多验证

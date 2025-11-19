@@ -1,3 +1,5 @@
+use crate::shared::collections::fast_bitmap::FastBitmap;
+use crate::shared::collections::ringbuffer::RingBuffer;
 /// 基于Tick的Array索引订单簿 - 期货交易专用优化
 ///
 /// 核心设计理念（基于期货行业特性）：
@@ -11,14 +13,11 @@
 /// - 连续内存遍历，极佳的缓存局部性
 /// - 预分配消除运行时分配
 /// - 预期比BTreeMap快50-80%
-
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
-use crate::shared::collections::ringbuffer::RingBuffer;
 use crate::shared::symbol_pool::SymbolPool;
-use crate::shared::collections::fast_bitmap::FastBitmap;
 use smallvec::SmallVec;
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// 订单节点
 #[derive(Clone, Debug)]
@@ -70,7 +69,7 @@ impl ContractSpec {
             tick_size,
             min_price,
             max_price,
-            queue_capacity: 2048,  // 增大容量以减少队列满的情况
+            queue_capacity: 2048, // 增大容量以减少队列满的情况
         }
     }
 }
@@ -124,7 +123,10 @@ pub struct TickBasedOrderBook {
 impl TickBasedOrderBook {
     /// 创建新的订单簿
     pub fn new(spec: ContractSpec) -> Self {
-        Self::with_symbol_pool(spec, Arc::clone(crate::shared::symbol_pool::global_symbol_pool()))
+        Self::with_symbol_pool(
+            spec,
+            Arc::clone(crate::shared::symbol_pool::global_symbol_pool()),
+        )
     }
 
     /// 使用指定符号池创建
@@ -226,7 +228,8 @@ impl TickBasedOrderBook {
                                 continue;
                             }
 
-                            let trade_qty = std::cmp::min(remaining_quantity, counter_order.quantity);
+                            let trade_qty =
+                                std::cmp::min(remaining_quantity, counter_order.quantity);
 
                             trades.push(TradeNotification {
                                 trade_id: 0,
@@ -234,7 +237,7 @@ impl TickBasedOrderBook {
                                 matched_price: price,
                                 matched_quantity: trade_qty,
                                 buyer_user_id: request.user_id,
-                                buyer_order_id: new_order_id,  // 使用预先分配的order_id
+                                buyer_order_id: new_order_id, // 使用预先分配的order_id
                                 seller_user_id: counter_order.user_id,
                                 seller_order_id: counter_order.order_id,
                                 timestamp: 0,
@@ -270,7 +273,12 @@ impl TickBasedOrderBook {
 
                 // 添加剩余订单到买单
                 if remaining_quantity > 0 {
-                    self.add_bid_order(request_idx, request.user_id, remaining_quantity, new_order_id);
+                    self.add_bid_order(
+                        request_idx,
+                        request.user_id,
+                        remaining_quantity,
+                        new_order_id,
+                    );
                 }
             }
             OrderType::Sell => {
@@ -303,7 +311,8 @@ impl TickBasedOrderBook {
                                 continue;
                             }
 
-                            let trade_qty = std::cmp::min(remaining_quantity, counter_order.quantity);
+                            let trade_qty =
+                                std::cmp::min(remaining_quantity, counter_order.quantity);
 
                             trades.push(TradeNotification {
                                 trade_id: 0,
@@ -313,7 +322,7 @@ impl TickBasedOrderBook {
                                 buyer_user_id: counter_order.user_id,
                                 buyer_order_id: counter_order.order_id,
                                 seller_user_id: request.user_id,
-                                seller_order_id: new_order_id,  // 使用预先分配的order_id
+                                seller_order_id: new_order_id, // 使用预先分配的order_id
                                 timestamp: 0,
                             });
 
@@ -347,7 +356,12 @@ impl TickBasedOrderBook {
 
                 // 添加剩余订单到卖单
                 if remaining_quantity > 0 {
-                    self.add_ask_order(request_idx, request.user_id, remaining_quantity, new_order_id);
+                    self.add_ask_order(
+                        request_idx,
+                        request.user_id,
+                        remaining_quantity,
+                        new_order_id,
+                    );
                 }
             }
         }
@@ -356,7 +370,7 @@ impl TickBasedOrderBook {
         let confirmation = if remaining_quantity > 0 {
             Some(OrderConfirmation {
                 user_id: request.user_id,
-                order_id: new_order_id,  // 使用预先分配的order_id
+                order_id: new_order_id, // 使用预先分配的order_id
             })
         } else {
             None
@@ -388,10 +402,13 @@ impl TickBasedOrderBook {
             eprintln!("Warning: Bid queue full at index {}", idx);
         } else {
             // 记录订单位置
-            self.order_locations.insert(order_id, OrderLocation {
-                price_idx: idx,
-                is_bid: true,
-            });
+            self.order_locations.insert(
+                order_id,
+                OrderLocation {
+                    price_idx: idx,
+                    is_bid: true,
+                },
+            );
         }
 
         // 设置位图标记
@@ -426,10 +443,13 @@ impl TickBasedOrderBook {
             eprintln!("Warning: Ask queue full at index {}", idx);
         } else {
             // 记录订单位置
-            self.order_locations.insert(order_id, OrderLocation {
-                price_idx: idx,
-                is_bid: false,
-            });
+            self.order_locations.insert(
+                order_id,
+                OrderLocation {
+                    price_idx: idx,
+                    is_bid: false,
+                },
+            );
         }
 
         // 设置位图标记
@@ -515,7 +535,10 @@ impl crate::domain::orderbook::traits::OrderBook for TickBasedOrderBook {
 
     fn cancel_order(&mut self, order_id: u64) -> Result<(), String> {
         // Step 1: 查找订单位置
-        let location = self.order_locations.get(&order_id).cloned()
+        let location = self
+            .order_locations
+            .get(&order_id)
+            .cloned()
             .ok_or_else(|| format!("Order {} not found", order_id))?;
 
         // Step 2: 获取对应的价格层队列
@@ -691,15 +714,19 @@ mod tests {
         let order_id = conf.unwrap().order_id;
 
         // 验证order_id在locations中（只有挂单才会被记录）
-        assert!(book.order_locations.contains_key(&order_id),
-                "Pending order should be in order_locations");
+        assert!(
+            book.order_locations.contains_key(&order_id),
+            "Pending order should be in order_locations"
+        );
 
         // 取消订单
         book.cancel_order(order_id).unwrap();
 
         // 验证order_locations已清理
-        assert!(!book.order_locations.contains_key(&order_id),
-                "order_locations should be cleaned after cancel");
+        assert!(
+            !book.order_locations.contains_key(&order_id),
+            "order_locations should be cleaned after cancel"
+        );
     }
 
     #[test]
@@ -734,8 +761,10 @@ mod tests {
         book.cancel_order(order_ids[1]).unwrap();
 
         // 验证第二个订单已从locations清理
-        assert!(!book.order_locations.contains_key(&order_ids[1]),
-                "Cancelled order should be removed from locations");
+        assert!(
+            !book.order_locations.contains_key(&order_ids[1]),
+            "Cancelled order should be removed from locations"
+        );
         assert_eq!(book.order_locations.len(), 2, "Should have 2 orders left");
 
         // 添加买单匹配剩余订单
@@ -744,13 +773,16 @@ mod tests {
             symbol: Arc::from("TEST"),
             order_type: OrderType::Buy,
             price: 1500,
-            quantity: 100,  // 正好匹配所有剩余订单（2个卖单 x 50 = 100）
+            quantity: 100, // 正好匹配所有剩余订单（2个卖单 x 50 = 100）
         };
 
         let (trades, conf) = book.match_order(buy);
 
         // 买单应该完全成交，无剩余挂单
-        assert!(conf.is_none(), "Buy order should be fully matched with no remainder");
+        assert!(
+            conf.is_none(),
+            "Buy order should be fully matched with no remainder"
+        );
 
         // 应该只有2笔成交（第1和第3个订单，第2个已取消）
         assert_eq!(trades.len(), 2, "Should have 2 trades (orders 1 and 3)");
@@ -758,16 +790,24 @@ mod tests {
         assert_eq!(trades[1].matched_quantity, 50);
 
         // 验证所有订单的locations都被清理
-        assert!(!book.order_locations.contains_key(&order_ids[0]),
-                "Matched order 1 should be removed");
-        assert!(!book.order_locations.contains_key(&order_ids[1]),
-                "Cancelled order 2 should still be removed");
-        assert!(!book.order_locations.contains_key(&order_ids[2]),
-                "Matched order 3 should be removed");
+        assert!(
+            !book.order_locations.contains_key(&order_ids[0]),
+            "Matched order 1 should be removed"
+        );
+        assert!(
+            !book.order_locations.contains_key(&order_ids[1]),
+            "Cancelled order 2 should still be removed"
+        );
+        assert!(
+            !book.order_locations.contains_key(&order_ids[2]),
+            "Matched order 3 should be removed"
+        );
 
         // 验证order_locations为空（无内存泄漏）
-        assert!(book.order_locations.is_empty(),
-                "order_locations should be empty after all orders matched/cancelled");
+        assert!(
+            book.order_locations.is_empty(),
+            "order_locations should be empty after all orders matched/cancelled"
+        );
     }
 
     #[test]

@@ -30,9 +30,10 @@
 /// let mut service = MatchingService::new(orderbook, cmd_rx, out_tx);
 /// service.run();
 /// ```
-
 use crate::domain::orderbook::OrderBook;
-use crate::shared::protocol::{CancelOrderRequest, NewOrderRequest, OrderConfirmation, TradeNotification};
+use crate::shared::protocol::{
+    CancelOrderRequest, NewOrderRequest, OrderConfirmation, TradeNotification,
+};
 use crate::shared::timestamp::get_fast_timestamp;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -133,7 +134,11 @@ impl<OB: OrderBook> MatchingService<OB> {
 
         if let Some(confirmation) = confirmation_opt {
             // If order is not fully matched, send confirmation for the resting order
-            if self.output_sender.send(EngineOutput::Confirmation(confirmation)).is_err() {
+            if self
+                .output_sender
+                .send(EngineOutput::Confirmation(confirmation))
+                .is_err()
+            {
                 eprintln!("输出通道已关闭，无法发送订单确认");
             }
         }
@@ -165,7 +170,7 @@ impl<OB: OrderBook> MatchingService<OB> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::orderbook::{TickBasedOrderBook, ContractSpec};
+    use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
     use crate::shared::protocol::OrderType;
     use std::sync::Arc;
     use tokio::sync::mpsc;
@@ -193,22 +198,26 @@ mod tests {
         let mut service = MatchingService::new(orderbook, cmd_rx, out_tx);
 
         // Send buy order
-        cmd_tx.send(EngineCommand::NewOrder(NewOrderRequest {
-            user_id: 1,
-            symbol: Arc::from("BTC/USD"),
-            order_type: OrderType::Buy,
-            price: 50000,
-            quantity: 10,
-        })).unwrap();
+        cmd_tx
+            .send(EngineCommand::NewOrder(NewOrderRequest {
+                user_id: 1,
+                symbol: Arc::from("BTC/USD"),
+                order_type: OrderType::Buy,
+                price: 50000,
+                quantity: 10,
+            }))
+            .unwrap();
 
         // Send sell order that matches
-        cmd_tx.send(EngineCommand::NewOrder(NewOrderRequest {
-            user_id: 2,
-            symbol: Arc::from("BTC/USD"),
-            order_type: OrderType::Sell,
-            price: 50000,
-            quantity: 10,
-        })).unwrap();
+        cmd_tx
+            .send(EngineCommand::NewOrder(NewOrderRequest {
+                user_id: 2,
+                symbol: Arc::from("BTC/USD"),
+                order_type: OrderType::Sell,
+                price: 50000,
+                quantity: 10,
+            }))
+            .unwrap();
 
         drop(cmd_tx); // Close command channel
 
@@ -228,7 +237,10 @@ mod tests {
             }
         }
 
-        assert_eq!(confirmation_count, 1, "Should have 1 confirmation (buy order)");
+        assert_eq!(
+            confirmation_count, 1,
+            "Should have 1 confirmation (buy order)"
+        );
         assert_eq!(trade_count, 1, "Should have 1 trade");
     }
 }

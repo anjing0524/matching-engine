@@ -244,7 +244,10 @@ impl FastBitmap {
 
     /// 统计设置的bit数量
     pub fn count_ones(&self) -> usize {
-        self.blocks.iter().map(|&block| block.count_ones() as usize).sum()
+        self.blocks
+            .iter()
+            .map(|&block| block.count_ones() as usize)
+            .sum()
     }
 }
 
@@ -266,11 +269,11 @@ mod tests {
         bitmap.set(64, true);
         bitmap.set(127, true);
 
-        assert_eq!(bitmap.get(0), true);
-        assert_eq!(bitmap.get(63), true);
-        assert_eq!(bitmap.get(64), true);
-        assert_eq!(bitmap.get(127), true);
-        assert_eq!(bitmap.get(1), false);
+        assert!(bitmap.get(0));
+        assert!(bitmap.get(63));
+        assert!(bitmap.get(64));
+        assert!(bitmap.get(127));
+        assert!(!bitmap.get(1));
 
         // 查找
         assert_eq!(bitmap.find_first_one(), Some(0));
@@ -331,7 +334,8 @@ mod tests {
     #[test]
     fn test_hardware_instructions() {
         // 验证硬件指令正确性
-        let block = 0b1010_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000u64;
+        let block =
+            0b1010_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000u64;
 
         // leading_zeros: 前导0的个数
         assert_eq!(block.leading_zeros(), 0); // 最高位是1
@@ -339,7 +343,8 @@ mod tests {
         // trailing_zeros: 尾部0的个数
         assert_eq!(block.trailing_zeros(), 61); // 最低位1在第61位
 
-        let block2 = 0b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0001u64;
+        let block2 =
+            0b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0001u64;
         assert_eq!(block2.leading_zeros(), 63);
         assert_eq!(block2.trailing_zeros(), 0);
     }

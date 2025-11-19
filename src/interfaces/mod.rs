@@ -6,6 +6,5 @@
 /// ## Modules
 /// - `cli`: Command-line interface (main.rs logic)
 /// - `tools`: Utility tools (load generator, etc.)
-
 pub mod cli;
 pub mod tools;

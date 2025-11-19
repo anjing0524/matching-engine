@@ -5,16 +5,15 @@
 /// 2. 无锁路由，crossbeam channel传输
 /// 3. CPU亲和性绑定，减少缓存失效
 /// 4. 批量处理，提高吞吐量
-
 use crate::legacy::orderbook::OrderBook;
 use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, TradeNotification};
 use crate::shared::symbol_pool::SymbolPool;
-use crossbeam::channel::{bounded, Sender, Receiver};
+use crossbeam::channel::{bounded, Receiver, Sender};
 use smallvec::SmallVec;
-use std::sync::Arc;
-use std::thread;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use std::thread;
 
 /// 分区配置
 #[derive(Clone)]
@@ -108,10 +107,8 @@ impl PartitionWorker {
 
         loop {
             // 批量接收订单，减少上下文切换
-            let batch: Vec<OrderRequest> = self.rx
-                .try_iter()
-                .take(self.config.batch_size)
-                .collect();
+            let batch: Vec<OrderRequest> =
+                self.rx.try_iter().take(self.config.batch_size).collect();
 
             if batch.is_empty() {
                 // 自适应等待策略
@@ -147,7 +144,10 @@ impl PartitionWorker {
 
         // 发送响应（如果需要）
         if let Some(response_tx) = order_req.response_tx {
-            let response = OrderResponse::Matched { trades: Box::new(trades), confirmation };
+            let response = OrderResponse::Matched {
+                trades: Box::new(trades),
+                confirmation,
+            };
             let _ = response_tx.send(response);
         }
     }
@@ -177,8 +177,14 @@ impl PartitionedEngine {
 
         // 预加载常见交易对
         symbol_pool.preload(&[
-            "BTC/USD", "ETH/USD", "BNB/USD", "SOL/USD",
-            "ADA/USD", "XRP/USD", "DOT/USD", "MATIC/USD",
+            "BTC/USD",
+            "ETH/USD",
+            "BNB/USD",
+            "SOL/USD",
+            "ADA/USD",
+            "XRP/USD",
+            "DOT/USD",
+            "MATIC/USD",
         ]);
 
         let mut partitions = Vec::with_capacity(config.partition_count);
@@ -189,12 +195,8 @@ impl PartitionedEngine {
             let (tx, rx) = bounded(config.queue_capacity);
             partitions.push(tx);
 
-            let worker = PartitionWorker::new(
-                partition_id,
-                rx,
-                symbol_pool.clone(),
-                config.clone(),
-            );
+            let worker =
+                PartitionWorker::new(partition_id, rx, symbol_pool.clone(), config.clone());
 
             // 启动worker线程
             let handle = thread::Builder::new()
@@ -319,7 +321,7 @@ impl PartitionedEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::protocol::{OrderType, NewOrderRequest};
+    use crate::shared::protocol::{NewOrderRequest, OrderType};
     use std::sync::Arc;
 
     #[test]
@@ -389,8 +391,14 @@ mod tests {
         let engine = PartitionedEngine::new(config);
 
         let symbols = vec![
-            "BTC/USD", "ETH/USD", "BNB/USD", "SOL/USD",
-            "ADA/USD", "XRP/USD", "DOT/USD", "MATIC/USD",
+            "BTC/USD",
+            "ETH/USD",
+            "BNB/USD",
+            "SOL/USD",
+            "ADA/USD",
+            "XRP/USD",
+            "DOT/USD",
+            "MATIC/USD",
         ];
 
         let mut partition_counts = vec![0; 4];

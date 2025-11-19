@@ -148,7 +148,7 @@ fn partitioned_engine_benchmark(c: &mut Criterion) {
 
                 let handle = thread::spawn(move || {
                     // 每个分区处理多个品种
-                    let symbols = vec![
+                    let symbols = [
                         format!("BTC/USD-P{}", partition_id),
                         format!("ETH/USD-P{}", partition_id),
                         format!("SOL/USD-P{}", partition_id),
