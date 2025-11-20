@@ -191,7 +191,10 @@ impl HighPerformanceService {
         let seq = self.wal_writer.next_seq();
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_else(|_| {
+                tracing::warn!("System time is before UNIX_EPOCH, using 0 as timestamp");
+                Duration::from_secs(0)
+            })
             .as_nanos() as u64;
 
         // 写入WAL（异步，不阻塞）

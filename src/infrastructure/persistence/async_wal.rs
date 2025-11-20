@@ -36,7 +36,7 @@ pub struct AsyncWalWriter {
     /// 消息发送通道
     tx: mpsc::UnboundedSender<WalMessage>,
     /// 后台任务句柄
-    _task_handle: tokio::task::JoinHandle<()>,
+    task_handle: Option<tokio::task::JoinHandle<()>>,
     /// 是否已关闭
     closed: Arc<AtomicBool>,
 }
@@ -135,7 +135,7 @@ impl AsyncWalWriter {
         Ok(Self {
             seq,
             tx,
-            _task_handle: task_handle,
+            task_handle: Some(task_handle),
             closed,
         })
     }
@@ -239,10 +239,15 @@ impl AsyncWalWriter {
     }
 
     /// 关闭WAL（同步等待刷盘完成）
-    pub async fn close(self) -> Result<()> {
+    pub async fn close(mut self) -> Result<()> {
         self.closed.store(true, Ordering::SeqCst);
         let _ = self.tx.send(WalMessage::Shutdown);
-        // 注意：task_handle会在drop时自动等待
+
+        // 等待后台任务完成
+        if let Some(handle) = self.task_handle.take() {
+            let _ = handle.await;
+        }
+
         Ok(())
     }
 

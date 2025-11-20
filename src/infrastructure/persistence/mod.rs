@@ -48,6 +48,9 @@ pub enum PersistenceError {
 
     #[error("Snapshot error: {0}")]
     Snapshot(String),
+
+    #[error("Lock poisoned: {0}")]
+    LockPoisoned(String),
 }
 
 pub type Result<T> = std::result::Result<T, PersistenceError>;

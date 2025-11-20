@@ -106,7 +106,9 @@ impl WalWriter {
         // 计算CRC32
         let crc = crc32fast::hash(&data);
 
-        let mut file = self.file.lock().unwrap();
+        let mut file = self.file.lock().map_err(|e| {
+            PersistenceError::LockPoisoned(format!("WAL file lock poisoned: {}", e))
+        })?;
 
         // 写入长度
         let len = data.len() as u32;
@@ -145,7 +147,9 @@ impl WalWriter {
 
     /// 强制刷盘
     pub fn flush(&mut self) -> Result<()> {
-        let mut file = self.file.lock().unwrap();
+        let mut file = self.file.lock().map_err(|e| {
+            PersistenceError::LockPoisoned(format!("WAL file lock poisoned during flush: {}", e))
+        })?;
         file.flush()?;
         if self.sync {
             file.get_mut().sync_all()?;
@@ -171,7 +175,9 @@ impl WalWriter {
         Self::write_header(&mut new_writer)?;
 
         // 替换文件
-        *self.file.lock().unwrap() = new_writer;
+        *self.file.lock().map_err(|e| {
+            PersistenceError::LockPoisoned(format!("WAL file lock poisoned during rotation: {}", e))
+        })? = new_writer;
         self.file_path = new_path;
         self.file_size = 8; // header size
         self.batch_count = 0;

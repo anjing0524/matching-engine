@@ -28,7 +28,12 @@ use prometheus::{
 
 lazy_static! {
     /// 全局Metrics实例
-    pub static ref METRICS: Metrics = Metrics::new();
+    ///
+    /// # Panics
+    /// 如果Prometheus指标注册失败，将在初始化时panic。
+    /// 这通常发生在指标被重复注册时，表示程序配置错误。
+    pub static ref METRICS: Metrics = Metrics::new()
+        .expect("Failed to initialize Prometheus metrics. This usually indicates duplicate metric registration.");
 }
 
 /// 撮合引擎核心指标
@@ -66,91 +71,86 @@ pub struct Metrics {
 
 impl Metrics {
     /// 创建新的Metrics实例
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
+    ///
+    /// # 错误
+    /// 如果Prometheus指标注册失败（例如重复注册），返回错误
+    pub fn new() -> Result<Self, prometheus::Error> {
+        Ok(Self {
             orders_total: register_counter_vec!(
                 "matching_engine_orders_total",
                 "Total number of orders received",
                 &["order_type", "symbol"]
-            )
-            .unwrap(),
+            )?,
 
             trades_total: register_counter_vec!(
                 "matching_engine_trades_total",
                 "Total number of trades executed",
                 &["symbol"]
-            )
-            .unwrap(),
+            )?,
 
             cancellations_total: register_counter_vec!(
                 "matching_engine_cancellations_total",
                 "Total number of order cancellations",
                 &["symbol", "status"]
-            )
-            .unwrap(),
+            )?,
 
             matching_duration: register_histogram_vec!(
                 "matching_engine_matching_duration_microseconds",
                 "Order matching duration in microseconds",
                 &["symbol"],
                 vec![1.0, 5.0, 10.0, 50.0, 100.0, 500.0, 1000.0, 5000.0]
-            )
-            .unwrap(),
+            )?,
 
             order_size: register_histogram_vec!(
                 "matching_engine_order_size",
                 "Order size distribution",
                 &["order_type"],
                 vec![1.0, 10.0, 100.0, 1000.0, 10_000.0, 100_000.0]
-            )
-            .unwrap(),
+            )?,
 
             orderbook_depth: register_gauge_vec!(
                 "matching_engine_orderbook_depth",
                 "Current orderbook depth",
                 &["symbol", "side"]
-            )
-            .unwrap(),
+            )?,
 
             active_connections: register_gauge_vec!(
                 "matching_engine_active_connections",
                 "Number of active client connections",
                 &["status"]
-            )
-            .unwrap(),
+            )?,
 
             message_rate: register_counter_vec!(
                 "matching_engine_messages_total",
                 "Total number of messages processed",
                 &["message_type"]
-            )
-            .unwrap(),
+            )?,
 
             errors_total: register_counter_vec!(
                 "matching_engine_errors_total",
                 "Total number of errors",
                 &["error_type"]
-            )
-            .unwrap(),
+            )?,
 
             partition_load: register_gauge_vec!(
                 "matching_engine_partition_load",
                 "Number of orders per partition",
                 &["partition_id"]
-            )
-            .unwrap(),
-        }
+            )?,
+        })
     }
 
     /// 导出Prometheus格式的指标
-    #[must_use]
-    pub fn export(&self) -> String {
+    ///
+    /// # 错误
+    /// 如果编码失败或输出不是有效的 UTF-8，返回错误
+    pub fn export(&self) -> Result<String, Box<dyn std::error::Error>> {
         let encoder = TextEncoder::new();
         let metric_families = prometheus::gather();
         let mut buffer = vec![];
-        encoder.encode(&metric_families, &mut buffer).unwrap();
-        String::from_utf8(buffer).unwrap()
+        encoder.encode(&metric_families, &mut buffer)?;
+        let result = String::from_utf8(buffer)?;
+        Ok(result)
     }
 
     /// 重置所有指标（仅用于测试）
@@ -170,6 +170,7 @@ impl Metrics {
 impl Default for Metrics {
     fn default() -> Self {
         Self::new()
+            .expect("Failed to create default Metrics: Prometheus metric registration failed")
     }
 }
 
@@ -186,7 +187,7 @@ mod tests {
             .inc();
 
         // 测试导出
-        let output = METRICS.export();
+        let output = METRICS.export().expect("Failed to export metrics");
         assert!(output.contains("matching_engine_orders_total"));
     }
 
@@ -198,7 +199,7 @@ mod tests {
             .with_label_values(&["TEST"])
             .observe(125.5);
 
-        let output = METRICS.export();
+        let output = METRICS.export().expect("Failed to export metrics");
         assert!(output.contains("matching_engine_matching_duration_microseconds"));
     }
 
@@ -211,7 +212,7 @@ mod tests {
             .set(100.0);
 
         // Note: 由于是全局共享，不能假设值精确匹配
-        let output = METRICS.export();
+        let output = METRICS.export().expect("Failed to export metrics");
         assert!(output.contains("matching_engine_orderbook_depth"));
     }
 }

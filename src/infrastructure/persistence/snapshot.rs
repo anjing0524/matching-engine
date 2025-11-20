@@ -13,7 +13,7 @@ use bincode::config::standard;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// 快照写入器
 pub struct SnapshotWriter {
@@ -311,7 +311,10 @@ impl SnapshotReader {
 pub fn create_snapshot(wal_seq: u64, orderbook_state: Vec<u8>) -> SnapshotData {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_else(|_| {
+            tracing::warn!("System time is before UNIX_EPOCH, using 0 as timestamp");
+            Duration::from_secs(0)
+        })
         .as_nanos() as u64;
 
     let checksum = crc32fast::hash(&orderbook_state) as u64;

@@ -73,8 +73,14 @@ impl ObservabilityServer {
 
 /// Prometheus metrics端点
 async fn metrics_handler() -> Response {
-    let metrics = METRICS.export();
-    (StatusCode::OK, metrics).into_response()
+    match METRICS.export() {
+        Ok(metrics) => (StatusCode::OK, metrics).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to export metrics: {}", e),
+        )
+            .into_response(),
+    }
 }
 
 /// 健康检查端点
