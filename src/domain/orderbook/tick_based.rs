@@ -462,7 +462,10 @@ impl TickBasedOrderBook {
         self.bid_bitmap.set(idx, true);
 
         // 更新最优买价
-        if self.best_bid_idx.is_none() || idx > self.best_bid_idx.unwrap() {
+        if self
+            .best_bid_idx
+            .map_or(true, |current_best| idx > current_best)
+        {
             self.best_bid_idx = Some(idx);
         }
     }
@@ -512,7 +515,10 @@ impl TickBasedOrderBook {
         self.ask_bitmap.set(idx, true);
 
         // 更新最优卖价
-        if self.best_ask_idx.is_none() || idx < self.best_ask_idx.unwrap() {
+        if self
+            .best_ask_idx
+            .map_or(true, |current_best| idx < current_best)
+        {
             self.best_ask_idx = Some(idx);
         }
     }

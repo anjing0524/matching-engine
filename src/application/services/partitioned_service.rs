@@ -19,7 +19,7 @@
 /// use matching_engine::application::services::{PartitionedService, PartitionConfig};
 ///
 /// let config = PartitionConfig::default(); // Uses CPU count
-/// let service = PartitionedService::new(config);
+/// let service = PartitionedService::new(config).expect("Failed to create service");
 ///
 /// service.submit_order(order).unwrap();
 /// ```
@@ -202,8 +202,10 @@ impl PartitionedService {
     ///
     /// # Arguments
     /// * `config` - Configuration for partitioning and performance tuning
-    #[must_use]
-    pub fn new(config: PartitionConfig) -> Self {
+    ///
+    /// # 错误
+    /// 如果无法创建工作线程（例如系统资源不足），返回错误
+    pub fn new(config: PartitionConfig) -> std::io::Result<Self> {
         // Use global symbol pool, shared across all partitions
         let symbol_pool = Arc::clone(crate::shared::symbol_pool::global_symbol_pool());
 
@@ -233,18 +235,17 @@ impl PartitionedService {
             // Spawn worker thread
             let handle = thread::Builder::new()
                 .name(format!("partition-{partition_id}"))
-                .spawn(move || worker.run())
-                .expect("Failed to spawn worker thread");
+                .spawn(move || worker.run())?;
 
             workers.push(handle);
         }
 
-        Self {
+        Ok(Self {
             partitions,
             symbol_pool,
             config,
             workers,
-        }
+        })
     }
 
     /// Submits an order asynchronously (fire-and-forget)
@@ -388,7 +389,7 @@ mod tests {
             contract_spec: ContractSpec::new("TEST", 1, 1000, 100_000),
         };
 
-        let service = PartitionedService::new(config);
+        let service = PartitionedService::new(config).expect("Failed to create service");
         assert_eq!(service.partition_count(), 4);
     }
 
@@ -402,7 +403,7 @@ mod tests {
             contract_spec: ContractSpec::new("TEST", 1, 1000, 100_000),
         };
 
-        let service = PartitionedService::new(config);
+        let service = PartitionedService::new(config).expect("Failed to create service");
 
         // Submit buy order
         let buy_order = NewOrderRequest {
@@ -438,7 +439,7 @@ mod tests {
     #[test]
     fn test_routing_consistency() {
         let config = PartitionConfig::default();
-        let service = PartitionedService::new(config);
+        let service = PartitionedService::new(config).expect("Failed to create service");
 
         let symbol = Arc::from("BTC/USD");
 
@@ -457,7 +458,7 @@ mod tests {
             partition_count: 4,
             ..Default::default()
         };
-        let service = PartitionedService::new(config);
+        let service = PartitionedService::new(config).expect("Failed to create service");
 
         let symbols = vec![
             "BTC/USD",
@@ -493,7 +494,7 @@ mod tests {
             contract_spec: ContractSpec::new("TEST", 1, 1000, 100_000),
         };
 
-        let service = PartitionedService::new(config);
+        let service = PartitionedService::new(config).expect("Failed to create service");
 
         // Create a batch of orders
         let orders: Vec<NewOrderRequest> = (0..100)
