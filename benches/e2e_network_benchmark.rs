@@ -3,8 +3,8 @@
 ///
 /// 这个基准测试暴露当前内存中基准的缺陷
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use std::hint::black_box;
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
+use std::hint::black_box;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;

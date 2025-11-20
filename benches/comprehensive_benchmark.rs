@@ -7,14 +7,12 @@
 /// 3. Network framing overhead (LengthDelimitedCodec)
 /// 4. Serialization costs (serde_json)
 /// 5. Price level lookups (BTreeMap performance)
-use criterion::{
-    criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
-};
-use std::hint::black_box;
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use matching_engine::legacy::orderbook::OrderBook;
 use matching_engine::shared::protocol::{
     NewOrderRequest, OrderConfirmation, OrderType, TradeNotification,
 };
+use std::hint::black_box;
 use std::sync::Arc;
 
 /// # 1. CORE MATCHING PERFORMANCE

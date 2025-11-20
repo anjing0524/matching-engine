@@ -14,11 +14,11 @@
 //! ```
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use std::hint::black_box;
 use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use matching_engine::shared::metrics::METRICS;
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use rand::Rng;
+use std::hint::black_box;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
