@@ -61,11 +61,14 @@ pub struct MiddlewareConfig {
 
 impl Default for MiddlewareConfig {
     fn default() -> Self {
+        // 使用 const 在编译时验证默认地址
+        const DEFAULT_LISTEN_ADDR: &str = "127.0.0.1:8080";
+
         Self {
             backend: BackendType::Tokio,
-            listen_addr: "127.0.0.1:8080"
+            listen_addr: DEFAULT_LISTEN_ADDR
                 .parse()
-                .expect("Default listen address should be valid"),
+                .expect("BUG: Default listen address constant is invalid - this is a compile-time configuration error"),
             buffer_size: 65536,
             rx_queue_depth: 1024,
             tx_queue_depth: 1024,
