@@ -7,6 +7,7 @@ use tokio::net::TcpStream;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 #[tokio::test]
+#[ignore] // This test requires a running server at 127.0.0.1:8080
 async fn test_basic_match() {
     // 确保服务器正在运行中
     let stream = TcpStream::connect("127.0.0.1:8080")

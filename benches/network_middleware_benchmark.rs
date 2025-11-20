@@ -5,7 +5,8 @@
 /// 2. 编解码器性能
 /// 3. 性能指标更新开销
 /// 4. 缓冲区池性能
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::hint::black_box;
 use matching_engine::infrastructure::network::buffer::{BufferPool, SharedBuffer};
 use matching_engine::infrastructure::network::codec::{BincodeCodec, Codec, LengthDelimitedCodec};
 use matching_engine::infrastructure::network::metrics::NetworkMetrics;

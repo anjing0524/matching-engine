@@ -1,25 +1,26 @@
 #![allow(deprecated)]
 /// Comprehensive Performance Benchmark Suite
 /// Tests all key components of the matching engine based on system design principles:
+///
 /// 1. OrderBook matching (core latency)
 /// 2. Memory allocation patterns (free list efficiency)
 /// 3. Network framing overhead (LengthDelimitedCodec)
 /// 4. Serialization costs (serde_json)
 /// 5. Price level lookups (BTreeMap performance)
 use criterion::{
-    black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
+    criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
 };
+use std::hint::black_box;
 use matching_engine::legacy::orderbook::OrderBook;
 use matching_engine::shared::protocol::{
     NewOrderRequest, OrderConfirmation, OrderType, TradeNotification,
 };
 use std::sync::Arc;
 
-/// ============================================================================
-/// 1. CORE MATCHING PERFORMANCE
-/// ============================================================================
-
+/// # 1. CORE MATCHING PERFORMANCE
+///
 /// Benchmark: Single order add (no matching)
+///
 /// Tests: OrderNode allocation + Vec.push + BTreeMap insertion
 fn bench_order_add_no_match(c: &mut Criterion) {
     let mut group = c.benchmark_group("OrderBook - Add Order (No Match)");
@@ -118,11 +119,10 @@ fn bench_partial_match(c: &mut Criterion) {
     group.finish();
 }
 
-/// ============================================================================
-/// 2. MEMORY POOL EFFICIENCY (Free List)
-/// ============================================================================
-
+/// # 2. MEMORY POOL EFFICIENCY (Free List)
+///
 /// Benchmark: Order lifecycle - add → remove → reuse
+///
 /// Tests: free list effectiveness
 fn bench_memory_pool_reuse(c: &mut Criterion) {
     let mut group = c.benchmark_group("OrderBook - Memory Pool Reuse");
@@ -168,10 +168,8 @@ fn bench_memory_pool_reuse(c: &mut Criterion) {
     group.finish();
 }
 
-/// ============================================================================
-/// 3. PRICE LEVEL LOOKUP PERFORMANCE (BTreeMap)
-/// ============================================================================
-
+/// # 3. PRICE LEVEL LOOKUP PERFORMANCE (BTreeMap)
+///
 /// Benchmark: Lookup time with varying depth
 fn bench_price_level_lookup(c: &mut Criterion) {
     let mut group = c.benchmark_group("OrderBook - Price Level Lookup");
@@ -218,10 +216,8 @@ fn bench_price_level_lookup(c: &mut Criterion) {
     group.finish();
 }
 
-/// ============================================================================
-/// 4. MULTIPLE ORDERS AT SAME PRICE (Linked List Traversal)
-/// ============================================================================
-
+/// # 4. MULTIPLE ORDERS AT SAME PRICE (Linked List Traversal)
+///
 /// Benchmark: FIFO matching at single price level
 fn bench_fifo_order_queue(c: &mut Criterion) {
     let mut group = c.benchmark_group("OrderBook - FIFO Queue");
@@ -268,11 +264,10 @@ fn bench_fifo_order_queue(c: &mut Criterion) {
     group.finish();
 }
 
-/// ============================================================================
-/// 5. ALLOCATION & DEALLOCATION COST
-/// ============================================================================
-
+/// # 5. ALLOCATION & DEALLOCATION COST
+///
 /// Benchmark: TradeNotification allocation
+///
 /// Tests: Vec<TradeNotification> growth cost
 fn bench_trade_allocation(c: &mut Criterion) {
     let mut group = c.benchmark_group("Performance - Trade Allocation");
@@ -308,10 +303,8 @@ fn bench_trade_allocation(c: &mut Criterion) {
     group.finish();
 }
 
-/// ============================================================================
-/// 6. SERIALIZATION COST (serde_json)
-/// ============================================================================
-
+/// # 6. SERIALIZATION COST (serde_json)
+///
 /// Benchmark: JSON serialization of messages
 fn bench_json_serialization(c: &mut Criterion) {
     let mut group = c.benchmark_group("Performance - JSON Serialization");
@@ -345,10 +338,8 @@ fn bench_json_serialization(c: &mut Criterion) {
     group.finish();
 }
 
-/// ============================================================================
-/// 7. WORST-CASE SCENARIOS
-/// ============================================================================
-
+/// # 7. WORST-CASE SCENARIOS
+///
 /// Benchmark: Worst-case price crossing (many matches)
 fn bench_worst_case_crossing(c: &mut Criterion) {
     let mut group = c.benchmark_group("OrderBook - Worst Case");

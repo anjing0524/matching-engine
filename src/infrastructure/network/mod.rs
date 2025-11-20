@@ -27,10 +27,13 @@ pub enum BackendType {
     /// Tokio异步I/O (默认)
     Tokio,
     /// io_uring高性能异步I/O
+    #[cfg(feature = "io-uring")]
     IoUring,
     /// DPDK用户态网络栈
+    #[cfg(feature = "dpdk")]
     Dpdk,
     /// FPGA硬件加速
+    #[cfg(feature = "fpga")]
     Fpga,
 }
 
