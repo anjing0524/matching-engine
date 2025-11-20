@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut codec = LengthDelimitedCodec::new(BincodeCodec::<ClientMessage>::new());
 
     // 测试订单
-    let orders = vec![
+    let orders = [
         // 买单
         NewOrderRequest {
             user_id: 1001,

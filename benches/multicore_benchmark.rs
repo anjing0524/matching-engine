@@ -13,7 +13,8 @@
 //! cargo bench --bench multicore_benchmark
 //! ```
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::hint::black_box;
 use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use matching_engine::shared::metrics::METRICS;
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType};

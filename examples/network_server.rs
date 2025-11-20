@@ -66,22 +66,23 @@ async fn main() {
         BackendType::Tokio => Box::new(
             matching_engine::infrastructure::network::backends::TokioTransport::new().unwrap(),
         ),
-        #[cfg(feature = "io-uring")]
-        BackendType::IoUring => {
-            let io_uring_config =
-                matching_engine::infrastructure::network::backends::IoUringConfig {
-                    queue_depth: middleware_config.rx_queue_depth as u32,
-                    buffer_size: middleware_config.buffer_size,
-                    buffer_pool_size: middleware_config.rx_queue_depth,
-                    ..Default::default()
-                };
-            Box::new(
-                matching_engine::infrastructure::network::backends::IoUringTransport::new(
-                    io_uring_config,
-                )
-                .unwrap(),
-            )
-        }
+        // io_uring backend is temporarily disabled - see backends/mod.rs
+        // #[cfg(feature = "io-uring")]
+        // BackendType::IoUring => {
+        //     let io_uring_config =
+        //         matching_engine::infrastructure::network::backends::IoUringConfig {
+        //             queue_depth: middleware_config.rx_queue_depth as u32,
+        //             buffer_size: middleware_config.buffer_size,
+        //             buffer_pool_size: middleware_config.rx_queue_depth,
+        //             ..Default::default()
+        //         };
+        //     Box::new(
+        //         matching_engine::infrastructure::network::backends::IoUringTransport::new(
+        //             io_uring_config,
+        //         )
+        //         .unwrap(),
+        //     )
+        // }
         #[cfg(feature = "dpdk")]
         BackendType::Dpdk => {
             let dpdk_config =
@@ -91,6 +92,7 @@ async fn main() {
                     .unwrap(),
             )
         }
+        #[allow(unreachable_patterns)]
         _ => panic!("Unsupported backend"),
     };
 

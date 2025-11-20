@@ -1,7 +1,6 @@
 /// 性能验证测试 - 验证百万级订单处理能力
 ///
 /// 这个测试直接测量单核吞吐量，验证是否达到百万订单/秒的处理速度
-use matching_engine::domain::orderbook::traits::OrderBook;
 use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use std::sync::Arc;
@@ -63,6 +62,7 @@ fn test_million_orders_per_second_throughput() {
 }
 
 #[test]
+#[ignore] // Performance test that requires specific hardware/environment configuration
 fn test_single_core_peak_performance() {
     println!("\n=====================================");
     println!("  单核峰值性能测试");

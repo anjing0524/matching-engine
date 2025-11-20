@@ -7,12 +7,13 @@
 /// 2. 吞吐量 (throughput)
 /// 3. CPU使用率 (cpu usage)
 /// 4. 并发连接数 (concurrent connections)
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::hint::black_box;
 use matching_engine::infrastructure::network::backends::TokioTransport;
 use matching_engine::infrastructure::network::buffer::SharedBuffer;
 use matching_engine::infrastructure::network::codec::{BincodeCodec, Codec, LengthDelimitedCodec};
 use matching_engine::infrastructure::network::traits::{
-    Connection, NetworkTransport, ZeroCopyBuffer,
+    NetworkTransport, ZeroCopyBuffer,
 };
 use matching_engine::shared::protocol::{ClientMessage, NewOrderRequest, OrderType};
 use std::sync::Arc;

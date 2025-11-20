@@ -1,14 +1,12 @@
 use bytes::{BufMut, BytesMut};
 /// Network Layer Performance Benchmarks
 /// Tests the zero-copy networking stack impact on total latency
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use std::hint::black_box;
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType, TradeNotification};
 use std::sync::Arc;
 
-/// ============================================================================
-/// 1. JSON SERIALIZATION COST
-/// ============================================================================
-
+/// # 1. JSON SERIALIZATION COST
 fn bench_json_encode_order_request(c: &mut Criterion) {
     let mut group = c.benchmark_group("Network - JSON Encode");
     group.throughput(Throughput::Bytes(300));
@@ -68,7 +66,6 @@ fn bench_json_encode_trade_notification(c: &mut Criterion) {
 /// ============================================================================
 /// 2. BYTESMUT BUFFER OPERATIONS
 /// ============================================================================
-
 fn bench_bytesmut_push(c: &mut Criterion) {
     let mut group = c.benchmark_group("Network - BytesMut Push");
     group.throughput(Throughput::Bytes(100));
@@ -110,7 +107,6 @@ fn bench_bytesmut_framing(c: &mut Criterion) {
 /// ============================================================================
 /// 3. COMBINED ENCODE/DECODE PIPELINE
 /// ============================================================================
-
 fn bench_full_request_pipeline(c: &mut Criterion) {
     let mut group = c.benchmark_group("Network - Full Request Pipeline");
 
@@ -176,7 +172,6 @@ fn bench_full_response_pipeline(c: &mut Criterion) {
 /// ============================================================================
 /// 4. BROADCAST CHANNEL SIMULATION
 /// ============================================================================
-
 fn bench_broadcast_string_clone(c: &mut Criterion) {
     let mut group = c.benchmark_group("Network - Broadcast Clone");
     group.throughput(Throughput::Bytes(300));

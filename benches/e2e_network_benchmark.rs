@@ -2,7 +2,8 @@
 /// 测试真实网络延迟，包括系统调用、内核处理等隐藏成本
 ///
 /// 这个基准测试暴露当前内存中基准的缺陷
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use std::hint::black_box;
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -14,23 +15,21 @@ fn start_echo_server(port: u16) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).expect("无法绑定服务器");
 
-        for stream in listener.incoming() {
-            if let Ok(mut stream) = stream {
-                // 为每个连接创建一个新线程来处理
-                thread::spawn(move || {
-                    let mut buffer = [0; 1024];
-                    // 在单个连接上循环处理多个请求
-                    while let Ok(n) = stream.read(&mut buffer) {
-                        if n == 0 {
-                            break; // 客户端关闭了连接
-                        }
-                        // 回显数据
-                        if stream.write_all(&buffer[..n]).is_err() {
-                            break; // 写入失败，客户端可能已断开
-                        }
+        for mut stream in listener.incoming().flatten() {
+            // 为每个连接创建一个新线程来处理
+            thread::spawn(move || {
+                let mut buffer = [0; 1024];
+                // 在单个连接上循环处理多个请求
+                while let Ok(n) = stream.read(&mut buffer) {
+                    if n == 0 {
+                        break; // 客户端关闭了连接
                     }
-                });
-            }
+                    // 回显数据
+                    if stream.write_all(&buffer[..n]).is_err() {
+                        break; // 写入失败，客户端可能已断开
+                    }
+                }
+            });
         }
     })
 }
@@ -40,34 +39,32 @@ fn start_matching_server(port: u16) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).expect("无法绑定服务器");
 
-        for stream in listener.incoming() {
-            if let Ok(mut stream) = stream {
-                // 为每个连接创建一个新线程来处理
-                thread::spawn(move || {
-                    let mut buffer = [0; 1024];
-                    // 在单个连接上循环处理多个请求
-                    while let Ok(n) = stream.read(&mut buffer) {
-                        if n == 0 {
-                            break; // 客户端关闭了连接
-                        }
-
-                        // 模拟JSON反序列化 + 匹配 + 序列化
-                        let _data = String::from_utf8_lossy(&buffer[..n]);
-
-                        // 模拟核心匹配逻辑 (~100 ns)
-                        let mut sum = 0u64;
-                        for i in 0..100 {
-                            sum = sum.wrapping_add(i);
-                        }
-
-                        // 模拟响应序列化
-                        let response = format!("{{\"result\":{}}}\n", sum);
-                        if stream.write_all(response.as_bytes()).is_err() {
-                            break; // 写入失败
-                        }
+        for mut stream in listener.incoming().flatten() {
+            // 为每个连接创建一个新线程来处理
+            thread::spawn(move || {
+                let mut buffer = [0; 1024];
+                // 在单个连接上循环处理多个请求
+                while let Ok(n) = stream.read(&mut buffer) {
+                    if n == 0 {
+                        break; // 客户端关闭了连接
                     }
-                });
-            }
+
+                    // 模拟JSON反序列化 + 匹配 + 序列化
+                    let _data = String::from_utf8_lossy(&buffer[..n]);
+
+                    // 模拟核心匹配逻辑 (~100 ns)
+                    let mut sum = 0u64;
+                    for i in 0..100 {
+                        sum = sum.wrapping_add(i);
+                    }
+
+                    // 模拟响应序列化
+                    let response = format!("{{\"result\":{}}}\n", sum);
+                    if stream.write_all(response.as_bytes()).is_err() {
+                        break; // 写入失败
+                    }
+                }
+            });
         }
     })
 }
@@ -157,7 +154,7 @@ fn bench_connection_reuse(c: &mut Criterion) {
 
             client.write_all(b"test").expect("写入失败");
             let mut buffer = [0; 1024];
-            client.read(&mut buffer).expect("读取失败");
+            let _ = client.read(&mut buffer).expect("读取失败");
             // 连接在这里关闭 (RAII)
         });
     });
