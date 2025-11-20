@@ -144,10 +144,13 @@ impl<OB: OrderBook> MatchingService<OB> {
         }
     }
 
-    /// Processes a cancel order request
+    /// Processes a cancel order request with authorization
     #[inline]
     fn process_cancel_order(&mut self, request: CancelOrderRequest) {
-        match self.orderbook.cancel_order(request.order_id) {
+        match self
+            .orderbook
+            .cancel_order(request.order_id, request.user_id)
+        {
             Ok(()) => {
                 tracing::debug!(
                     order_id = request.order_id,
@@ -160,7 +163,7 @@ impl<OB: OrderBook> MatchingService<OB> {
                     order_id = request.order_id,
                     user_id = request.user_id,
                     error = %e,
-                    "Failed to cancel order"
+                    "Failed to cancel order (unauthorized or not found)"
                 );
             }
         }

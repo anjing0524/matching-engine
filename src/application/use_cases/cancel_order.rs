@@ -84,14 +84,18 @@ pub struct CancelOrderUseCase<OB: OrderBook> {
 }
 
 impl<OB: OrderBook> CancelOrderUseCase<OB> {
-    /// Creates a new cancel order use case
+    /// Creates a new cancel order use case with authorization checking enabled
     ///
     /// # Arguments
     /// * `orderbook` - The orderbook implementation to use
+    ///
+    /// # Note
+    /// Authorization checking is now always enabled for security.
+    /// The orderbook verifies that the user requesting cancellation owns the order.
     pub fn new(orderbook: OB) -> Self {
         Self {
             orderbook,
-            check_authorization: false, // Disabled by default (requires order ownership tracking)
+            check_authorization: true, // Always enabled for production security
         }
     }
 
@@ -101,55 +105,63 @@ impl<OB: OrderBook> CancelOrderUseCase<OB> {
     /// * `orderbook` - The orderbook implementation to use
     ///
     /// # Note
-    /// Authorization checking requires the orderbook to track order ownership,
-    /// which is not yet implemented in TickBasedOrderBook.
+    /// This is an alias for `new()`. Authorization is always enabled.
+    #[deprecated(
+        since = "4.0.0",
+        note = "Use `new()` instead. Authorization is always enabled."
+    )]
     pub fn with_authorization(orderbook: OB) -> Self {
-        Self {
-            orderbook,
-            check_authorization: true,
-        }
+        Self::new(orderbook)
     }
 
     /// Executes the cancel order use case
     ///
     /// # Arguments
-    /// * `request` - The cancel order request
+    /// * `request` - The cancel order request containing order_id and user_id
     ///
     /// # Returns
     /// * `Ok(CancelOrderResult)` if cancellation succeeded or failed with known reason
-    /// * `Err(CancelOrderError)` for unexpected errors
+    /// * `Err(CancelOrderError)` for unexpected errors including authorization failures
     ///
     /// # Workflow
-    /// 1. Optionally check authorization
-    /// 2. Cancel the order via orderbook
-    /// 3. Return result
+    /// 1. Cancel the order via orderbook (with authorization check)
+    /// 2. Return result
+    ///
+    /// # Authorization
+    /// The orderbook automatically verifies that the requesting user owns the order.
+    /// Unauthorized cancellation attempts will result in an error.
     pub fn execute(
         &mut self,
         request: CancelOrderRequest,
     ) -> Result<CancelOrderResult, CancelOrderError> {
-        // Step 1: Authorization check (if enabled)
-        if self.check_authorization {
-            // TODO: Implement authorization check
-            // This requires the orderbook to track which user owns which order
-            // For now, we skip this check
-        }
-
-        // Step 2: Cancel the order
-        match self.orderbook.cancel_order(request.order_id) {
+        // Cancel the order with authorization check (performed by orderbook)
+        match self
+            .orderbook
+            .cancel_order(request.order_id, request.user_id)
+        {
             Ok(()) => Ok(CancelOrderResult {
                 success: true,
                 error: None,
                 order_id: request.order_id,
             }),
             Err(e) => {
+                // Check if error indicates authorization failure
+                if e.contains("not authorized") {
+                    Err(CancelOrderError::Unauthorized {
+                        order_id: request.order_id,
+                        user_id: request.user_id,
+                    })
+                }
                 // Check if error indicates order not found
-                if e.contains("not found") || e.contains("not yet implemented") {
+                else if e.contains("not found") || e.contains("not yet implemented") {
                     Ok(CancelOrderResult {
                         success: false,
                         error: Some(e),
                         order_id: request.order_id,
                     })
-                } else {
+                }
+                // Other errors
+                else {
                     Err(CancelOrderError::OrderbookError(e))
                 }
             }

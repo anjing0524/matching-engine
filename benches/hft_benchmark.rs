@@ -331,10 +331,10 @@ fn bench_market_maker_pattern(c: &mut Criterion) {
 
             // 取消订单（模拟报价更新）
             if let Some(conf) = conf_bid {
-                let _ = orderbook.cancel_order(conf.order_id);
+                let _ = orderbook.cancel_order(conf.order_id, 1);
             }
             if let Some(conf) = conf_ask {
-                let _ = orderbook.cancel_order(conf.order_id);
+                let _ = orderbook.cancel_order(conf.order_id, 1);
             }
 
             order_id_counter += 2;
@@ -488,7 +488,8 @@ fn bench_order_cancel_performance(c: &mut Criterion) {
                     |(mut orderbook, order_ids)| {
                         // Measure: 取消中间订单
                         let mid_order_id = order_ids[depth / 2];
-                        orderbook.cancel_order(mid_order_id)
+                        let mid_user_id = (depth / 2) as u64;
+                        orderbook.cancel_order(mid_order_id, mid_user_id)
                     },
                     criterion::BatchSize::SmallInput,
                 );
