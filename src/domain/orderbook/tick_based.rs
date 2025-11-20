@@ -464,7 +464,7 @@ impl TickBasedOrderBook {
         // 更新最优买价
         if self
             .best_bid_idx
-            .map_or(true, |current_best| idx > current_best)
+            .is_none_or(|current_best| idx > current_best)
         {
             self.best_bid_idx = Some(idx);
         }
@@ -517,7 +517,7 @@ impl TickBasedOrderBook {
         // 更新最优卖价
         if self
             .best_ask_idx
-            .map_or(true, |current_best| idx < current_best)
+            .is_none_or(|current_best| idx < current_best)
         {
             self.best_ask_idx = Some(idx);
         }
