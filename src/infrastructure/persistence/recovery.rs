@@ -304,7 +304,11 @@ mod tests {
                     order: NewOrderRequest {
                         user_id: i,
                         symbol: Arc::from("BTCUSDT"),
-                        order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+                        order_type: if i % 2 == 0 {
+                            OrderType::Buy
+                        } else {
+                            OrderType::Sell
+                        },
                         price: 50000 + (i % 100),
                         quantity: 10,
                     },
@@ -326,7 +330,11 @@ mod tests {
             let result = recovery.recover().unwrap();
 
             // Should recover exactly the 500 flushed orders
-            assert_eq!(result.wal_entries.len(), 500, "Should recover exactly 500 flushed orders");
+            assert_eq!(
+                result.wal_entries.len(),
+                500,
+                "Should recover exactly 500 flushed orders"
+            );
             assert_eq!(result.last_seq, 499, "Last sequence should be 499");
 
             // Verify orderbook integrity - check first and last orders
@@ -345,7 +353,10 @@ mod tests {
             }
 
             // Verify data integrity
-            assert!(recovery.verify().unwrap(), "Data integrity should pass after recovery");
+            assert!(
+                recovery.verify().unwrap(),
+                "Data integrity should pass after recovery"
+            );
 
             println!("Mid-batch crash recovery test passed!");
             println!("  - Processed and flushed 500 orders");
@@ -355,7 +366,8 @@ mod tests {
 
         // Phase 4: Resume operations after recovery - process more orders
         {
-            let mut writer = WalWriter::new(data_dir.clone(), false, 100, 1024 * 1024).unwrap()
+            let mut writer = WalWriter::new(data_dir.clone(), false, 100, 1024 * 1024)
+                .unwrap()
                 .with_seq(500); // Continue from where we left off
 
             // Process next batch of 300 orders
@@ -367,7 +379,11 @@ mod tests {
                     order: NewOrderRequest {
                         user_id: i,
                         symbol: Arc::from("ETHUSDT"),
-                        order_type: if i % 2 == 0 { OrderType::Sell } else { OrderType::Buy },
+                        order_type: if i % 2 == 0 {
+                            OrderType::Sell
+                        } else {
+                            OrderType::Buy
+                        },
                         price: 3000 + (i % 50),
                         quantity: 5,
                     },
@@ -382,7 +398,11 @@ mod tests {
             let recovery = RecoveryManager::new(data_dir).unwrap();
             let result = recovery.recover().unwrap();
 
-            assert_eq!(result.wal_entries.len(), 800, "Should recover all 800 orders after resume");
+            assert_eq!(
+                result.wal_entries.len(),
+                800,
+                "Should recover all 800 orders after resume"
+            );
             assert_eq!(result.last_seq, 799, "Last sequence should be 799");
 
             println!("Post-recovery operations verified!");
@@ -513,9 +533,13 @@ mod tests {
                     order: NewOrderRequest {
                         user_id: i,
                         symbol: Arc::from("BTCUSDT"),
-                        order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+                        order_type: if i % 2 == 0 {
+                            OrderType::Buy
+                        } else {
+                            OrderType::Sell
+                        },
                         price: 45000 + (i % 5000), // Varied prices
-                        quantity: 1 + (i % 100),    // Varied quantities
+                        quantity: 1 + (i % 100),   // Varied quantities
                     },
                 };
                 writer.write(entry).unwrap();
@@ -558,11 +582,18 @@ mod tests {
             assert_eq!(result.snapshot.as_ref().unwrap().wal_seq, 5000);
 
             // Should replay only entries after snapshot (5001-9999)
-            assert_eq!(result.wal_entries.len(), 4999, "Should replay 4999 entries after snapshot");
+            assert_eq!(
+                result.wal_entries.len(),
+                4999,
+                "Should replay 4999 entries after snapshot"
+            );
             assert_eq!(result.last_seq, 9999, "Last sequence should be 9999");
 
             // Verify data integrity
-            assert!(recovery.verify().unwrap(), "Data integrity check should pass");
+            assert!(
+                recovery.verify().unwrap(),
+                "Data integrity check should pass"
+            );
 
             // Performance assertion: recovery should be fast
             assert!(
@@ -665,10 +696,16 @@ mod tests {
             assert_eq!(metadata["ask_levels"], 10, "Should have 10 ask levels");
             assert_eq!(metadata["best_bid"], 50000, "Best bid should be 50000");
             assert_eq!(metadata["best_ask"], 51000, "Best ask should be 51000");
-            assert_eq!(metadata["total_orders"], 100, "Should have 100 total orders");
+            assert_eq!(
+                metadata["total_orders"], 100,
+                "Should have 100 total orders"
+            );
 
             // Verify data integrity
-            assert!(recovery.verify().unwrap(), "Orderbook consistency check should pass");
+            assert!(
+                recovery.verify().unwrap(),
+                "Orderbook consistency check should pass"
+            );
 
             println!("Orderbook consistency verified successfully");
         }
@@ -706,13 +743,18 @@ mod tests {
         let first_recovery_seq = {
             let recovery = RecoveryManager::new(data_dir.clone()).unwrap();
             let result = recovery.recover().unwrap();
-            assert_eq!(result.wal_entries.len(), 100, "First recovery: should have 100 orders");
+            assert_eq!(
+                result.wal_entries.len(),
+                100,
+                "First recovery: should have 100 orders"
+            );
             result.last_seq
         };
 
         // Second batch: Continue from recovered state, add 200 more orders
         {
-            let mut writer = WalWriter::new(data_dir.clone(), true, 10, 1024 * 1024).unwrap()
+            let mut writer = WalWriter::new(data_dir.clone(), true, 10, 1024 * 1024)
+                .unwrap()
                 .with_seq(first_recovery_seq + 1);
 
             for i in 0..200 {
@@ -748,17 +790,25 @@ mod tests {
             let result = recovery.recover().unwrap();
 
             // Should have snapshot at seq 150
-            assert!(result.snapshot.is_some(), "Second recovery: should have snapshot");
+            assert!(
+                result.snapshot.is_some(),
+                "Second recovery: should have snapshot"
+            );
             assert_eq!(result.snapshot.as_ref().unwrap().wal_seq, 150);
 
             // Should replay entries after snapshot (151-299)
-            assert_eq!(result.wal_entries.len(), 149, "Should replay 149 entries after snapshot");
+            assert_eq!(
+                result.wal_entries.len(),
+                149,
+                "Should replay 149 entries after snapshot"
+            );
             result.last_seq
         };
 
         // Third batch: Add 50 more orders
         {
-            let mut writer = WalWriter::new(data_dir.clone(), true, 10, 1024 * 1024).unwrap()
+            let mut writer = WalWriter::new(data_dir.clone(), true, 10, 1024 * 1024)
+                .unwrap()
                 .with_seq(second_recovery_seq + 1);
 
             for i in 0..50 {
@@ -769,7 +819,11 @@ mod tests {
                     order: NewOrderRequest {
                         user_id: 300 + i,
                         symbol: Arc::from("BTCUSDT"),
-                        order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+                        order_type: if i % 2 == 0 {
+                            OrderType::Buy
+                        } else {
+                            OrderType::Sell
+                        },
                         price: 50000 + i,
                         quantity: 10,
                     },
@@ -785,14 +839,24 @@ mod tests {
             let result = recovery.recover().unwrap();
 
             // Should still have snapshot at 150
-            assert!(result.snapshot.is_some(), "Final recovery: should have snapshot");
+            assert!(
+                result.snapshot.is_some(),
+                "Final recovery: should have snapshot"
+            );
 
             // Should replay all entries after snapshot (151-349)
-            assert_eq!(result.wal_entries.len(), 199, "Final: should have 199 entries after snapshot");
+            assert_eq!(
+                result.wal_entries.len(),
+                199,
+                "Final: should have 199 entries after snapshot"
+            );
             assert_eq!(result.last_seq, 349, "Final sequence should be 349");
 
             // Verify data integrity after multiple crashes
-            assert!(recovery.verify().unwrap(), "Final integrity check should pass");
+            assert!(
+                recovery.verify().unwrap(),
+                "Final integrity check should pass"
+            );
 
             println!("Multiple crash recovery test passed!");
             println!("  - Survived 3 crashes");

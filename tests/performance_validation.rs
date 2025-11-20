@@ -47,7 +47,10 @@ fn test_million_orders_per_second_throughput() {
 
         println!("  ⏱️  总用时: {:.2}秒", elapsed_secs);
         println!("  📈 吞吐量: {:.2}M ops/s", ops_per_sec / 1_000_000.0);
-        println!("  ⚡ 平均延迟: {:.2}μs\n", elapsed.as_micros() as f64 / order_count as f64);
+        println!(
+            "  ⚡ 平均延迟: {:.2}μs\n",
+            elapsed.as_micros() as f64 / order_count as f64
+        );
 
         // 清空订单簿准备下一轮测试
         let spec = ContractSpec::new("BTC2501", 1, 40000, 70000);
@@ -73,7 +76,11 @@ fn test_single_core_peak_performance() {
         let order = NewOrderRequest {
             user_id: i,
             symbol: Arc::from("BTC2501"),
-            order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+            order_type: if i % 2 == 0 {
+                OrderType::Buy
+            } else {
+                OrderType::Sell
+            },
             price: 50000 + (i % 100),
             quantity: 10,
         };
@@ -116,14 +123,22 @@ fn test_single_core_peak_performance() {
     println!("  总订单数: {}", TOTAL_ORDERS);
     println!("  总用时: {:.3}秒", elapsed_secs);
     println!("  吞吐量: {:.2}M ops/s", ops_per_sec / 1_000_000.0);
-    println!("  平均延迟: {:.2}μs", elapsed.as_micros() as f64 / TOTAL_ORDERS as f64);
+    println!(
+        "  平均延迟: {:.2}μs",
+        elapsed.as_micros() as f64 / TOTAL_ORDERS as f64
+    );
 
     println!("\n✅ 性能验证:");
     if ops_per_sec >= 1_000_000.0 {
-        println!("  ✅ 达到百万级吞吐量目标！({:.2}M ops/s)", ops_per_sec / 1_000_000.0);
+        println!(
+            "  ✅ 达到百万级吞吐量目标！({:.2}M ops/s)",
+            ops_per_sec / 1_000_000.0
+        );
     } else {
-        println!("  ⚠️  未达到百万级目标 (当前: {:.2}M ops/s, 目标: ≥1.0M ops/s)",
-                 ops_per_sec / 1_000_000.0);
+        println!(
+            "  ⚠️  未达到百万级目标 (当前: {:.2}M ops/s, 目标: ≥1.0M ops/s)",
+            ops_per_sec / 1_000_000.0
+        );
     }
 
     println!("\n=====================================\n");

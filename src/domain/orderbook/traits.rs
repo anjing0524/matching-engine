@@ -188,7 +188,7 @@ pub trait OrderBook {
     ///         status.order_id, status.remaining_quantity);
     /// }
     /// ```
-    fn get_order_status(&self, order_id: u64) -> Option<OrderStatus> {
+    fn get_order_status(&self, _order_id: u64) -> Option<OrderStatus> {
         None // Default implementation
     }
 }
