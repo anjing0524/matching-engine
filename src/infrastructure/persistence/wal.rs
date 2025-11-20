@@ -371,7 +371,8 @@ mod tests {
 
         // 写入10,000条记录
         {
-            let mut writer = WalWriter::new(data_dir.clone(), false, 100, 1024 * 1024 * 1024).unwrap();
+            let mut writer =
+                WalWriter::new(data_dir.clone(), false, 100, 1024 * 1024 * 1024).unwrap();
 
             for i in 0..ENTRY_COUNT {
                 let seq = writer.next_seq();
@@ -381,7 +382,11 @@ mod tests {
                     order: NewOrderRequest {
                         user_id: i,
                         symbol: Arc::from("BTCUSDT"),
-                        order_type: if i % 2 == 0 { OrderType::Buy } else { OrderType::Sell },
+                        order_type: if i % 2 == 0 {
+                            OrderType::Buy
+                        } else {
+                            OrderType::Sell
+                        },
                         price: 50000 + (i % 1000),
                         quantity: 10 + (i % 100),
                     },
@@ -397,7 +402,11 @@ mod tests {
             let reader = WalReader::new(data_dir);
             let entries = reader.read_all().unwrap();
 
-            assert_eq!(entries.len(), ENTRY_COUNT as usize, "All entries must be recovered");
+            assert_eq!(
+                entries.len(),
+                ENTRY_COUNT as usize,
+                "All entries must be recovered"
+            );
 
             // 验证序列号连续性
             for (i, entry) in entries.iter().enumerate() {
@@ -447,10 +456,7 @@ mod tests {
         // 手动损坏文件中的数据（在CRC之后的数据区域）
         {
             let wal_path = data_dir.join("wal.000000.log");
-            let mut file = OpenOptions::new()
-                .write(true)
-                .open(&wal_path)
-                .unwrap();
+            let mut file = OpenOptions::new().write(true).open(&wal_path).unwrap();
 
             // 跳过header (8 bytes) 和第一个条目的元数据 (4+8+8+4=24 bytes)
             // 然后损坏实际数据
@@ -488,7 +494,7 @@ mod tests {
 
         // 创建writer并包装在Arc中以便多线程共享
         let writer = Arc::new(Mutex::new(
-            WalWriter::new(data_dir.clone(), false, 10, 1024 * 1024 * 1024).unwrap()
+            WalWriter::new(data_dir.clone(), false, 10, 1024 * 1024 * 1024).unwrap(),
         ));
 
         // 启动多个线程并发写入
@@ -541,7 +547,10 @@ mod tests {
             seqs.sort_unstable();
 
             for (i, &seq) in seqs.iter().enumerate() {
-                assert_eq!(seq, i as u64, "Sequence numbers must be unique and continuous");
+                assert_eq!(
+                    seq, i as u64,
+                    "Sequence numbers must be unique and continuous"
+                );
             }
         }
     }
@@ -642,10 +651,11 @@ mod tests {
             let start = Instant::now();
             let mut writer = WalWriter::new(
                 data_dir.join("sync"),
-                true,  // sync=true
-                1,     // batch_size=1 确保每次写入都fsync
-                1024 * 1024
-            ).unwrap();
+                true, // sync=true
+                1,    // batch_size=1 确保每次写入都fsync
+                1024 * 1024,
+            )
+            .unwrap();
 
             for i in 0..ENTRY_COUNT {
                 let seq = writer.next_seq();
@@ -673,8 +683,9 @@ mod tests {
                 data_dir.join("no_sync"),
                 false, // sync=false
                 1,     // batch_size=1
-                1024 * 1024
-            ).unwrap();
+                1024 * 1024,
+            )
+            .unwrap();
 
             for i in 0..ENTRY_COUNT {
                 let seq = writer.next_seq();
@@ -713,8 +724,10 @@ mod tests {
         println!("WAL fsync durability test:");
         println!("  sync=true  time: {:?}", sync_time);
         println!("  sync=false time: {:?}", no_sync_time);
-        println!("  Performance difference: {:.2}x",
-                 sync_time.as_secs_f64() / no_sync_time.as_secs_f64());
+        println!(
+            "  Performance difference: {:.2}x",
+            sync_time.as_secs_f64() / no_sync_time.as_secs_f64()
+        );
 
         // 验证sync=true的数据确实被持久化（即使在没有显式flush的情况下也应该可见）
         // 这通过前面的read_all测试已经验证

@@ -80,6 +80,7 @@ impl std::error::Error for CancelOrderError {}
 pub struct CancelOrderUseCase<OB: OrderBook> {
     orderbook: OB,
     /// Whether to check authorization (user owns order)
+    #[allow(dead_code)]
     check_authorization: bool,
 }
 
