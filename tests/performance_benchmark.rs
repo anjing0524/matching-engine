@@ -10,6 +10,7 @@ use tempfile::TempDir;
 
 /// 测试纯订单簿性能（无持久化）
 #[test]
+#[ignore] // 跳过基准测试以避免CI超时
 fn bench_pure_orderbook() {
     let spec = ContractSpec::new("BTCUSDT", 1, 40000, 70000);
     let mut orderbook = TickBasedOrderBook::new(spec);
@@ -47,6 +48,7 @@ fn bench_pure_orderbook() {
 
 /// 测试高性能服务（异步WAL + 订单簿）
 #[tokio::test]
+#[ignore] // 跳过基准测试以避免CI超时
 async fn bench_high_performance_service() {
     let temp_dir = TempDir::new().unwrap();
 
