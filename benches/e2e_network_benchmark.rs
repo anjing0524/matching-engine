@@ -2,12 +2,11 @@
 /// 测试真实网络延迟，包括系统调用、内核处理等隐藏成本
 ///
 /// 这个基准测试暴露当前内存中基准的缺陷
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
 use std::hint::black_box;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
 use std::thread;
 
 /// 启动简单的TCP回显服务器
@@ -121,7 +120,8 @@ fn bench_application_processing(c: &mut Criterion) {
             // 构造订单请求
             let order = NewOrderRequest {
                 user_id: 1,
-                symbol: Arc::from("BTC/USD"),
+                client_order_id: 0,
+                symbol: matching_engine::shared::SymbolId::intern("BTC/USD"),
                 order_type: OrderType::Buy,
                 price: 50000,
                 quantity: 100,

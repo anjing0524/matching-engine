@@ -3,7 +3,6 @@
 /// 这个测试直接测量单核吞吐量，验证是否达到百万订单/秒的处理速度
 use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
-use std::sync::Arc;
 use std::time::Instant;
 
 #[test]
@@ -31,7 +30,8 @@ fn test_million_orders_per_second_throughput() {
 
             let order = NewOrderRequest {
                 user_id: i as u64,
-                symbol: Arc::from("BTC2501"),
+                client_order_id: 0,
+                symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                 order_type,
                 price: 50000 + (i % 100) as u64,
                 quantity: 10,
@@ -75,7 +75,8 @@ fn test_single_core_peak_performance() {
     for i in 0..1000 {
         let order = NewOrderRequest {
             user_id: i,
-            symbol: Arc::from("BTC2501"),
+            client_order_id: 0,
+            symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
             order_type: if i % 2 == 0 {
                 OrderType::Buy
             } else {
@@ -106,7 +107,8 @@ fn test_single_core_peak_performance() {
 
         let order = NewOrderRequest {
             user_id: i as u64,
-            symbol: Arc::from("BTC2501"),
+            client_order_id: 0,
+            symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
             order_type,
             price: 50000 + (i % 100) as u64,
             quantity: 10,

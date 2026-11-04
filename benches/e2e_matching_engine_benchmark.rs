@@ -9,14 +9,11 @@
 /// 3. 不同订单类型性能
 /// 4. 并发连接处理能力
 /// 5. 内存使用效率
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
-use matching_engine::infrastructure::network::buffer::SharedBuffer;
-use matching_engine::infrastructure::network::codec::{BincodeCodec, Codec, LengthDelimitedCodec};
-use matching_engine::infrastructure::network::traits::ZeroCopyBuffer;
 use matching_engine::shared::protocol::{ClientMessage, NewOrderRequest, OrderType};
+use matching_engine::shared::wire::{decode, decode_frame, encode_frame, encode_to_vec};
 use std::hint::black_box;
-use std::sync::Arc;
 use std::time::Instant;
 
 /// 创建测试订单簿
@@ -40,21 +37,17 @@ fn create_test_order(
 ) -> NewOrderRequest {
     NewOrderRequest {
         user_id,
-        symbol: Arc::from("BTCUSDT"),
+        client_order_id: 0,
+        symbol: matching_engine::shared::SymbolId::intern("BTCUSDT"),
         order_type,
         price,
         quantity,
     }
 }
 
-/// 编码订单消息
+/// Encodes an order into a length-prefixed wire frame.
 fn encode_order(order: &NewOrderRequest) -> Vec<u8> {
-    let msg = ClientMessage::NewOrder(order.clone());
-    let mut codec = LengthDelimitedCodec::new(BincodeCodec::<ClientMessage>::new());
-    let mut buf = vec![0u8; 4096];
-    let size = codec.encode(&msg, &mut buf).unwrap();
-    buf.truncate(size);
-    buf
+    encode_frame(&ClientMessage::NewOrder(order.clone())).expect("encode failed")
 }
 
 /// 基准测试：订单编解码性能
@@ -72,22 +65,17 @@ fn bench_order_codec(c: &mut Criterion) {
 
     group.bench_function("decode_order", |b| {
         let encoded = encode_order(&order);
-        let mut codec = LengthDelimitedCodec::new(BincodeCodec::<ClientMessage>::new());
-
         b.iter(|| {
-            let decoded = codec.decode(&encoded).unwrap();
+            let decoded = decode_frame::<ClientMessage>(&encoded).unwrap();
             black_box(decoded);
         });
     });
 
     group.bench_function("encode_decode_roundtrip", |b| {
-        let mut codec = LengthDelimitedCodec::new(BincodeCodec::<ClientMessage>::new());
-        let mut buf = vec![0u8; 4096];
-
         b.iter(|| {
             let msg = ClientMessage::NewOrder(order.clone());
-            let size = codec.encode(&msg, &mut buf).unwrap();
-            let decoded = codec.decode(&buf[..size]).unwrap();
+            let payload = encode_to_vec(&msg).unwrap();
+            let decoded = decode::<ClientMessage>(&payload).unwrap();
             black_box(decoded);
         });
     });
@@ -143,47 +131,32 @@ fn bench_e2e_order_processing(c: &mut Criterion) {
 
     group.bench_function("full_pipeline_no_match", |b| {
         let mut ob = create_test_orderbook();
-        let mut codec = LengthDelimitedCodec::new(BincodeCodec::<ClientMessage>::new());
         let order = create_test_order(1001, OrderType::Buy, 50000, 100);
 
         b.iter(|| {
-            // 1. 编码
             let encoded = encode_order(&order);
+            let message = decode_frame::<ClientMessage>(&encoded).unwrap();
 
-            // 2. 创建零拷贝缓冲区
-            let buf = SharedBuffer::from_vec(encoded);
-
-            // 3. 解码
-            let decoded = codec.decode(buf.as_slice()).unwrap();
-
-            // 4. 提取订单
-            if let Some(ClientMessage::NewOrder(order)) = decoded {
-                // 5. 订单簿处理
-                let result = ob.match_order(order);
-                black_box(result);
+            if let ClientMessage::NewOrder(order) = message {
+                black_box(ob.match_order(order));
             }
         });
     });
 
     group.bench_function("full_pipeline_with_match", |b| {
         let mut ob = create_test_orderbook();
-        let mut codec = LengthDelimitedCodec::new(BincodeCodec::<ClientMessage>::new());
 
-        // 预先放入买单
         let buy_order = create_test_order(1001, OrderType::Buy, 50000, 1000);
         ob.match_order(buy_order);
 
         let sell_order = create_test_order(2001, OrderType::Sell, 50000, 100);
 
         b.iter(|| {
-            // 完整流程
             let encoded = encode_order(&sell_order);
-            let buf = SharedBuffer::from_vec(encoded);
-            let decoded = codec.decode(buf.as_slice()).unwrap();
+            let message = decode_frame::<ClientMessage>(&encoded).unwrap();
 
-            if let Some(ClientMessage::NewOrder(order)) = decoded {
-                let result = ob.match_order(order);
-                black_box(result);
+            if let ClientMessage::NewOrder(order) = message {
+                black_box(ob.match_order(order));
             }
         });
     });
@@ -227,20 +200,6 @@ fn bench_order_volumes(c: &mut Criterion) {
 /// 基准测试：内存效率
 fn bench_memory_efficiency(c: &mut Criterion) {
     let mut group = c.benchmark_group("memory_efficiency");
-
-    group.bench_function("zerocopy_buffer_reuse", |b| {
-        let order = create_test_order(1001, OrderType::Buy, 50000, 100);
-        let encoded = encode_order(&order);
-
-        b.iter(|| {
-            // 测试零拷贝缓冲区复用
-            let buf1 = SharedBuffer::from_vec(encoded.clone());
-            let buf2 = buf1.clone_ref();
-            let buf3 = buf2.clone_ref();
-
-            black_box((buf1, buf2, buf3));
-        });
-    });
 
     group.bench_function("orderbook_memory_reuse", |b| {
         b.iter(|| {

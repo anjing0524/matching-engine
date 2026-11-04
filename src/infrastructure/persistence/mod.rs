@@ -1,31 +1,37 @@
-pub mod async_wal;
-pub mod recovery;
+//! Persistence infrastructure.
+//!
+//! Durability is WAL-only: every accepted order and cancellation is appended to
+//! a CRC-checked, length-framed log before it is applied. The public durability
+//! seam is [`Journal`], which owns sequencing, framing, flush, and recovery;
+//! [`WalWriter`]/[`WalReader`]/[`RecoveryManager`] are implementation details.
+//! Recovery replays the log from the beginning, which keeps the persisted and
+//! in-memory states identical.
+pub mod journal;
+pub(crate) mod recovery;
 pub mod snapshot;
 pub mod types;
-/// 持久化基础设施模块
-///
-/// 提供完整的持久化和灾难恢复能力：
-/// - WAL (Write-Ahead Log): 预写日志，记录所有订单操作
-/// - Snapshot: 定期快照，保存完整订单簿状态
-/// - Recovery: 从快照和WAL恢复系统状态
-///
-/// ## 设计目标
-/// - **持久性**: 确保所有已确认的操作不会丢失
-/// - **性能**: 最小化对撮合延迟的影响（<1μs overhead）
-/// - **可靠性**: 支持崩溃恢复和数据完整性验证
-/// - **效率**: 使用二进制格式和批量刷盘
-pub mod wal;
+pub(crate) mod wal;
 
-pub use async_wal::AsyncWalWriter;
-pub use recovery::RecoveryManager;
-pub use snapshot::{SnapshotReader, SnapshotWriter};
-pub use types::{PersistenceConfig, SnapshotData, SnapshotMetadata, WalEntry, WalMetadata};
-pub use wal::{WalReader, WalWriter};
+pub use journal::{Journal, JournalRecovery};
+pub(crate) use recovery::RecoveryManager;
+pub use snapshot::Snapshot;
+pub use types::{PersistenceConfig, WalEntry, WalRecord};
+pub(crate) use wal::{WalReader, WalWriter, read_start_file, write_start_file};
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-/// 持久化错误类型
+/// Returns the path of WAL file number `file_num` inside `data_dir`.
+pub(crate) fn wal_path(data_dir: &Path, file_num: u64) -> PathBuf {
+    data_dir.join(format!("wal.{file_num:06}.log"))
+}
+
+/// Returns the path of the first-live-WAL-file manifest.
+pub(crate) fn wal_start_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("wal.start")
+}
+
+/// Persistence error type.
 #[derive(Debug, Error)]
 pub enum PersistenceError {
     #[error("IO error: {0}")]
@@ -39,18 +45,6 @@ pub enum PersistenceError {
 
     #[error("Corruption detected: {0}")]
     Corruption(String),
-
-    #[error("File not found: {0}")]
-    FileNotFound(PathBuf),
-
-    #[error("Invalid WAL entry")]
-    InvalidWalEntry,
-
-    #[error("Snapshot error: {0}")]
-    Snapshot(String),
-
-    #[error("Lock poisoned: {0}")]
-    LockPoisoned(String),
 }
 
 pub type Result<T> = std::result::Result<T, PersistenceError>;

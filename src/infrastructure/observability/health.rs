@@ -17,9 +17,8 @@
 //! }
 //! ```
 
-use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 健康状态
@@ -32,6 +31,24 @@ pub enum HealthStatus {
     Degraded,
     /// 不健康
     Unhealthy,
+}
+
+impl HealthStatus {
+    const fn code(self) -> u8 {
+        match self {
+            Self::Healthy => 0,
+            Self::Degraded => 1,
+            Self::Unhealthy => 2,
+        }
+    }
+
+    const fn from_code(code: u8) -> Self {
+        match code {
+            1 => Self::Degraded,
+            2 => Self::Unhealthy,
+            _ => Self::Healthy,
+        }
+    }
 }
 
 /// 健康检查响应
@@ -53,24 +70,20 @@ pub struct HealthResponse {
 /// 详细健康信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthDetails {
-    /// 内存使用率 (0-100)
-    pub memory_usage_percent: f64,
     /// 活跃连接数
     pub active_connections: usize,
     /// 总处理订单数
     pub total_orders: u64,
     /// 总成交数
     pub total_trades: u64,
-    /// 平均延迟（微秒）
-    pub avg_latency_us: f64,
 }
 
 /// 健康检查器
 pub struct HealthChecker {
     /// 启动时间
     start_time: SystemTime,
-    /// 当前状态
-    status: Arc<RwLock<HealthStatus>>,
+    /// 当前状态; health probes only read it, so an atomic avoids a lock.
+    status: AtomicU8,
     /// 版本号
     version: String,
 }
@@ -80,7 +93,7 @@ impl HealthChecker {
     pub fn new(version: impl Into<String>) -> Self {
         Self {
             start_time: SystemTime::now(),
-            status: Arc::new(RwLock::new(HealthStatus::Healthy)),
+            status: AtomicU8::new(HealthStatus::Healthy.code()),
             version: version.into(),
         }
     }
@@ -101,20 +114,20 @@ impl HealthChecker {
 
     /// 设置健康状态
     pub fn set_status(&self, status: HealthStatus) {
-        *self.status.write() = status;
+        self.status.store(status.code(), Ordering::Relaxed);
     }
 
-    /// 获取健康状态
+    /// Returns the current health status.
     #[must_use]
-    pub fn get_status(&self) -> HealthStatus {
-        *self.status.read()
+    pub fn status(&self) -> HealthStatus {
+        HealthStatus::from_code(self.status.load(Ordering::Relaxed))
     }
 
     /// 生成健康检查响应
     #[must_use]
     pub fn check_health(&self) -> HealthResponse {
         HealthResponse {
-            status: self.get_status(),
+            status: self.status(),
             uptime_seconds: self.uptime_seconds(),
             version: self.version.clone(),
             timestamp: Self::current_timestamp(),
@@ -126,7 +139,7 @@ impl HealthChecker {
     #[must_use]
     pub fn check_health_detailed(&self, details: HealthDetails) -> HealthResponse {
         HealthResponse {
-            status: self.get_status(),
+            status: self.status(),
             uptime_seconds: self.uptime_seconds(),
             version: self.version.clone(),
             timestamp: Self::current_timestamp(),
@@ -146,7 +159,7 @@ impl HealthChecker {
     /// 返回true表示可以接受流量
     #[must_use]
     pub fn check_readiness(&self) -> bool {
-        matches!(self.get_status(), HealthStatus::Healthy)
+        matches!(self.status(), HealthStatus::Healthy)
     }
 }
 
@@ -166,7 +179,7 @@ mod tests {
     fn test_health_checker_creation() {
         let checker = HealthChecker::new("1.0.0");
         assert_eq!(checker.version, "1.0.0");
-        assert_eq!(checker.get_status(), HealthStatus::Healthy);
+        assert_eq!(checker.status(), HealthStatus::Healthy);
     }
 
     #[test]
@@ -180,13 +193,13 @@ mod tests {
     #[test]
     fn test_status_change() {
         let checker = HealthChecker::new("1.0.0");
-        assert_eq!(checker.get_status(), HealthStatus::Healthy);
+        assert_eq!(checker.status(), HealthStatus::Healthy);
 
         checker.set_status(HealthStatus::Degraded);
-        assert_eq!(checker.get_status(), HealthStatus::Degraded);
+        assert_eq!(checker.status(), HealthStatus::Degraded);
 
         checker.set_status(HealthStatus::Unhealthy);
-        assert_eq!(checker.get_status(), HealthStatus::Unhealthy);
+        assert_eq!(checker.status(), HealthStatus::Unhealthy);
     }
 
     #[test]
@@ -206,11 +219,9 @@ mod tests {
     fn test_health_response_detailed() {
         let checker = HealthChecker::new("1.0.0");
         let details = HealthDetails {
-            memory_usage_percent: 45.2,
             active_connections: 10,
             total_orders: 1000,
             total_trades: 500,
-            avg_latency_us: 12.5,
         };
 
         let response = checker.check_health_detailed(details.clone());
@@ -218,7 +229,6 @@ mod tests {
         assert!(response.details.is_some());
 
         let resp_details = response.details.unwrap();
-        assert_eq!(resp_details.memory_usage_percent, 45.2);
         assert_eq!(resp_details.active_connections, 10);
     }
 

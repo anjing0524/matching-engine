@@ -243,11 +243,9 @@ impl FastBitmap {
         self.blocks.iter().all(|&block| block == 0)
     }
 
-    /// 清空所有bit
+    /// Clears all bits.
     pub fn clear(&mut self) {
-        for block in &mut self.blocks {
-            *block = 0;
-        }
+        self.blocks.fill(0);
     }
 
     /// 统计设置的bit数量

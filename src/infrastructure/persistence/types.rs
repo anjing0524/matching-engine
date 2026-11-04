@@ -1,152 +1,154 @@
-/// 持久化相关的数据类型
+//! Persistence data types and WAL entry encoding.
 use crate::shared::protocol::{
     CancelOrderRequest, NewOrderRequest, OrderConfirmation, TradeNotification,
 };
-use serde::{Deserialize, Serialize};
+use crate::shared::wire::{WireDecode, WireEncode, WireError, WireReader, WireWrite};
 use std::path::PathBuf;
 
-/// WAL日志条目
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Payload of one WAL record.
+#[derive(Debug, Clone)]
 pub enum WalEntry {
-    /// 新订单
-    NewOrder {
-        /// 序列号（单调递增）
-        seq: u64,
-        /// 时间戳（纳秒）
-        timestamp: u64,
-        /// 订单请求
-        order: NewOrderRequest,
-    },
-    /// 取消订单
-    CancelOrder {
-        seq: u64,
-        timestamp: u64,
-        cancel: CancelOrderRequest,
-    },
-    /// 成交记录
-    Trade {
-        seq: u64,
-        timestamp: u64,
-        trade: TradeNotification,
-    },
-    /// 订单确认
-    Confirmation {
-        seq: u64,
-        timestamp: u64,
-        confirmation: OrderConfirmation,
-    },
-    /// 检查点标记（用于快照）
-    Checkpoint {
-        seq: u64,
-        timestamp: u64,
-        snapshot_id: u64,
-    },
+    /// A new order was accepted.
+    NewOrder(NewOrderRequest),
+    /// A cancellation was accepted.
+    CancelOrder(CancelOrderRequest),
+    /// A trade was produced by matching.
+    Trade(TradeNotification),
+    /// An order rested in the book and was confirmed.
+    Confirmation(OrderConfirmation),
 }
 
-impl WalEntry {
-    /// 获取序列号
-    #[must_use]
-    pub fn seq(&self) -> u64 {
+impl WireEncode for WalEntry {
+    fn encode(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
         match self {
-            WalEntry::NewOrder { seq, .. }
-            | WalEntry::CancelOrder { seq, .. }
-            | WalEntry::Trade { seq, .. }
-            | WalEntry::Confirmation { seq, .. }
-            | WalEntry::Checkpoint { seq, .. } => *seq,
-        }
-    }
-
-    /// 获取时间戳
-    #[must_use]
-    pub fn timestamp(&self) -> u64 {
-        match self {
-            WalEntry::NewOrder { timestamp, .. }
-            | WalEntry::CancelOrder { timestamp, .. }
-            | WalEntry::Trade { timestamp, .. }
-            | WalEntry::Confirmation { timestamp, .. }
-            | WalEntry::Checkpoint { timestamp, .. } => *timestamp,
+            Self::NewOrder(order) => {
+                out.put_u8(0);
+                order.encode(out)
+            }
+            Self::CancelOrder(cancel) => {
+                out.put_u8(1);
+                cancel.encode(out)
+            }
+            Self::Trade(trade) => {
+                out.put_u8(2);
+                trade.encode(out)
+            }
+            Self::Confirmation(confirmation) => {
+                out.put_u8(3);
+                confirmation.encode(out)
+            }
         }
     }
 }
 
-/// 快照数据
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnapshotData {
-    /// 快照ID（时间戳）
-    pub snapshot_id: u64,
-    /// 对应的WAL序列号
-    pub wal_seq: u64,
-    /// 快照时间戳
+impl WireDecode for WalEntry {
+    fn decode(reader: &mut WireReader<'_>) -> Result<Self, WireError> {
+        match reader.read_u8()? {
+            0 => Ok(Self::NewOrder(NewOrderRequest::decode(reader)?)),
+            1 => Ok(Self::CancelOrder(CancelOrderRequest::decode(reader)?)),
+            2 => Ok(Self::Trade(TradeNotification::decode(reader)?)),
+            3 => Ok(Self::Confirmation(OrderConfirmation::decode(reader)?)),
+            tag => Err(WireError::InvalidTag {
+                type_name: "WalEntry",
+                tag,
+            }),
+        }
+    }
+}
+
+/// A WAL record: sequence number and timestamp live in the record frame, the
+/// [`WalEntry`] is the encoded payload.
+#[derive(Debug, Clone)]
+pub struct WalRecord {
+    /// Monotonically increasing sequence number.
+    pub seq: u64,
+    /// Wall-clock timestamp in nanoseconds.
     pub timestamp: u64,
-    /// 订单簿状态（序列化的JSON或二进制）
-    pub orderbook_state: Vec<u8>,
-    /// 校验和（用于完整性验证）
-    pub checksum: u64,
+    /// Entry payload.
+    pub entry: WalEntry,
 }
 
-/// 持久化配置
+/// Persistence configuration.
 #[derive(Debug, Clone)]
 pub struct PersistenceConfig {
-    /// 数据目录
+    /// Directory holding WAL files.
     pub data_dir: PathBuf,
 
-    /// WAL文件最大大小（字节）
+    /// Maximum WAL file size in bytes before rotating.
     pub wal_max_size: usize,
 
-    /// 是否同步刷盘（fsync）
+    /// Whether to fsync the WAL before acknowledging an order.
+    ///
+    /// `true` makes acknowledgements durable across power loss; `false` keeps
+    /// data in the OS page cache for higher throughput.
     pub wal_sync: bool,
 
-    /// 批量刷盘大小
-    pub wal_batch_size: usize,
+    /// Maximum number of client order ids remembered for idempotency.
+    /// `0` disables in-memory duplicate detection.
+    pub dedup_cache_size: usize,
 
-    /// 快照间隔（秒）
-    pub snapshot_interval_secs: u64,
-
-    /// 保留的快照数量
-    pub snapshot_retention: usize,
-
-    /// 是否压缩快照
-    pub snapshot_compression: bool,
+    /// Take a snapshot after this many WAL records (0 disables snapshots).
+    pub snapshot_every_records: u64,
 }
 
 impl Default for PersistenceConfig {
     fn default() -> Self {
         Self {
             data_dir: PathBuf::from("./data"),
-            wal_max_size: 64 * 1024 * 1024, // 64MB
+            wal_max_size: 64 * 1024 * 1024,
             wal_sync: true,
-            wal_batch_size: 10, // ⚠️ 降低到10以减少数据丢失窗口（之前是1000）
-            snapshot_interval_secs: 300, // 5分钟
-            snapshot_retention: 3,
-            snapshot_compression: true,
+            dedup_cache_size: 262_144,
+            snapshot_every_records: 0,
         }
     }
 }
 
-/// WAL元数据
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WalMetadata {
-    /// 文件序号
-    pub file_num: u64,
-    /// 起始序列号
-    pub start_seq: u64,
-    /// 结束序列号
-    pub end_seq: u64,
-    /// 条目数量
-    pub entry_count: u64,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shared::protocol::OrderType;
+    use crate::shared::wire::{decode, encode_to_vec};
 
-/// 快照元数据
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnapshotMetadata {
-    /// 快照ID
-    pub snapshot_id: u64,
-    /// 对应的WAL序列号
-    pub wal_seq: u64,
-    /// 创建时间戳
-    pub created_at: u64,
-    /// 文件大小
-    pub file_size: u64,
-    /// 校验和
-    pub checksum: u64,
+    #[test]
+    fn test_wal_entry_roundtrip() {
+        let entries = [
+            WalEntry::NewOrder(NewOrderRequest {
+                user_id: 1,
+                client_order_id: 0,
+                symbol: crate::shared::SymbolId::intern("BTCUSDT"),
+                order_type: OrderType::Buy,
+                price: 50_000,
+                quantity: 10,
+            }),
+            WalEntry::CancelOrder(CancelOrderRequest {
+                user_id: 1,
+                order_id: 2,
+            }),
+            WalEntry::Confirmation(OrderConfirmation {
+                order_id: 2,
+                user_id: 1,
+            }),
+        ];
+
+        for entry in entries {
+            let encoded = encode_to_vec(&entry).expect("failed to encode");
+            let decoded: WalEntry = decode(&encoded).expect("failed to decode");
+            assert_eq!(
+                std::mem::discriminant(&entry),
+                std::mem::discriminant(&decoded)
+            );
+        }
+    }
+
+    #[test]
+    fn test_invalid_wal_entry_tag() {
+        let error = decode::<WalEntry>(&[9]).unwrap_err();
+        assert!(matches!(
+            error,
+            WireError::InvalidTag {
+                type_name: "WalEntry",
+                tag: 9
+            }
+        ));
+    }
 }
