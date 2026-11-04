@@ -9,6 +9,7 @@ use crate::application::services::{
 use crate::domain::orderbook::ContractSpec;
 use crate::infrastructure::observability::ObservabilityServer;
 use crate::infrastructure::persistence::{PersistenceConfig, PersistenceError};
+use crate::interfaces::engine_ipc::{self, EngineIpcConfig};
 use crate::interfaces::gateway::{Gateway, GatewayConfig, GatewayError};
 use crate::interfaces::session::{self, SessionMetrics};
 use clap::Parser;
@@ -16,6 +17,8 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -71,7 +74,10 @@ pub struct CliConfig {
     pub dedup_cache_size: usize,
 
     /// Take a snapshot after this many WAL records (0 disables).
-    #[arg(long, default_value_t = 1_000_000)]
+    ///
+    /// Default is 0 so the matching thread never waits on a snapshot barrier;
+    /// enable it only when accepted restart latency matters more.
+    #[arg(long, default_value_t = 0)]
     pub snapshot_interval: u64,
 
     /// Maximum in-flight requests per client session; 1 preserves lowest latency.
@@ -82,6 +88,11 @@ pub struct CliConfig {
     /// deployment can tolerate losing the OS page cache on power loss).
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub wal_sync: bool,
+
+    /// Engine IPC Unix socket path. When set, run the matching engine without
+    /// accepting client TCP connections; a separate gateway process connects here.
+    #[arg(long)]
+    pub engine_uds: Option<PathBuf>,
 
     /// Data directory for WAL files.
     #[arg(short = 'd', long, default_value = "./data")]
@@ -258,10 +269,69 @@ fn run_server(config: CliConfig) -> Result<(), CliError> {
             batch_size: config.commit_batch_size,
             matching_core: config.matching_core,
             busy_poll: config.busy_poll,
-            async_fsync: config.async_fsync,
+            async_fsync: config.async_fsync || config.engine_uds.is_some(),
         },
     )?;
     let matching = runtime.handle();
+
+    if let Some(engine_uds) = config.engine_uds.clone() {
+        if config.metrics_port > 0 {
+            let server = ObservabilityServer::new(config.metrics_port);
+            thread::Builder::new()
+                .name("metrics-http".to_string())
+                .stack_size(256 * 1024)
+                .spawn(move || {
+                    if let Err(error) = server.run() {
+                        tracing::error!(%error, "observability server failed");
+                    }
+                })?;
+            println!(
+                "📊 Metrics/健康检查: http://127.0.0.1:{}",
+                config.metrics_port
+            );
+        }
+
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let ipc = engine_ipc::start(
+            EngineIpcConfig {
+                path: engine_uds.clone(),
+                max_connections: config.max_connections,
+            },
+            matching,
+            Arc::clone(&shutdown),
+        )?;
+        println!("🔌 Engine IPC: {}", engine_uds.display());
+
+        let mut signals = Signals::new([SIGINT, SIGTERM])?;
+        let (signal_tx, signal_rx) = std::sync::mpsc::channel();
+        thread::Builder::new()
+            .name("signals".to_string())
+            .spawn(move || {
+                if signals.forever().next().is_some() {
+                    let _ = signal_tx.send(());
+                }
+            })?;
+        let _ = signal_rx.recv();
+        shutdown.store(true, Ordering::Release);
+        let _ = ipc.join();
+        engine_ipc::cleanup(&engine_uds);
+        match runtime.shutdown() {
+            Ok(()) => return Ok(()),
+            Err(RuntimeError::Fatal(message)) => return Err(CliError::Fatal(message)),
+            Err(RuntimeError::WorkerPanicked | RuntimeError::Closed) => {
+                return Err(CliError::WorkerStopped);
+            }
+            Err(RuntimeError::Service(error)) => {
+                return Err(CliError::Persistence(match error {
+                    ServiceError::Persistence(error) => error,
+                    other => PersistenceError::Io(std::io::Error::other(other.to_string())),
+                }));
+            }
+            Err(RuntimeError::Persistence(error)) => {
+                return Err(CliError::Persistence(error));
+            }
+        }
+    }
 
     let addr = format!("{}:{}", config.host, config.port).parse()?;
     let gateway = Gateway::bind(GatewayConfig {
@@ -375,7 +445,7 @@ mod tests {
         assert_eq!(config.commit_batch_size, 256);
         assert_eq!(config.dedup_cache_size, 262_144);
         assert_eq!(config.max_in_flight, 1);
-        assert_eq!(config.snapshot_interval, 1_000_000);
+        assert_eq!(config.snapshot_interval, 0);
         assert!(!config.async_fsync);
         assert!(config.wal_sync);
         assert_eq!(config.log_level, "info");

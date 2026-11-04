@@ -8,5 +8,6 @@
 //! - [`gateway`]: accept loop, connection registry, limits, shutdown/fatal control
 //! - [`session`]: wire framing, order submission, reply encoding, latency metrics
 pub mod cli;
+pub mod engine_ipc;
 pub mod gateway;
 pub mod session;

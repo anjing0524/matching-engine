@@ -38,6 +38,10 @@ cargo build --release
 # 启动单品种持久化撮合服务（默认监听 127.0.0.1:8080）
 cargo run --release -- --data-dir ./data --symbol BTCUSDT
 
+# 两进程模式：独立撮合进程 + 独立事件驱动 gateway
+cargo run --release --bin matching-engine -- --engine-uds ./data/engine.sock --data-dir ./data --snapshot-interval 0
+cargo run --release --bin gateway -- --listen 127.0.0.1:8080 --engine-uds ./data/engine.sock
+
 # 查看全部参数
 cargo run --release -- --help
 
@@ -49,7 +53,7 @@ CLI 参数：`--host`、`--port`、`--queue-capacity`、`--log-level`、`--dry-r
 `--metrics-port`（默认 9090，0 表示关闭）、`--wal-sync`（默认 true）、`--data-dir`、
 `--symbol`、`--min-price`、`--max-price`、`--tick-size`、`--max-connections`、
 `--idle-timeout-secs`、`--commit-batch-size`（group commit）、`--dedup-cache-size`（幂等缓存）、
-`--max-in-flight`（每连接 pipelining 深度，默认 1）、`--snapshot-interval`（默认 1,000,000 条 WAL 记录，0 关闭）、`--busy-poll`（撮合线程空转等待命令）、`--async-fsync`（WAL flush 在撮合线程、fsync 在独立线程；快照前走 durability barrier）、`--matching-core`
+`--max-in-flight`（每连接 pipelining 深度，默认 1）、`--snapshot-interval`（默认 0 关闭，避免撮合线程等待快照 barrier）、`--busy-poll`（撮合线程空转等待命令）、`--async-fsync`（WAL flush 在撮合线程、fsync 在独立线程；快照前走 durability barrier）、`--matching-core`
 （需要以 `--features cpu-affinity` 构建）。
 
 示例客户端/服务端：
@@ -80,8 +84,12 @@ src/
 │   └── observability/            # 健康检查与 Prometheus HTTP 服务
 ├── interfaces/
 │   ├── cli/                      # 配置/装配/信号
-│   ├── gateway.rs                # accept 循环、连接注册表、限流、shutdown/fatal
-│   └── session.rs                # 分帧、提交、回执编码、每阶段延迟
+│   ├── engine_ipc.rs             # engine 侧 Unix socket IPC（gateway 转发协议）
+│   ├── gateway.rs                # 单进程阻塞 gateway（兼容路径）
+│   └── session.rs                # 单进程阻塞 session（兼容路径）
+├── bin/
+│   ├── gateway.rs                # 独立事件驱动 gateway（mio，固定线程数）
+│   └── load_generator.rs
 └── shared/                       # 协议、SymbolId intern、FastBitmap、纳秒直方图、时间戳、metrics
 ```
 
@@ -99,6 +107,28 @@ src/
    再由 `Journal::recover` 校验 CRC/序列号并重放 snapshot 之后的 WAL 尾段；
    仅允许截断最后一个未写完的记录，其余损坏均拒绝启动。
 6. 撤单通过 `order_id -> slab node` 索引直接摘链，O(1)，不再重建价位队列。
+
+### 进程边界：gateway 与 engine
+
+部署上推荐两个进程：
+
+```text
+client TCP ──► gateway 进程（mio event loop，固定线程数）
+                    │ Unix domain socket
+                    ▼
+              engine 进程（单写者撮合 + WAL）
+```
+
+- **gateway**：一个 `mio` event loop 管理 listener、上游 IPC 和所有客户端 fd；
+  每连接只有状态机/读写缓冲，不为连接创建线程；慢客户端受每连接写缓冲和
+  `--max-in-flight` 限制，不会反压撮合线程。
+- **engine**：`--engine-uds` 启动后不监听客户端 TCP，只接受 gateway 的 IPC；
+  IPC reader/writer 线程把网络与撮合线程隔离；engine 模式自动启用 async fsync，
+  默认关闭快照，避免撮合线程等待 fsync/snapshot barrier。
+- 单进程 `matching-engine --port` 路径保留用于测试/兼容，但生产部署应使用两进程。
+
+当前边界：编解码和 WAL page-cache 写入仍在 matching 线程；fsync/快照默认已移出。
+更彻底的做法是独立 journaler/snapshotter（见 [HFT 架构调研](docs/hft-architecture-research.md)）。
 
 ### 为什么去掉 Tokio / 不用 `Box<dyn Connection>`
 
@@ -245,9 +275,9 @@ cargo run --bin load_generator
 
 ### 运行与运维
 
-- 已有连接空闲超时（`--idle-timeout-secs`，0 关闭）、最大连接数
-  （`--max-connections`，默认 1024）；连接采用一连接一 OS 线程，会话数继续增长时
-  需要 epoll/io_uring 网关。仍缺少按用户/品种限流和 fd/CPU 配额。
+- 单进程兼容路径有连接空闲超时（`--idle-timeout-secs`，0 关闭）、最大连接数
+  （`--max-connections`，默认 1024），但仍是每连接一个 OS 线程；独立 `gateway`
+  路径使用固定 `mio` event-loop 线程，连接数不再转化为线程数。仍缺少按用户/品种限流和 fd/CPU 配额。
 - WAL 持久化失败会触发进程 fail-fast（而不是继续返回错误并保持 healthy）；健康端点
   本身没有 degraded 状态。
 - 没有 TLS/认证；订单里的 `user_id` 由客户端自报，仅用于撤单归属校验。
