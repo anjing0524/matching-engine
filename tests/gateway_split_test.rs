@@ -96,6 +96,8 @@ fn gateway_forwards_orders_to_separate_engine_process() {
                 socket.to_str().unwrap(),
                 "--max-in-flight",
                 "8",
+                "--io-threads",
+                "2",
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())

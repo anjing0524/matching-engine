@@ -1,9 +1,10 @@
 //! Event-driven front gateway.
 //!
-//! Fixed-thread count: one `mio` event loop manages the listener, one upstream
-//! Unix socket to the matching process, and every client connection. There is
-//! no thread per connection. Slow clients are bounded by per-connection write
-//! buffers and in-flight caps; the matching process is decoupled through IPC.
+//! Fixed-thread count: each `mio` event loop manages a listener, an upstream
+//! Unix socket to the matching process, and its client connections. The loop
+//! count is `--io-threads` and does not grow with connections. Slow clients are
+//! bounded by per-connection write buffers and in-flight caps; the matching
+//! process is decoupled through IPC.
 use clap::Parser;
 use matching_engine::interfaces::engine_ipc::{
     IpcRequest, MAX_IPC_PAYLOAD, decode_response, encode_request,
@@ -12,6 +13,7 @@ use mio::net::{TcpListener, TcpStream, UnixStream};
 use mio::{Events, Interest, Poll, Token};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
+use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
@@ -25,7 +27,7 @@ const LISTENER: Token = Token(0);
 const UPSTREAM: Token = Token(1);
 const FIRST_CLIENT: u64 = 2;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(name = "gateway")]
 #[command(about = "Event-driven front gateway for the matching engine")]
 struct Config {
@@ -56,6 +58,10 @@ struct Config {
     /// Poll timeout in milliseconds.
     #[arg(long, default_value_t = 10)]
     poll_timeout_ms: u64,
+
+    /// Number of fixeds event-loop threads. Each loop owns one engine IPC socket.
+    #[arg(long, default_value_t = 1)]
+    io_threads: usize,
 }
 
 struct Client {
@@ -100,18 +106,99 @@ fn main() {
 
 fn run() -> io::Result<()> {
     let config = Config::parse();
+    if config.io_threads == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--io-threads must be greater than zero",
+        ));
+    }
     let addr: SocketAddr = config
         .listen
         .parse()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    if addr.port() == 0 && config.io_threads > 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "port 0 cannot be combined with multiple io threads",
+        ));
+    }
 
-    let mut listener = TcpListener::bind(addr)?;
-    let local = listener.local_addr()?;
-    println!(
-        "gateway listening on {local}, engine {}",
-        config.engine_uds.display()
-    );
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let signal_flag = Arc::clone(&shutdown);
+    let mut signals = Signals::new([SIGINT, SIGTERM])?;
+    thread::Builder::new()
+        .name("gateway-signals".to_string())
+        .spawn(move || {
+            if signals.forever().next().is_some() {
+                signal_flag.store(true, Ordering::Release);
+            }
+        })?;
 
+    let config = Arc::new(config);
+    let mut handles = Vec::with_capacity(config.io_threads);
+    for loop_id in 0..config.io_threads {
+        let config = Arc::clone(&config);
+        let shutdown = Arc::clone(&shutdown);
+        let listener = bind_listener(addr, config.io_threads > 1)?;
+        let local = listener.local_addr()?;
+        println!(
+            "gateway loop {loop_id} listening on {local}, engine {}",
+            config.engine_uds.display()
+        );
+        handles.push(
+            thread::Builder::new()
+                .name(format!("gateway-io-{loop_id}"))
+                .spawn(move || run_loop(config, listener, shutdown))?,
+        );
+    }
+
+    let mut first_error: Option<io::Error> = None;
+    for handle in handles {
+        match handle.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                first_error.get_or_insert(error);
+                shutdown.store(true, Ordering::Release);
+            }
+            Err(_) => {
+                first_error.get_or_insert_with(error_from_join);
+                shutdown.store(true, Ordering::Release);
+            }
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn error_from_join() -> io::Error {
+    io::Error::other("gateway event loop terminated")
+}
+
+fn bind_listener(addr: SocketAddr, reuse_port: bool) -> io::Result<TcpListener> {
+    let domain = if addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_reuse_address(true)?;
+    if reuse_port {
+        socket.set_reuse_port(true)?;
+    }
+    socket.set_nonblocking(true)?;
+    socket.bind(&addr.into())?;
+    socket.listen(1024)?;
+    let listener: std::net::TcpListener = socket.into();
+    Ok(TcpListener::from_std(listener))
+}
+
+fn run_loop(
+    config: Arc<Config>,
+    mut listener: TcpListener,
+    shutdown: Arc<AtomicBool>,
+) -> io::Result<()> {
     let upstream_stream = connect_engine(&config.engine_uds)?;
     let mut upstream = Upstream {
         stream: upstream_stream,
@@ -125,17 +212,6 @@ fn run() -> io::Result<()> {
         .register(&mut listener, LISTENER, Interest::READABLE)?;
     poll.registry()
         .register(&mut upstream.stream, UPSTREAM, Interest::READABLE)?;
-
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let signal_flag = Arc::clone(&shutdown);
-    let mut signals = Signals::new([SIGINT, SIGTERM])?;
-    thread::Builder::new()
-        .name("gateway-signals".to_string())
-        .spawn(move || {
-            if signals.forever().next().is_some() {
-                signal_flag.store(true, Ordering::Release);
-            }
-        })?;
 
     let mut events = Events::with_capacity(4096);
     let mut clients: HashMap<Token, Client> = HashMap::new();

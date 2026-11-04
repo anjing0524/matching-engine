@@ -130,7 +130,7 @@ Aeron Archive/Chronicle Queue 都是"消息/日志持久化 + 回放"这个方�
 
 ### Phase B
 
-- gateway 多 event loop（SO_REUSEPORT 或 acceptor 分发）；
+- gateway 多 event loop：已实现 `--io-threads`（每个 loop 独立 SO_REUSEPORT listener + 上游 IPC）；
 - gateway→engine 从 UDS 换 shared-memory SPSC ring（或至少 `SOCK_SEQPACKET`）；
 - 每连接 in-flight 上限与显式 reject；
 - 引擎 IPC 背压指标。

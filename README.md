@@ -53,7 +53,7 @@ CLI 参数：`--host`、`--port`、`--queue-capacity`、`--log-level`、`--dry-r
 `--metrics-port`（默认 9090，0 表示关闭）、`--wal-sync`（默认 true）、`--data-dir`、
 `--symbol`、`--min-price`、`--max-price`、`--tick-size`、`--max-connections`、
 `--idle-timeout-secs`、`--commit-batch-size`（group commit）、`--dedup-cache-size`（幂等缓存）、
-`--max-in-flight`（每连接 pipelining 深度，默认 1）、`--snapshot-interval`（默认 0 关闭，避免撮合线程等待快照 barrier）、`--busy-poll`（撮合线程空转等待命令）、`--async-fsync`（WAL flush 在撮合线程、fsync 在独立线程；快照前走 durability barrier）、`--matching-core`
+`--max-in-flight`（每连接 pipelining 深度，默认 1）；gateway 另有 `--io-threads`（固定 event-loop 线程数，默认 1）、`--snapshot-interval`（默认 0 关闭，避免撮合线程等待快照 barrier）、`--busy-poll`（撮合线程空转等待命令）、`--async-fsync`（WAL flush 在撮合线程、fsync 在独立线程；快照前走 durability barrier）、`--matching-core`
 （需要以 `--features cpu-affinity` 构建）。
 
 示例客户端/服务端：
