@@ -503,10 +503,17 @@ pub fn start_ring(
                     while let Ok(pending) = receiver.recv() {
                         let (response, started) = build_pending(pending);
                         let encoded = encode_response(&response);
+                        let deadline = Instant::now() + Duration::from_millis(100);
                         loop {
                             match response_ring.try_push(&encoded) {
                                 Ok(()) => break,
-                                Err(PushError::Full) => std::hint::spin_loop(),
+                                Err(PushError::Full) if Instant::now() < deadline => {
+                                    std::hint::spin_loop();
+                                }
+                                Err(PushError::Full) => {
+                                    tracing::error!("ring response consumer is not draining");
+                                    break;
+                                }
                                 Err(PushError::TooLarge) => {
                                     tracing::error!("ring response exceeds slot size");
                                     break;

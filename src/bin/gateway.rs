@@ -7,8 +7,10 @@
 //! process is decoupled through IPC.
 use clap::Parser;
 use matching_engine::interfaces::engine_ipc::{
-    IpcRequest, MAX_IPC_PAYLOAD, decode_response, encode_request,
+    IpcRequest, MAX_IPC_PAYLOAD, RING_REQUEST_FILE, RING_RESPONSE_FILE, decode_response,
+    encode_request,
 };
+use matching_engine::shared::spsc_ring::{PushError, SpscRing};
 use mio::net::{TcpListener, TcpStream, UnixStream};
 use mio::{Events, Interest, Poll, Token};
 use signal_hook::consts::{SIGINT, SIGTERM};
@@ -21,7 +23,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const LISTENER: Token = Token(0);
 const UPSTREAM: Token = Token(1);
@@ -62,6 +64,10 @@ struct Config {
     /// Number of fixeds event-loop threads. Each loop owns one engine IPC socket.
     #[arg(long, default_value_t = 1)]
     io_threads: usize,
+
+    /// Use the engine shared-memory SPSC rings in this directory instead of UDS.
+    #[arg(long)]
+    ipc_ring_dir: Option<PathBuf>,
 }
 
 struct Client {
@@ -134,8 +140,23 @@ fn run() -> io::Result<()> {
             }
         })?;
 
+    if config.ipc_ring_dir.is_some() && config.io_threads > 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "shared-memory ring transport supports exactly one io thread",
+        ));
+    }
     let config = Arc::new(config);
     let connections = Arc::new(AtomicUsize::new(0));
+    if let Some(ring_dir) = config.ipc_ring_dir.clone() {
+        let listener = bind_listener(addr, false)?;
+        let local = listener.local_addr()?;
+        println!(
+            "gateway ring loop listening on {local}, rings {}",
+            ring_dir.display()
+        );
+        return run_ring_loop(config, listener, shutdown, connections, ring_dir);
+    }
     let mut handles = Vec::with_capacity(config.io_threads);
     for loop_id in 0..config.io_threads {
         let config = Arc::clone(&config);
@@ -249,6 +270,242 @@ fn run_loop(
                 }
             }
         }
+    }
+    Ok(())
+}
+
+struct RingTransport {
+    request: SpscRing,
+    response: SpscRing,
+    response_buf: Vec<u8>,
+}
+
+fn connect_rings(dir: &std::path::Path) -> io::Result<RingTransport> {
+    let request_path = dir.join(RING_REQUEST_FILE);
+    let response_path = dir.join(RING_RESPONSE_FILE);
+    let mut last = None;
+    for _ in 0..300 {
+        if request_path.exists() && response_path.exists() {
+            match (
+                SpscRing::open(&request_path),
+                SpscRing::open(&response_path),
+            ) {
+                (Ok(request), Ok(response)) => {
+                    return Ok(RingTransport {
+                        request,
+                        response,
+                        response_buf: Vec::with_capacity(16 * 1024),
+                    });
+                }
+                (request, response) => {
+                    last = request.err().or_else(|| response.err());
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    Err(last.unwrap_or_else(|| {
+        io::Error::new(io::ErrorKind::NotFound, "engine SPSC rings not available")
+    }))
+}
+
+fn run_ring_loop(
+    config: Arc<Config>,
+    mut listener: TcpListener,
+    shutdown: Arc<AtomicBool>,
+    connections: Arc<AtomicUsize>,
+    ring_dir: PathBuf,
+) -> io::Result<()> {
+    let mut ring = connect_rings(&ring_dir)?;
+    let mut poll = Poll::new()?;
+    poll.registry()
+        .register(&mut listener, LISTENER, Interest::READABLE)?;
+    let mut events = Events::with_capacity(4096);
+    let mut clients: HashMap<Token, Client> = HashMap::new();
+    let mut next_token = FIRST_CLIENT;
+    while !shutdown.load(Ordering::Acquire) {
+        // Poll timeout zero keeps the response ring latency bounded by the
+        // event-loop iteration rather than a timer.
+        poll.poll(&mut events, Some(Duration::ZERO))?;
+        for event in events.iter() {
+            match event.token() {
+                LISTENER => accept_clients(
+                    &mut listener,
+                    &mut poll,
+                    &mut clients,
+                    &mut next_token,
+                    &config,
+                    &connections,
+                )?,
+                token => {
+                    if !service_client_ring(
+                        token,
+                        &mut poll,
+                        &mut clients,
+                        &ring,
+                        &config,
+                        &shutdown,
+                    )? {
+                        clients.remove(&token);
+                        connections.fetch_sub(1, Ordering::AcqRel);
+                    }
+                }
+            }
+        }
+        drain_ring_responses(&mut ring, &mut poll, &mut clients, &config, &shutdown)?;
+        std::hint::spin_loop();
+    }
+    Ok(())
+}
+
+fn service_client_ring(
+    token: Token,
+    poll: &mut Poll,
+    clients: &mut HashMap<Token, Client>,
+    ring: &RingTransport,
+    config: &Config,
+    shutdown: &AtomicBool,
+) -> io::Result<bool> {
+    let Some(client) = clients.get_mut(&token) else {
+        return Ok(false);
+    };
+
+    if !client.write_buf.is_empty() {
+        while !client.write_buf.is_empty() {
+            match client.stream.write(&client.write_buf) {
+                Ok(0) => return Ok(false),
+                Ok(n) => {
+                    client.write_buf.drain(..n);
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => return Ok(false),
+            }
+        }
+    }
+
+    if !client.read_paused {
+        loop {
+            let mut buf = [0u8; 64 * 1024];
+            match client.stream.read(&mut buf) {
+                Ok(0) => return Ok(false),
+                Ok(n) => {
+                    client.read_buf.extend_from_slice(&buf[..n]);
+                    if client.read_buf.len() > config.max_client_buffer {
+                        return Ok(false);
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => return Ok(false),
+            }
+        }
+        while client.read_buf.len() >= 4 {
+            let len =
+                u32::from_be_bytes(client.read_buf[..4].try_into().expect("4 bytes")) as usize;
+            if len == 0 || len > MAX_IPC_PAYLOAD {
+                return Ok(false);
+            }
+            if client.read_buf.len() < 4 + len {
+                break;
+            }
+            if client.in_flight >= config.max_in_flight {
+                client.read_paused = true;
+                poll.registry().deregister(&mut client.stream)?;
+                client.registered = false;
+                break;
+            }
+            let payload = client.read_buf[4..4 + len].to_vec();
+            client.read_buf.drain(..4 + len);
+            let bytes = encode_request(&IpcRequest {
+                client_id: client.id,
+                payload,
+            });
+            let deadline = Instant::now() + Duration::from_millis(100);
+            loop {
+                match ring.request.try_push(&bytes) {
+                    Ok(()) => break,
+                    Err(PushError::Full) if Instant::now() < deadline => {
+                        std::hint::spin_loop();
+                    }
+                    Err(PushError::Full) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::WouldBlock,
+                            "engine ring is not draining",
+                        ));
+                    }
+                    Err(PushError::TooLarge) => return Ok(false),
+                }
+                if shutdown.load(Ordering::Acquire) {
+                    return Ok(false);
+                }
+            }
+            client.in_flight += 1;
+        }
+    }
+
+    if !client.registered && !client.read_paused {
+        let interest = client_interest(client);
+        poll.registry()
+            .register(&mut client.stream, token, interest)?;
+        client.registered = true;
+    }
+    if client.registered {
+        let interest = client_interest(client);
+        poll.registry()
+            .reregister(&mut client.stream, token, interest)?;
+    }
+    Ok(true)
+}
+
+fn drain_ring_responses(
+    ring: &mut RingTransport,
+    poll: &mut Poll,
+    clients: &mut HashMap<Token, Client>,
+    config: &Config,
+    shutdown: &AtomicBool,
+) -> io::Result<()> {
+    let mut unpaused: Vec<Token> = Vec::new();
+    loop {
+        if !ring.response.try_pop_into(&mut ring.response_buf) {
+            break;
+        }
+        let Some((response, _)) = decode_response(&ring.response_buf) else {
+            continue;
+        };
+        let token = Token(response.client_id as usize);
+        let Some(client) = clients.get_mut(&token) else {
+            continue;
+        };
+        for payload in response.payloads {
+            let needed = client.write_buf.len() + payload.len() + 4;
+            if needed > config.max_client_buffer {
+                return Ok(());
+            }
+            client
+                .write_buf
+                .extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            client.write_buf.extend_from_slice(&payload);
+        }
+        if client.in_flight > 0 {
+            client.in_flight -= 1;
+        }
+        if client.read_paused && client.in_flight < config.max_in_flight {
+            client.read_paused = false;
+            if !client.registered {
+                let interest = client_interest(client);
+                poll.registry()
+                    .register(&mut client.stream, token, interest)?;
+                client.registered = true;
+            }
+            unpaused.push(token);
+        }
+        let interest = client_interest(client);
+        poll.registry()
+            .reregister(&mut client.stream, token, interest)?;
+    }
+    for token in unpaused {
+        let _ = service_client_ring(token, poll, clients, ring, config, shutdown)?;
     }
     Ok(())
 }
