@@ -15,6 +15,18 @@ pub struct ReplicationBatch {
     pub records: Vec<WalRecord>,
 }
 
+/// One frame on the primary→standby replication stream.
+#[derive(Debug, Clone)]
+pub enum ReplicationFrame {
+    /// Committed records after a prior bootstrap/live point.
+    Live(ReplicationBatch),
+    /// Snapshot file bytes plus WAL tail for a late-joining standby.
+    Bootstrap {
+        snapshot: Vec<u8>,
+        records: Vec<WalRecord>,
+    },
+}
+
 pub fn encode_batch(batch: &ReplicationBatch) -> Result<Vec<u8>> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&(batch.records.len() as u32).to_be_bytes());
@@ -26,9 +38,29 @@ pub fn encode_batch(batch: &ReplicationBatch) -> Result<Vec<u8>> {
         payload.extend_from_slice(&(entry.len() as u32).to_be_bytes());
         payload.extend_from_slice(&entry);
     }
-    let mut out = Vec::with_capacity(4 + payload.len());
-    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    let mut out = Vec::with_capacity(5 + payload.len());
+    out.extend_from_slice(&((1 + payload.len()) as u32).to_be_bytes());
+    out.push(0);
     out.extend_from_slice(&payload);
+    Ok(out)
+}
+
+pub fn encode_bootstrap(snapshot: &[u8], records: &[WalRecord]) -> Result<Vec<u8>> {
+    let mut body = vec![1u8];
+    body.extend_from_slice(&(snapshot.len() as u32).to_be_bytes());
+    body.extend_from_slice(snapshot);
+    body.extend_from_slice(&(records.len() as u32).to_be_bytes());
+    for record in records {
+        body.extend_from_slice(&record.seq.to_be_bytes());
+        body.extend_from_slice(&record.timestamp.to_be_bytes());
+        let entry = encode_to_vec(&record.entry)
+            .map_err(|error| PersistenceError::Serialization(error.to_string()))?;
+        body.extend_from_slice(&(entry.len() as u32).to_be_bytes());
+        body.extend_from_slice(&entry);
+    }
+    let mut out = Vec::with_capacity(4 + body.len());
+    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    out.extend_from_slice(&body);
     Ok(out)
 }
 
@@ -72,6 +104,62 @@ pub fn decode_batch(body: &[u8]) -> Result<ReplicationBatch> {
     Ok(ReplicationBatch { records })
 }
 
+pub fn decode_frame(body: &[u8]) -> Result<ReplicationFrame> {
+    let Some((&tag, rest)) = body.split_first() else {
+        return Err(PersistenceError::Corruption(
+            "replication frame is truncated".to_string(),
+        ));
+    };
+    match tag {
+        0 => Ok(ReplicationFrame::Live(decode_batch(rest)?)),
+        1 => {
+            if rest.len() < 4 {
+                return Err(PersistenceError::Corruption(
+                    "replication bootstrap is truncated".to_string(),
+                ));
+            }
+            let snapshot_len = u32::from_be_bytes(rest[..4].try_into().expect("4 bytes")) as usize;
+            let snapshot_start: usize = 4;
+            let snapshot_end = snapshot_start.checked_add(snapshot_len).ok_or_else(|| {
+                PersistenceError::Corruption("replication snapshot length overflow".to_string())
+            })?;
+            let snapshot = rest
+                .get(snapshot_start..snapshot_end)
+                .ok_or_else(|| {
+                    PersistenceError::Corruption("replication snapshot is truncated".to_string())
+                })?
+                .to_vec();
+            let records = decode_batch(rest.get(snapshot_end..).ok_or_else(|| {
+                PersistenceError::Corruption(
+                    "replication bootstrap records are truncated".to_string(),
+                )
+            })?)?;
+            Ok(ReplicationFrame::Bootstrap {
+                snapshot,
+                records: records.records,
+            })
+        }
+        tag => Err(PersistenceError::Corruption(format!(
+            "unknown replication frame tag {tag}"
+        ))),
+    }
+}
+
+pub fn read_frame<R: Read>(reader: &mut R) -> Result<Option<ReplicationFrame>> {
+    let Some(len) = read_u32(reader)? else {
+        return Ok(None);
+    };
+    let len = len as usize;
+    if len > MAX_BATCH_BYTES {
+        return Err(PersistenceError::Corruption(format!(
+            "replication frame length {len} exceeds maximum"
+        )));
+    }
+    let mut body = vec![0u8; len];
+    reader.read_exact(&mut body)?;
+    Ok(Some(decode_frame(&body)?))
+}
+
 pub fn write_batch<W: Write>(writer: &mut W, batch: &ReplicationBatch) -> Result<()> {
     let encoded = encode_batch(batch)?;
     writer.write_all(&encoded)?;
@@ -80,18 +168,13 @@ pub fn write_batch<W: Write>(writer: &mut W, batch: &ReplicationBatch) -> Result
 }
 
 pub fn read_batch<R: Read>(reader: &mut R) -> Result<Option<ReplicationBatch>> {
-    let Some(len) = read_u32(reader)? else {
-        return Ok(None);
-    };
-    let len = len as usize;
-    if len > MAX_BATCH_BYTES {
-        return Err(PersistenceError::Corruption(format!(
-            "replication batch length {len} exceeds maximum"
-        )));
+    match read_frame(reader)? {
+        Some(ReplicationFrame::Live(batch)) => Ok(Some(batch)),
+        Some(ReplicationFrame::Bootstrap { .. }) => Err(PersistenceError::Corruption(
+            "unexpected bootstrap frame in live stream".to_string(),
+        )),
+        None => Ok(None),
     }
-    let mut body = vec![0u8; len];
-    reader.read_exact(&mut body)?;
-    Ok(Some(decode_batch(&body)?))
 }
 
 fn read_u32<R: Read>(reader: &mut R) -> io::Result<Option<u32>> {
@@ -138,10 +221,22 @@ mod tests {
     }
 
     #[test]
+    fn test_bootstrap_frame_roundtrip() {
+        let encoded = encode_bootstrap(b"snapshot-bytes", &batch().records).unwrap();
+        match decode_frame(&encoded[4..]).unwrap() {
+            ReplicationFrame::Bootstrap { snapshot, records } => {
+                assert_eq!(snapshot, b"snapshot-bytes");
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].seq, 7);
+            }
+            ReplicationFrame::Live(_) => panic!("expected bootstrap frame"),
+        }
+    }
+
+    #[test]
     fn test_replication_batch_roundtrip() {
         let encoded = encode_batch(&batch()).unwrap();
-        let decoded = decode_batch(&encoded[4..]).unwrap();
-        assert_eq!(decoded.records.len(), 1);
-        assert_eq!(decoded.records[0].seq, 7);
+        let decoded = decode_frame(&encoded[4..]).unwrap();
+        assert!(matches!(decoded, ReplicationFrame::Live(ref batch) if batch.records.len() == 1));
     }
 }

@@ -157,6 +157,7 @@ WAL。故障时停止 standby，用 `matching-engine --data-dir ./standby-data` 
 ./scripts/failover-drill.sh
 ./scripts/auto-failover-drill.sh
 ./scripts/lease-fencing-drill.sh
+./scripts/standby-catchup-drill.sh
 ```
 
 当前限制：
@@ -166,8 +167,11 @@ WAL。故障时停止 standby，用 `matching-engine --data-dir ./standby-data` 
 - 新增本地 `--lease-file` 独占锁：primary 持有 lease 时第二个 engine 拒绝启动，
   primary 崩溃后 OS 释放 lease，promotion 可获取。它只提供**本机/共享文件系统**
   的 fencing，不是分布式 lease/共识；
-- 没有历史 WAL catch-up：standby 必须在 primary 开始接收订单前连接，否则 primary
-  会拒绝迟到连接；接入已有 primary 前需离线复制 data directory；
+- 已有 bootstrap catch-up：迟到 standby 会收到 snapshot + WAL 前缀；如果 WAL 前缀
+  已被裁剪且没有 snapshot，primary 会拒绝 bootstrap；
+- standby data directory 目前要求为空/全新，不能把一个已有 WAL 的目录作为 bootstrap
+  目标；
+- bootstrap 队列在极端高流量下仍可能丢弃过慢的新 standby；需要更强的快照/追平控制面；
 - primary 的 replication channel 是异步有界队列，如果 standby 长期落后，可能丢弃
   副本而不是阻塞撮合；监控 `matching_engine_replication_lag_records`、
   `matching_engine_replication_connected`、`matching_engine_replication_dropped_batches`；
