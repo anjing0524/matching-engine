@@ -13,7 +13,7 @@
 //! cargo bench --bench multicore_benchmark
 //! ```
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use matching_engine::shared::metrics::METRICS;
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
@@ -38,8 +38,9 @@ fn generate_random_order(symbol: &str, rng: &mut impl Rng) -> NewOrderRequest {
     let quantity = rng.gen_range(1..100);
 
     NewOrderRequest {
-        user_id: rng.gen(),
-        symbol: Arc::from(symbol),
+        user_id: rng.r#gen(),
+        client_order_id: 0,
+        symbol: matching_engine::shared::SymbolId::intern(symbol),
         order_type,
         price,
         quantity,
@@ -65,9 +66,9 @@ fn single_core_benchmark(c: &mut Criterion) {
 
                 // 记录metrics
                 METRICS
-                    .matching_duration
+                    .matching_latency_ns
                     .with_label_values(&["BTC/USD"])
-                    .observe(duration.as_micros() as f64);
+                    .observe(duration.as_nanos() as f64);
             }
         });
     });

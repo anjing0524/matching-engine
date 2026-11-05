@@ -1,30 +1,23 @@
-pub mod circuit_breaker;
+//! Shared types and utilities used across layers.
+//!
+//! - [`protocol`]: wire protocol messages
+//! - [`collections`]: fast bitmap and other shared collections
+//! - [`timestamp`]: batched timestamp reads
+//! - [`metrics`]: Prometheus metrics
+//! - [`wire`]: compact binary codec used by the network and the WAL
+//! - [`latency`]: nanosecond latency percentiles
 pub mod collections;
+pub mod latency;
 pub mod metrics;
-/// Shared utilities and types used across all layers
-///
-/// This module contains:
-/// - Protocol definitions (messages, orders, trades)
-/// - Common data structures (symbol pool)
-/// - Utilities (timestamp, collections)
-/// - Trace context for distributed tracing
-/// - Retry mechanisms with exponential backoff
-/// - Circuit breaker pattern for fault tolerance
-/// - Error types
 pub mod protocol;
-pub mod retry;
-pub mod symbol_pool;
+pub mod symbol;
 pub mod timestamp;
-pub mod trace_context;
+pub mod wire;
 
-// Re-export commonly used types
-pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 pub use protocol::{
-    CancelOrderRequest, ClientMessage, NewOrderRequest, OrderConfirmation, OrderType,
-    ServerMessage, TradeNotification,
+    CancelOrderRequest, ClientMessage, ClientRequest, ErrorCode, NewOrderRequest,
+    OrderConfirmation, OrderType, PROTOCOL_VERSION, ServerMessage, ServerResponse,
+    TradeNotification,
 };
-
-pub use retry::{retry_async, retry_with_condition, retry_with_policy, RetryPolicy};
-pub use symbol_pool::SymbolPool;
+pub use symbol::SymbolId;
 pub use timestamp::get_fast_timestamp;
-pub use trace_context::TraceContext;

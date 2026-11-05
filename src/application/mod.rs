@@ -1,16 +1,6 @@
-pub mod dto;
+//! Application layer: services that orchestrate the domain.
+//!
+//! - [`services`]: matching runtime and persistent single-book engine
 pub mod services;
-/// Application Layer - Use Cases and Services
-///
-/// This layer orchestrates domain logic to implement application-specific
-/// business use cases. It depends on the domain layer but is independent
-/// of infrastructure details (thanks to dependency injection).
-///
-/// ## Modules
-/// - `use_cases`: High-level use case implementations
-/// - `services`: Application services (MatchingService, PartitionedService)
-/// - `dto`: Data Transfer Objects for cross-layer communication
-pub mod use_cases;
 
-// Re-export key services
-pub use services::{MatchingService, PartitionedService};
+pub use services::PersistentMatchingService;

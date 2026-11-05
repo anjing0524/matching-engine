@@ -45,7 +45,8 @@ fn chaos_test_concurrent_order_submission() {
                 // 构造订单
                 let order = shared::protocol::NewOrderRequest {
                     user_id: client_id as u64,
-                    symbol: Arc::from("CHAOS/TEST"),
+                    client_order_id: 0,
+                    symbol: matching_engine::shared::SymbolId::intern("CHAOS/TEST"),
                     order_type,
                     price,
                     quantity,
@@ -53,7 +54,7 @@ fn chaos_test_concurrent_order_submission() {
 
                 // 提交订单（可能失败）
                 let mut book = book.lock();
-                let (_trades, confirmation) = book.match_order(order);
+                let (_trades, confirmation) = book.match_order(order).into_parts();
                 if confirmation.is_some() {
                     successful_orders += 1;
                 } else {
@@ -111,7 +112,8 @@ fn chaos_test_random_cancellations() {
     for i in 0..100 {
         let order = shared::protocol::NewOrderRequest {
             user_id: 1,
-            symbol: Arc::from("CHAOS/TEST"),
+            client_order_id: 0,
+            symbol: matching_engine::shared::SymbolId::intern("CHAOS/TEST"),
             order_type: if i % 2 == 0 {
                 shared::protocol::OrderType::Buy
             } else {
@@ -121,7 +123,7 @@ fn chaos_test_random_cancellations() {
             quantity: 10,
         };
 
-        let (_trades, confirmation) = orderbook.match_order(order);
+        let (_trades, confirmation) = orderbook.match_order(order).into_parts();
         if let Some(conf) = confirmation {
             order_ids.push(conf.order_id);
         }
@@ -171,13 +173,14 @@ fn chaos_test_extreme_price_ranges() {
     for (price, quantity, desc) in test_cases {
         let order = shared::protocol::NewOrderRequest {
             user_id: 1,
-            symbol: Arc::from("CHAOS/TEST"),
+            client_order_id: 0,
+            symbol: matching_engine::shared::SymbolId::intern("CHAOS/TEST"),
             order_type: shared::protocol::OrderType::Buy,
             price,
             quantity,
         };
 
-        let (_trades, confirmation) = orderbook.match_order(order);
+        let (_trades, confirmation) = orderbook.match_order(order).into_parts();
 
         // 只记录结果，不做严格断言（混沌测试关注系统不崩溃）
         if confirmation.is_some() {
@@ -201,7 +204,8 @@ fn chaos_test_memory_pressure() {
     for i in 0..large_order_count {
         let order = shared::protocol::NewOrderRequest {
             user_id: (i % 100),
-            symbol: Arc::from("CHAOS/TEST"),
+            client_order_id: 0,
+            symbol: matching_engine::shared::SymbolId::intern("CHAOS/TEST"),
             order_type: if i % 2 == 0 {
                 shared::protocol::OrderType::Buy
             } else {
@@ -211,7 +215,7 @@ fn chaos_test_memory_pressure() {
             quantity: (i % 100 + 1),
         };
 
-        let (_trades, confirmation) = orderbook.match_order(order);
+        let (_trades, confirmation) = orderbook.match_order(order).into_parts();
         if confirmation.is_some() {
             successful += 1;
         }
@@ -247,13 +251,14 @@ fn chaos_test_rapid_order_churn() {
         // 提交新订单
         let order = shared::protocol::NewOrderRequest {
             user_id: 1,
-            symbol: Arc::from("CHAOS/TEST"),
+            client_order_id: 0,
+            symbol: matching_engine::shared::SymbolId::intern("CHAOS/TEST"),
             order_type: shared::protocol::OrderType::Buy,
             price: 10_000 + (i % 100) * 10,
             quantity: 10,
         };
 
-        let (_trades, confirmation) = orderbook.match_order(order);
+        let (_trades, confirmation) = orderbook.match_order(order).into_parts();
         if let Some(conf) = confirmation {
             order_ids.push(conf.order_id);
         }
@@ -295,7 +300,8 @@ fn chaos_test_stress_single_price_level() {
 
         let order = shared::protocol::NewOrderRequest {
             user_id: i as u64,
-            symbol: Arc::from("CHAOS/TEST"),
+            client_order_id: 0,
+            symbol: matching_engine::shared::SymbolId::intern("CHAOS/TEST"),
             order_type,
             price: same_price,
             quantity: 1,
@@ -332,7 +338,8 @@ fn chaos_test_concurrent_lock_contention() {
             for i in 0..ops_per_thread {
                 let order = shared::protocol::NewOrderRequest {
                     user_id: thread_id,
-                    symbol: Arc::from("CHAOS/TEST"),
+                    client_order_id: 0,
+                    symbol: matching_engine::shared::SymbolId::intern("CHAOS/TEST"),
                     order_type: if i % 2 == 0 {
                         shared::protocol::OrderType::Buy
                     } else {
@@ -343,7 +350,7 @@ fn chaos_test_concurrent_lock_contention() {
                 };
 
                 let mut book = book.lock();
-                let (_trades, confirmation) = book.match_order(order);
+                let (_trades, confirmation) = book.match_order(order).into_parts();
                 if confirmation.is_some() {
                     local_success += 1;
                 }

@@ -16,4 +16,4 @@ pub mod metrics_collector;
 
 pub use health::{HealthChecker, HealthDetails, HealthResponse, HealthStatus};
 pub use http_server::ObservabilityServer;
-pub use metrics_collector::{MetricsCollector, GLOBAL_METRICS};
+pub use metrics_collector::{GLOBAL_METRICS, MetricsCollector};

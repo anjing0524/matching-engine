@@ -1,200 +1,124 @@
-#![allow(deprecated)]
-//! Tick-based Array OrderBook vs BTreeMap性能对比
-
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+//! Tick-based order book benchmarks.
+//!
+//! Measures order entry, FIFO matching, best-price discovery, and deep-book
+//! behaviour of [`TickBasedOrderBook`].
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
-#[allow(deprecated)]
-use matching_engine::legacy::orderbook::OrderBook;
-#[allow(deprecated)]
-use matching_engine::legacy::orderbook_v2::OrderBookV2;
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
-use std::sync::Arc;
+use std::hint::black_box;
 
-fn generate_orders(count: usize, tick_size: u64, base_price: u64) -> Vec<NewOrderRequest> {
-    (0..count)
-        .map(|i| NewOrderRequest {
-            user_id: (i as u64) % 100,
-            symbol: Arc::from("rb2501"),
-            order_type: if i % 2 == 0 {
-                OrderType::Buy
-            } else {
-                OrderType::Sell
+fn order(user_id: u64, order_type: OrderType, price: u64, quantity: u64) -> NewOrderRequest {
+    NewOrderRequest {
+        user_id,
+        client_order_id: 0,
+        symbol: matching_engine::shared::SymbolId::intern("rb2501"),
+        order_type,
+        price,
+        quantity,
+    }
+}
+
+fn new_book(tick_size: u64, min_price: u64, max_price: u64) -> TickBasedOrderBook {
+    TickBasedOrderBook::new(ContractSpec::new("rb2501", tick_size, min_price, max_price))
+}
+
+/// Inserts crossing buy/sell orders to exercise the full matching path.
+fn bench_matching_throughput(c: &mut Criterion) {
+    let mut group = c.benchmark_group("matching_throughput");
+
+    for count in [100u64, 1_000, 10_000] {
+        group.throughput(Throughput::Elements(count));
+        group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, &count| {
+            b.iter(|| {
+                let mut book = new_book(10, 3_000, 4_000);
+                for i in 0..count {
+                    let side = if i % 2 == 0 {
+                        OrderType::Buy
+                    } else {
+                        OrderType::Sell
+                    };
+                    let price = 3_500 + (i % 50) * 10;
+                    let _ = book.match_order(black_box(order(i, side, price, 10)));
+                }
+            });
+        });
+    }
+
+    group.finish();
+}
+
+/// Adds orders that never cross so each one rests and is looked up later.
+fn bench_resting_orders(c: &mut Criterion) {
+    let mut group = c.benchmark_group("resting_orders");
+    group.throughput(Throughput::Elements(1_000));
+
+    group.bench_function("add_1000_levels", |b| {
+        b.iter(|| {
+            let mut book = new_book(1, 2_000, 12_000);
+            for i in 0..1_000 {
+                let _ = book.match_order(black_box(order(i, OrderType::Buy, 2_000 + i, 10)));
+            }
+            black_box(book.best_bid());
+        });
+    });
+
+    group.finish();
+}
+
+/// FIFO matching inside a single price level.
+fn bench_fifo_queue(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fifo_queue");
+
+    for depth in [10, 100, 1_000] {
+        group.throughput(Throughput::Elements(depth));
+        group.bench_with_input(BenchmarkId::from_parameter(depth), &depth, |b, &depth| {
+            b.iter_batched(
+                || {
+                    let mut book = new_book(1, 2_000, 12_000);
+                    for i in 0..depth {
+                        book.match_order(order(i, OrderType::Sell, 5_000, 10));
+                    }
+                    book
+                },
+                |mut book| {
+                    let _ = book.match_order(order(99_999, OrderType::Buy, 5_000, depth * 10));
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+    }
+
+    group.finish();
+}
+
+/// Cost of best-bid/best-ask discovery as the book grows.
+fn bench_best_price_lookup(c: &mut Criterion) {
+    let mut group = c.benchmark_group("best_price_lookup");
+
+    for levels in [10, 100, 1_000, 6_000] {
+        group.throughput(Throughput::Elements(levels));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(levels),
+            &levels,
+            |b, &levels| {
+                let mut book = new_book(1, 2_000, 12_000);
+                for i in 0..levels {
+                    book.match_order(order(i, OrderType::Buy, 2_000 + i, 10));
+                }
+
+                b.iter(|| black_box((book.best_bid(), book.best_ask())));
             },
-            // 确保价格在tick上
-            price: base_price + ((i % 100) as u64) * tick_size,
-            quantity: 10,
-        })
-        .collect()
-}
-
-fn bench_btreemap_linked_list(c: &mut Criterion) {
-    let mut group = c.benchmark_group("BTreeMap + Linked List");
-
-    for count in [100, 500, 1000] {
-        let orders = generate_orders(count, 10, 3000);
-        group.throughput(Throughput::Elements(count as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, _| {
-            b.iter(|| {
-                let mut book = OrderBook::new();
-                for order in &orders {
-                    let _ = book.match_order(black_box(order.clone()));
-                }
-            });
-        });
+        );
     }
-    group.finish();
-}
-
-fn bench_btreemap_ringbuffer(c: &mut Criterion) {
-    let mut group = c.benchmark_group("BTreeMap + RingBuffer");
-
-    for count in [100, 500, 1000] {
-        let orders = generate_orders(count, 10, 3000);
-        group.throughput(Throughput::Elements(count as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, _| {
-            b.iter(|| {
-                let mut book = OrderBookV2::new();
-                for order in &orders {
-                    let _ = book.match_order(black_box(order.clone()));
-                }
-            });
-        });
-    }
-    group.finish();
-}
-
-fn bench_array_ringbuffer(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Array + RingBuffer (Tick-based)");
-
-    for count in [100, 500, 1000] {
-        let orders = generate_orders(count, 10, 3000);
-        group.throughput(Throughput::Elements(count as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, _| {
-            b.iter(|| {
-                // 螺纹钢期货: tick=1, 价格范围2000-6000
-                let spec = ContractSpec::new("rb2501", 10, 2000, 6000);
-                let mut book = TickBasedOrderBook::new(spec);
-                for order in &orders {
-                    let _ = book.match_order(black_box(order.clone()));
-                }
-            });
-        });
-    }
-    group.finish();
-}
-
-/// 真实期货盘口场景：价格集中分布
-/// 特点：90%订单集中在最优价±20tick内，符合真实交易特征
-fn bench_realistic_futures(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Realistic Futures Market (concentrated prices)");
-
-    let mid_price = 3500u64;
-    let tick_size = 10u64;
-
-    // 生成1000个订单，90%集中在±20tick内
-    let mut orders = Vec::new();
-    for i in 0..1000 {
-        let (order_type, price_offset) = if i % 2 == 0 {
-            // 买单
-            (OrderType::Buy, -(i as i64 % 20))
-        } else {
-            // 卖单
-            (OrderType::Sell, i as i64 % 20)
-        };
-
-        // 90%订单在±20tick内，10%在±50tick内
-        let offset = if i < 900 {
-            price_offset // ±20 tick
-        } else {
-            price_offset * 2 + if i % 2 == 0 { -30 } else { 30 } // ±50 tick
-        };
-
-        let price = (mid_price as i64 + offset * tick_size as i64) as u64;
-
-        orders.push(NewOrderRequest {
-            user_id: i as u64,
-            symbol: Arc::from("rb2501"),
-            order_type,
-            price,
-            quantity: 10,
-        });
-    }
-
-    group.throughput(Throughput::Elements(1000));
-
-    group.bench_function("BTreeMap", |b| {
-        b.iter(|| {
-            let mut book = OrderBookV2::new();
-            for order in &orders {
-                let _ = book.match_order(black_box(order.clone()));
-            }
-        });
-    });
-
-    group.bench_function("Array", |b| {
-        b.iter(|| {
-            // 价格范围覆盖±100tick
-            let spec = ContractSpec::new("rb2501", tick_size, mid_price - 1000, mid_price + 1000);
-            let mut book = TickBasedOrderBook::new(spec);
-            for order in &orders {
-                let _ = book.match_order(black_box(order.clone()));
-            }
-        });
-    });
-
-    group.finish();
-}
-
-/// 深度测试：大量价格层
-fn bench_deep_orderbook(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Deep OrderBook (1000 price levels)");
-
-    // 生成分散在1000个价格层的订单
-    let orders: Vec<_> = (0..1000)
-        .map(|i| NewOrderRequest {
-            user_id: i as u64,
-            symbol: Arc::from("rb2501"),
-            order_type: if i % 2 == 0 {
-                OrderType::Buy
-            } else {
-                OrderType::Sell
-            },
-            price: 2000 + (i as u64) * 10, // 每个价格一个订单
-            quantity: 10,
-        })
-        .collect();
-
-    group.throughput(Throughput::Elements(1000));
-
-    group.bench_function("BTreeMap", |b| {
-        b.iter(|| {
-            let mut book = OrderBook::new();
-            for order in &orders {
-                let _ = book.match_order(black_box(order.clone()));
-            }
-        });
-    });
-
-    group.bench_function("Array", |b| {
-        b.iter(|| {
-            let spec = ContractSpec::new("rb2501", 10, 2000, 12000);
-            let mut book = TickBasedOrderBook::new(spec);
-            for order in &orders {
-                let _ = book.match_order(black_box(order.clone()));
-            }
-        });
-    });
 
     group.finish();
 }
 
 criterion_group!(
     benches,
-    bench_btreemap_linked_list,
-    bench_btreemap_ringbuffer,
-    bench_array_ringbuffer,
-    bench_realistic_futures,
-    bench_deep_orderbook,
+    bench_matching_throughput,
+    bench_resting_orders,
+    bench_fifo_queue,
+    bench_best_price_lookup,
 );
-
 criterion_main!(benches);

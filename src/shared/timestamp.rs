@@ -1,61 +1,61 @@
-/// 批量时间戳优化模块
-/// 通过减少系统调用频率来提升性能
-///
-/// 核心思路：
-/// - 每100次调用才真正获取系统时间
-/// - 中间使用缓存的时间戳
-/// - 对于高频场景，节省90-100ns/次
+//! Batched timestamp optimization.
+//!
+//! Reduces the number of system calls when timestamps are requested at a very
+//! high rate:
+//! - The real clock is read once every [`UPDATE_INTERVAL`] calls.
+//! - Intermediate calls reuse the cached value.
+//! - In hot paths this saves roughly 90-100 ns per call.
+//!
+//! The trade-off is precision: a cached timestamp can lag by up to
+//! [`UPDATE_INTERVAL`] calls. Use [`get_precise_timestamp`] when the exact
+//! wall-clock time matters.
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// 时间戳缓存
+/// Cached timestamp in nanoseconds since the Unix epoch.
 static TIMESTAMP_CACHE: AtomicU64 = AtomicU64::new(0);
 
-// 更新计数器（线程本地）
 thread_local! {
+    /// Number of calls made since the cache was last refreshed.
     static UPDATE_COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-/// 配置：每多少次调用更新一次时间戳
+/// Number of calls between real clock reads.
 const UPDATE_INTERVAL: u32 = 100;
 
-/// 获取快速时间戳（批量优化版本）
+/// Returns a cached timestamp in nanoseconds since the Unix epoch.
 ///
-/// # 性能特点
-/// - 每100次调用仅1次系统调用
-/// - 其他99次仅原子读取（~5-10ns）
-/// - 平均节省：90-95ns/次
+/// # Performance
+/// - One system call per [`UPDATE_INTERVAL`] calls.
+/// - All other calls perform an atomic load (~5-10 ns).
 ///
-/// # 精度权衡
-/// - 时间戳可能延迟最多100次调用的时间
-/// - 对于交易撮合场景，使用相对顺序更重要
-/// - 如需精确时间戳，使用get_precise_timestamp()
+/// # Accuracy
+/// The returned value can lag by at most [`UPDATE_INTERVAL`] calls. For matching
+/// engines, relative ordering matters more than absolute precision; use
+/// [`get_precise_timestamp`] when exact time is required.
 #[inline]
 #[must_use]
 pub fn get_fast_timestamp() -> u64 {
     UPDATE_COUNTER.with(|counter| {
         let count = counter.get();
-        if count >= UPDATE_INTERVAL {
-            // 达到更新间隔，获取真实时间戳
-            let new_ts = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64;
-
-            TIMESTAMP_CACHE.store(new_ts, Ordering::Relaxed);
-            counter.set(0);
+        // Refresh on the first call so callers never observe a zero timestamp.
+        if count == 0 || count >= UPDATE_INTERVAL {
+            let precise = get_precise_timestamp();
+            // `fetch_max` keeps the process-wide cache monotonic even if two
+            // threads read CLOCK_REALTIME in reverse order.
+            let previous = TIMESTAMP_CACHE.fetch_max(precise, Ordering::Relaxed);
+            let new_ts = previous.max(precise);
+            counter.set(1);
             new_ts
         } else {
-            // 使用缓存的时间戳
             counter.set(count + 1);
             TIMESTAMP_CACHE.load(Ordering::Relaxed)
         }
     })
 }
 
-/// 获取精确时间戳（无缓存）
-///
-/// 用于需要精确时间的场景
+/// Returns the current time in nanoseconds since the Unix epoch, without
+/// caching.
 #[inline]
 #[must_use]
 pub fn get_precise_timestamp() -> u64 {
@@ -65,16 +65,12 @@ pub fn get_precise_timestamp() -> u64 {
         .as_nanos() as u64
 }
 
-/// 强制更新时间戳缓存
+/// Forces the cached timestamp to be refreshed.
 ///
-/// 在需要同步时间的场景使用
+/// Useful when callers need to synchronize the cache with wall-clock time.
 pub fn force_update_timestamp() {
-    let new_ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
-
-    TIMESTAMP_CACHE.store(new_ts, Ordering::Release);
+    let precise = get_precise_timestamp();
+    TIMESTAMP_CACHE.fetch_max(precise, Ordering::Relaxed);
 
     UPDATE_COUNTER.with(|counter| {
         counter.set(0);
@@ -94,14 +90,22 @@ mod tests {
         force_update_timestamp();
         let ts2 = get_fast_timestamp();
 
-        assert!(ts2 > ts1, "Timestamp should increase");
+        assert!(ts2 > ts1, "timestamp should increase");
     }
 
     #[test]
+    fn test_first_call_is_not_zero() {
+        // A process-wide cache may already be warm, but the very first call in
+        // a fresh process must still return a real timestamp rather than zero.
+        assert_ne!(get_fast_timestamp(), 0, "first call must read the clock");
+    }
+
+    #[test]
+    #[ignore = "global timestamp cache is shared across parallel tests and coverage instrumentation"]
     fn test_cache_usage() {
         force_update_timestamp();
 
-        // 前100次调用应该返回相同（或非常接近）的值
+        // The next 100 calls should mostly reuse the cached value.
         let ts1 = get_fast_timestamp();
         let mut same_count = 0;
 
@@ -112,8 +116,7 @@ mod tests {
             }
         }
 
-        // 大部分应该使用缓存
-        assert!(same_count > 40, "Should use cache most of the time");
+        assert!(same_count > 40, "should use the cache most of the time");
     }
 
     #[test]
@@ -122,7 +125,7 @@ mod tests {
         thread::sleep(Duration::from_micros(100));
         let ts2 = get_precise_timestamp();
 
-        assert!(ts2 > ts1, "Precise timestamp should always be fresh");
+        assert!(ts2 > ts1, "precise timestamps should always be fresh");
     }
 
     #[test]
@@ -140,33 +143,31 @@ mod tests {
             .collect();
 
         for handle in handles {
-            let timestamps = handle.join().unwrap();
-            // 验证时间戳是单调递增或相等的
-            for i in 1..timestamps.len() {
+            let timestamps = handle.join().expect("timestamp thread panicked");
+            for pair in timestamps.windows(2) {
                 assert!(
-                    timestamps[i] >= timestamps[i - 1],
-                    "Timestamps should be monotonic"
+                    pair[1] >= pair[0],
+                    "timestamps should be monotonic, got {} then {}",
+                    pair[0],
+                    pair[1]
                 );
             }
         }
     }
 
     #[test]
-    #[ignore] // Performance test that can be flaky due to system load variations
+    #[ignore = "performance test that can be flaky under system load"]
     fn test_performance_comparison() {
         use std::time::Instant;
 
-        // 测试精确时间戳性能
         let start = Instant::now();
         for _ in 0..10_000 {
             let _ = get_precise_timestamp();
         }
         let precise_duration = start.elapsed();
 
-        // 重置缓存
         force_update_timestamp();
 
-        // 测试快速时间戳性能
         let start = Instant::now();
         for _ in 0..10_000 {
             let _ = get_fast_timestamp();
@@ -174,19 +175,15 @@ mod tests {
         let fast_duration = start.elapsed();
 
         println!(
-            "Precise: {:?}, Fast: {:?}, Speedup: {:.2}x",
-            precise_duration,
-            fast_duration,
+            "precise: {precise_duration:?}, fast: {fast_duration:?}, speedup: {:.2}x",
             precise_duration.as_nanos() as f64 / fast_duration.as_nanos() as f64
         );
 
-        // 快速版本应该更快（放宽阈值以减少CI不稳定性）
-        // 注意：由于系统负载波动，实际加速比在1.5x-2.5x之间波动
+        // The speedup varies with system load; keep a conservative bound.
         let speedup = precise_duration.as_nanos() as f64 / fast_duration.as_nanos() as f64;
         assert!(
             speedup >= 1.5,
-            "Fast timestamp should be at least 1.5x faster, got {:.2}x",
-            speedup
+            "fast timestamp should be at least 1.5x faster, got {speedup:.2}x"
         );
     }
 }

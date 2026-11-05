@@ -1,23 +1,78 @@
+//! 基于Tick的Array索引订单簿 - 期货交易专用优化
+//!
+//! 核心设计理念（基于期货行业特性）：
+//! 1. **价格离散化** - 期货价格按固定tick变化
+//! 2. **Array索引** - O(1)查找替代BTreeMap的O(log n)
+//! 3. **预分配数组** - 整个价格范围预分配
+//! 4. 侵入式双向链表 - 每个价格层 O(1) 挂单/撤单
+//!
+//! 性能优势：
+//! - `BTreeMap` 查找: O(log n) → Array索引: O(1)
+//! - 连续内存遍历，极佳的缓存局部性
+//! - 预分配消除运行时分配
+//! - 预期比BTreeMap快50-80%
+
 use crate::shared::collections::fast_bitmap::FastBitmap;
-use crate::shared::collections::ringbuffer::RingBuffer;
-/// 基于Tick的Array索引订单簿 - 期货交易专用优化
-///
-/// 核心设计理念（基于期货行业特性）：
-/// 1. **价格离散化** - 期货价格按固定tick变化
-/// 2. **Array索引** - O(1)查找替代BTreeMap的O(log n)
-/// 3. **预分配数组** - 整个价格范围预分配
-/// 4. `RingBuffer` - 每个价格层使用零分配队列
-///
-/// 性能优势：
-/// - `BTreeMap` 查找: O(log n) → Array索引: O(1)
-/// - 连续内存遍历，极佳的缓存局部性
-/// - 预分配消除运行时分配
-/// - 预期比BTreeMap快50-80%
-use crate::shared::protocol::{NewOrderRequest, OrderConfirmation, OrderType, TradeNotification};
-use crate::shared::symbol_pool::SymbolPool;
+use crate::shared::protocol::{
+    NewOrderRequest, OrderConfirmation, OrderStatus, OrderStatusType, OrderType, TradeNotification,
+};
+use crate::shared::symbol::SymbolId;
 use smallvec::SmallVec;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::hash::{BuildHasherDefault, Hasher};
+
+/// Identity hasher for dense, monotonically increasing order IDs.
+///
+/// `order_locations` is only keyed by order IDs assigned by this book, so the
+/// identity function distributes them perfectly across hashbrown buckets and
+/// avoids SipHash on every fill and cancellation.
+#[derive(Default)]
+struct OrderIdHasher(u64);
+
+impl Hasher for OrderIdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        self.0 = hash;
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.0 = value;
+    }
+}
+
+type OrderLocationMap = HashMap<u64, OrderLocation, BuildHasherDefault<OrderIdHasher>>;
+
+/// Sentinel for "no node" in the intrusive linked list.
+const NONE: u32 = u32::MAX;
+
+/// Head/tail indices and length of one price level's FIFO queue.
+///
+/// Orders are nodes in a global slab and linked per level, so cancellation is
+/// O(1) instead of rebuilding the queue.
+#[derive(Clone, Copy, Debug)]
+struct LevelQueue {
+    head: u32,
+    tail: u32,
+    len: u32,
+}
+
+impl Default for LevelQueue {
+    fn default() -> Self {
+        Self {
+            head: NONE,
+            tail: NONE,
+            len: 0,
+        }
+    }
+}
 
 /// 订单节点
 #[derive(Clone, Debug)]
@@ -28,12 +83,25 @@ pub struct OrderNode {
     pub quantity: u64,
     /// 原始订单数量（用于跟踪部分成交）
     pub original_quantity: u64,
-    /// 是否已取消（标记删除法）
-    pub cancelled: bool,
+    /// Previous node in this price level (intrusive list).
+    prev: u32,
+    /// Next node in this price level (intrusive list).
+    next: u32,
+}
+
+/// One resting order in a snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RestingOrder {
+    pub user_id: u64,
+    pub order_id: u64,
+    pub side: OrderType,
+    pub price: u64,
+    pub quantity: u64,
+    pub original_quantity: u64,
 }
 
 /// 合约配置
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContractSpec {
     /// 合约代码
     pub symbol: String,
@@ -43,7 +111,7 @@ pub struct ContractSpec {
     pub min_price: u64,
     /// 价格上限
     pub max_price: u64,
-    /// 每个价格层RingBuffer容量
+    /// 每个价格层的最大挂单数
     pub queue_capacity: usize,
 }
 
@@ -77,13 +145,84 @@ impl ContractSpec {
     }
 }
 
-/// 订单位置信息（用于快速取消）
-#[derive(Clone, Debug)]
+/// Which side of the order book an order belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BookSide {
+    Bid,
+    Ask,
+}
+
+/// Location of a resting order, used for fast cancellation and status queries.
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct OrderLocation {
-    /// 价格索引
+    /// Index into the price-level array.
     price_idx: usize,
-    /// 订单类型（买/卖）
-    is_bid: bool,
+    /// Side of the book the order rests on.
+    side: BookSide,
+    /// Index into the order slab.
+    node_idx: u32,
+}
+
+/// Mutable state of an incoming order while it is being matched.
+struct MatchOrder {
+    /// Price index of the incoming order.
+    request_idx: usize,
+    /// Limit price of the incoming order.
+    request_price: u64,
+    /// User that submitted the order.
+    user_id: u64,
+    /// ID assigned to the incoming order.
+    new_order_id: u64,
+    /// Quantity originally requested.
+    original_quantity: u64,
+    /// Quantity still to be matched.
+    remaining_quantity: u64,
+    /// Interned symbol shared by all generated trades.
+    symbol: SymbolId,
+    /// Set when the remaining quantity could not rest because the price-level
+    /// queue is full.
+    rejected: bool,
+}
+
+/// Explicit outcome of one order submission.
+///
+/// The old tuple return could not distinguish a fully filled order from an
+/// invalid price or a full price level; callers had to infer from `None`.
+#[derive(Clone, Debug)]
+pub enum MatchOutcome {
+    /// The incoming order was fully filled; no remainder rests.
+    Filled {
+        trades: SmallVec<[TradeNotification; 8]>,
+    },
+    /// The incoming order traded and its remainder rested.
+    Rested {
+        trades: SmallVec<[TradeNotification; 8]>,
+        confirmation: OrderConfirmation,
+    },
+    /// The incoming order was rejected; `trades` may be non-empty when a
+    /// partially matched remainder could not rest.
+    Rejected {
+        reason: String,
+        trades: SmallVec<[TradeNotification; 8]>,
+    },
+}
+
+impl MatchOutcome {
+    /// Returns trades and an optional resting confirmation.
+    ///
+    /// This preserves the convenience of the old tuple API for tests/benches;
+    /// callers that care about rejection must match the enum directly.
+    #[must_use]
+    pub fn into_parts(self) -> (SmallVec<[TradeNotification; 8]>, Option<OrderConfirmation>) {
+        match self {
+            Self::Filled { trades } => (trades, None),
+            Self::Rested {
+                trades,
+                confirmation,
+            } => (trades, Some(confirmation)),
+            Self::Rejected { trades, .. } => (trades, None),
+        }
+    }
 }
 
 /// 基于Tick的订单簿
@@ -91,12 +230,11 @@ pub struct TickBasedOrderBook {
     /// 合约规格
     spec: ContractSpec,
 
-    /// 买单价格层数组（索引0 = min_price）
-    /// Option<RingBuffer>: Some表示有订单，None表示该价位无订单
-    bid_levels: Vec<Option<RingBuffer<OrderNode>>>,
+    /// 买单价格层（索引0 = min_price）；每个价位是一条侵入式 FIFO 链表。
+    bid_levels: Vec<LevelQueue>,
 
-    /// 卖单价格层数组（索引0 = min_price）
-    ask_levels: Vec<Option<RingBuffer<OrderNode>>>,
+    /// 卖单价格层（索引0 = min_price）。
+    ask_levels: Vec<LevelQueue>,
 
     /// 买单价格层位图索引 - O(1)查找最优价
     /// bit=1表示该价格有订单，bit=0表示无订单
@@ -116,38 +254,37 @@ pub struct TickBasedOrderBook {
     /// 下一个订单ID
     next_order_id: u64,
 
-    /// 符号池
-    symbol_pool: Arc<SymbolPool>,
+    /// 订单ID到位置的映射（用于 O(1) 取消/查询）
+    order_locations: OrderLocationMap,
 
-    /// 订单ID到位置的映射（用于快速取消）
-    pub(crate) order_locations: HashMap<u64, OrderLocation>,
+    /// Slab of order nodes. Free nodes are reused via `free_head`.
+    nodes: Vec<OrderNode>,
+    free_head: u32,
+
+    /// Interned contract symbol; every trade in this book shares it.
+    symbol: SymbolId,
 }
 
 impl TickBasedOrderBook {
     /// 创建新的订单簿
     #[must_use]
     pub fn new(spec: ContractSpec) -> Self {
-        Self::with_symbol_pool(
-            spec,
-            Arc::clone(crate::shared::symbol_pool::global_symbol_pool()),
-        )
-    }
-
-    /// 使用指定符号池创建
-    pub fn with_symbol_pool(spec: ContractSpec, symbol_pool: Arc<SymbolPool>) -> Self {
         let num_levels = ((spec.max_price - spec.min_price) / spec.tick_size) as usize + 1;
+        let symbol = SymbolId::intern(spec.symbol.as_str());
 
         Self {
-            bid_levels: (0..num_levels).map(|_| None).collect(),
-            ask_levels: (0..num_levels).map(|_| None).collect(),
+            bid_levels: vec![LevelQueue::default(); num_levels],
+            ask_levels: vec![LevelQueue::default(); num_levels],
+            nodes: Vec::new(),
+            free_head: NONE,
             bid_bitmap: FastBitmap::new(num_levels),
             ask_bitmap: FastBitmap::new(num_levels),
             best_bid_idx: None,
             best_ask_idx: None,
             next_order_id: 1,
             spec,
-            symbol_pool,
-            order_locations: HashMap::new(),
+            order_locations: OrderLocationMap::default(),
+            symbol,
         }
     }
 
@@ -175,75 +312,54 @@ impl TickBasedOrderBook {
         self.spec.min_price + (index as u64) * self.spec.tick_size
     }
 
-    /// 买单撮合：匹配卖单
-    #[allow(clippy::too_many_arguments)]
+    /// Matches a buy order against resting sell orders (best ask first).
     fn match_buy_order(
         &mut self,
-        request_idx: usize,
-        request_price: u64,
-        user_id: u64,
-        new_order_id: u64,
-        original_quantity: u64,
-        remaining_quantity: &mut u64,
-        symbol: &Arc<str>,
+        order: &mut MatchOrder,
         trades: &mut SmallVec<[TradeNotification; 8]>,
     ) {
         let mut current_idx = self.best_ask_idx;
 
         while let Some(idx) = current_idx {
-            if *remaining_quantity == 0 {
+            if order.remaining_quantity == 0 {
                 break;
             }
 
             let price = self.index_to_price(idx);
-            if price > request_price {
+            if price > order.request_price {
                 break;
             }
 
-            // 处理该价格层
-            if let Some(queue) = &mut self.ask_levels[idx] {
-                while let Some(counter_order) = queue.front_mut() {
-                    if *remaining_quantity == 0 {
-                        break;
-                    }
-
-                    // 跳过已取消的订单
-                    if counter_order.cancelled {
-                        let order_id_to_remove = counter_order.order_id;
-                        queue.pop();
-                        self.order_locations.remove(&order_id_to_remove);
-                        continue;
-                    }
-
-                    let trade_qty = std::cmp::min(*remaining_quantity, counter_order.quantity);
-
-                    trades.push(TradeNotification {
-                        trade_id: 0,
-                        symbol: symbol.clone(),
-                        matched_price: price,
-                        matched_quantity: trade_qty,
-                        buyer_user_id: user_id,
-                        buyer_order_id: new_order_id,
-                        seller_user_id: counter_order.user_id,
-                        seller_order_id: counter_order.order_id,
-                        timestamp: 0,
-                    });
-
-                    *remaining_quantity -= trade_qty;
-                    counter_order.quantity -= trade_qty;
-
-                    if counter_order.quantity == 0 {
-                        let order_id_to_remove = counter_order.order_id;
-                        queue.pop();
-                        self.order_locations.remove(&order_id_to_remove);
-                    } else {
-                        break;
-                    }
+            loop {
+                let head = self.level(BookSide::Ask, idx).head;
+                if head == NONE || order.remaining_quantity == 0 {
+                    break;
                 }
+                let node_idx = head as usize;
+                let counter_order = &self.nodes[node_idx];
+                let counter_user_id = counter_order.user_id;
+                let counter_order_id = counter_order.order_id;
+                let counter_quantity = counter_order.quantity;
 
-                if queue.is_empty() {
-                    self.ask_levels[idx] = None;
-                    self.ask_bitmap.set(idx, false);
+                let trade_qty = std::cmp::min(order.remaining_quantity, counter_quantity);
+                trades.push(TradeNotification {
+                    trade_id: 0,
+                    symbol: order.symbol,
+                    matched_price: price,
+                    matched_quantity: trade_qty,
+                    buyer_user_id: order.user_id,
+                    buyer_order_id: order.new_order_id,
+                    seller_user_id: counter_user_id,
+                    seller_order_id: counter_order_id,
+                    timestamp: 0,
+                });
+
+                order.remaining_quantity -= trade_qty;
+                self.nodes[node_idx].quantity = counter_quantity - trade_qty;
+                if counter_quantity == trade_qty {
+                    self.unlink_order(BookSide::Ask, idx, head);
+                } else {
+                    break;
                 }
             }
 
@@ -252,86 +368,67 @@ impl TickBasedOrderBook {
 
         self.best_ask_idx = self.find_best_ask();
 
-        if *remaining_quantity > 0 {
-            self.add_bid_order(
-                request_idx,
-                user_id,
-                *remaining_quantity,
-                original_quantity,
-                new_order_id,
+        if order.remaining_quantity > 0 {
+            let rested = self.add_order(
+                BookSide::Bid,
+                order.request_idx,
+                order.user_id,
+                order.remaining_quantity,
+                order.original_quantity,
+                order.new_order_id,
             );
+            order.rejected = !rested;
         }
     }
 
-    /// 卖单撮合：匹配买单
-    #[allow(clippy::too_many_arguments)]
+    /// Matches a sell order against resting buy orders (best bid first).
     fn match_sell_order(
         &mut self,
-        request_idx: usize,
-        request_price: u64,
-        user_id: u64,
-        new_order_id: u64,
-        original_quantity: u64,
-        remaining_quantity: &mut u64,
-        symbol: &Arc<str>,
+        order: &mut MatchOrder,
         trades: &mut SmallVec<[TradeNotification; 8]>,
     ) {
         let mut current_idx = self.best_bid_idx;
 
         while let Some(idx) = current_idx {
-            if *remaining_quantity == 0 {
+            if order.remaining_quantity == 0 {
                 break;
             }
 
             let price = self.index_to_price(idx);
-            if price < request_price {
+            if price < order.request_price {
                 break;
             }
 
-            // 处理该价格层
-            if let Some(queue) = &mut self.bid_levels[idx] {
-                while let Some(counter_order) = queue.front_mut() {
-                    if *remaining_quantity == 0 {
-                        break;
-                    }
-
-                    // 跳过已取消的订单
-                    if counter_order.cancelled {
-                        let order_id_to_remove = counter_order.order_id;
-                        queue.pop();
-                        self.order_locations.remove(&order_id_to_remove);
-                        continue;
-                    }
-
-                    let trade_qty = std::cmp::min(*remaining_quantity, counter_order.quantity);
-
-                    trades.push(TradeNotification {
-                        trade_id: 0,
-                        symbol: symbol.clone(),
-                        matched_price: price,
-                        matched_quantity: trade_qty,
-                        buyer_user_id: counter_order.user_id,
-                        buyer_order_id: counter_order.order_id,
-                        seller_user_id: user_id,
-                        seller_order_id: new_order_id,
-                        timestamp: 0,
-                    });
-
-                    *remaining_quantity -= trade_qty;
-                    counter_order.quantity -= trade_qty;
-
-                    if counter_order.quantity == 0 {
-                        let order_id_to_remove = counter_order.order_id;
-                        queue.pop();
-                        self.order_locations.remove(&order_id_to_remove);
-                    } else {
-                        break;
-                    }
+            loop {
+                let head = self.level(BookSide::Bid, idx).head;
+                if head == NONE || order.remaining_quantity == 0 {
+                    break;
                 }
+                let node_idx = head as usize;
+                let counter_order = &self.nodes[node_idx];
+                let counter_user_id = counter_order.user_id;
+                let counter_order_id = counter_order.order_id;
+                let counter_quantity = counter_order.quantity;
 
-                if queue.is_empty() {
-                    self.bid_levels[idx] = None;
-                    self.bid_bitmap.set(idx, false);
+                let trade_qty = std::cmp::min(order.remaining_quantity, counter_quantity);
+                trades.push(TradeNotification {
+                    trade_id: 0,
+                    symbol: order.symbol,
+                    matched_price: price,
+                    matched_quantity: trade_qty,
+                    buyer_user_id: counter_user_id,
+                    buyer_order_id: counter_order_id,
+                    seller_user_id: order.user_id,
+                    seller_order_id: order.new_order_id,
+                    timestamp: 0,
+                });
+
+                order.remaining_quantity -= trade_qty;
+                self.nodes[node_idx].quantity = counter_quantity - trade_qty;
+                if counter_quantity == trade_qty {
+                    self.unlink_order(BookSide::Bid, idx, head);
+                } else {
+                    break;
                 }
             }
 
@@ -340,186 +437,240 @@ impl TickBasedOrderBook {
 
         self.best_bid_idx = self.find_best_bid();
 
-        if *remaining_quantity > 0 {
-            self.add_ask_order(
-                request_idx,
-                user_id,
-                *remaining_quantity,
-                original_quantity,
-                new_order_id,
+        if order.remaining_quantity > 0 {
+            let rested = self.add_order(
+                BookSide::Ask,
+                order.request_idx,
+                order.user_id,
+                order.remaining_quantity,
+                order.original_quantity,
+                order.new_order_id,
             );
+            order.rejected = !rested;
         }
     }
 
-    /// 撮合订单
-    pub fn match_order(
-        &mut self,
-        request: NewOrderRequest,
-    ) -> (SmallVec<[TradeNotification; 8]>, Option<OrderConfirmation>) {
-        let symbol = self.symbol_pool.intern(&request.symbol);
-        let mut trades: SmallVec<[TradeNotification; 8]> = SmallVec::new();
-        let mut remaining_quantity = request.quantity;
+    /// Matches `request` against the order book.
+    ///
+    /// Returns the generated trades and an optional confirmation for any
+    /// quantity that rests in the book.
+    pub fn match_order(&mut self, request: NewOrderRequest) -> MatchOutcome {
+        self.match_order_impl(request)
+    }
 
-        // 检查价格合法性
+    /// Shared implementation used by [`TickBasedOrderBook::match_order`].
+    fn match_order_impl(&mut self, request: NewOrderRequest) -> MatchOutcome {
+        let symbol = self.symbol;
+        let mut trades: SmallVec<[TradeNotification; 8]> = SmallVec::new();
+
+        // Reject prices outside the configured tick grid.
         let request_idx = match self.price_to_index(request.price) {
             Some(idx) => idx,
             None => {
-                eprintln!(
-                    "Invalid price {}: outside range or not on tick",
-                    request.price
+                tracing::warn!(
+                    price = request.price,
+                    "invalid order price: outside range or not on tick"
                 );
-                return (trades, None);
+                return MatchOutcome::Rejected {
+                    reason: "price is outside the tick grid".to_string(),
+                    trades,
+                };
             }
         };
 
-        // 预先为新订单分配order_id
+        // Allocate the order ID before matching so trades can reference it.
         let new_order_id = self.next_order_id;
         self.next_order_id += 1;
 
-        // 执行撮合
+        let mut order = MatchOrder {
+            request_idx,
+            request_price: request.price,
+            user_id: request.user_id,
+            new_order_id,
+            original_quantity: request.quantity,
+            remaining_quantity: request.quantity,
+            symbol,
+            rejected: false,
+        };
+
         match request.order_type {
-            OrderType::Buy => {
-                self.match_buy_order(
-                    request_idx,
-                    request.price,
-                    request.user_id,
-                    new_order_id,
-                    request.quantity,
-                    &mut remaining_quantity,
-                    &symbol,
-                    &mut trades,
-                );
-            }
-            OrderType::Sell => {
-                self.match_sell_order(
-                    request_idx,
-                    request.price,
-                    request.user_id,
-                    new_order_id,
-                    request.quantity,
-                    &mut remaining_quantity,
-                    &symbol,
-                    &mut trades,
-                );
-            }
+            OrderType::Buy => self.match_buy_order(&mut order, &mut trades),
+            OrderType::Sell => self.match_sell_order(&mut order, &mut trades),
         }
 
-        // 返回订单确认（如果有剩余数量挂单）
-        let confirmation = if remaining_quantity > 0 {
-            Some(OrderConfirmation {
-                user_id: request.user_id,
-                order_id: new_order_id,
-            })
-        } else {
-            None
-        };
+        // A full price-level queue means the remainder never became a resting
+        // order, so the outcome is an explicit rejection, not a silent `None`.
+        if order.rejected {
+            return MatchOutcome::Rejected {
+                reason: "price-level queue is full".to_string(),
+                trades,
+            };
+        }
 
-        (trades, confirmation)
+        if order.remaining_quantity > 0 {
+            MatchOutcome::Rested {
+                trades,
+                confirmation: OrderConfirmation {
+                    user_id: request.user_id,
+                    order_id: new_order_id,
+                },
+            }
+        } else {
+            MatchOutcome::Filled { trades }
+        }
     }
 
-    /// 添加买单
+    /// Adds a resting order to `side` at price index `idx`.
     ///
-    /// # 参数
-    /// - `idx`: 价格索引
-    /// - `user_id`: 用户ID
-    /// - `quantity`: 剩余数量
-    /// - `original_quantity`: 原始订单数量
-    /// - `order_id`: 订单ID（由调用方预先生成）
-    fn add_bid_order(
+    /// Returns `false` when the price-level queue is full; the order is dropped
+    /// and no book state is updated.
+    fn add_order(
         &mut self,
+        side: BookSide,
         idx: usize,
         user_id: u64,
         quantity: u64,
         original_quantity: u64,
         order_id: u64,
-    ) {
-        let order = OrderNode {
+    ) -> bool {
+        if self.level(side, idx).len as usize >= self.spec.queue_capacity {
+            tracing::warn!(?side, idx, "price-level queue is full; order not added");
+            return false;
+        }
+
+        let node_idx = self.allocate_node(OrderNode {
             user_id,
             order_id,
             price: self.index_to_price(idx),
             quantity,
             original_quantity,
-            cancelled: false,
-        };
+            prev: NONE,
+            next: NONE,
+        });
 
-        let queue = self.bid_levels[idx]
-            .get_or_insert_with(|| RingBuffer::with_capacity(self.spec.queue_capacity));
-
-        if queue.push(order).is_err() {
-            eprintln!("Warning: Bid queue full at index {idx}");
-        } else {
-            // 记录订单位置
-            self.order_locations.insert(
-                order_id,
-                OrderLocation {
-                    price_idx: idx,
-                    is_bid: true,
-                },
-            );
+        let tail = self.level(side, idx).tail;
+        self.nodes[node_idx as usize].prev = tail;
+        if tail != NONE {
+            self.nodes[tail as usize].next = node_idx;
         }
 
-        // 设置位图标记
-        self.bid_bitmap.set(idx, true);
-
-        // 更新最优买价
-        if self
-            .best_bid_idx
-            .is_none_or(|current_best| idx > current_best)
         {
-            self.best_bid_idx = Some(idx);
+            let level = self.level_mut(side, idx);
+            if level.tail == NONE {
+                level.head = node_idx;
+            }
+            level.tail = node_idx;
+            level.len += 1;
+        }
+
+        self.order_locations.insert(
+            order_id,
+            OrderLocation {
+                price_idx: idx,
+                side,
+                node_idx,
+            },
+        );
+        self.mark_level(side, idx);
+        true
+    }
+
+    /// Allocates a slab slot, reusing a free one when possible.
+    fn allocate_node(&mut self, node: OrderNode) -> u32 {
+        if self.free_head != NONE {
+            let index = self.free_head;
+            self.free_head = self.nodes[index as usize].next;
+            self.nodes[index as usize] = node;
+            index
+        } else {
+            let index = self.nodes.len() as u32;
+            self.nodes.push(node);
+            index
         }
     }
 
-    /// 添加卖单
-    ///
-    /// # 参数
-    /// - `idx`: 价格索引
-    /// - `user_id`: 用户ID
-    /// - `quantity`: 剩余数量
-    /// - `original_quantity`: 原始订单数量
-    /// - `order_id`: 订单ID（由调用方预先生成）
-    fn add_ask_order(
-        &mut self,
-        idx: usize,
-        user_id: u64,
-        quantity: u64,
-        original_quantity: u64,
-        order_id: u64,
-    ) {
-        let order = OrderNode {
-            user_id,
-            order_id,
-            price: self.index_to_price(idx),
-            quantity,
-            original_quantity,
-            cancelled: false,
+    /// Unlinks `node_idx` from `side`/`idx`, updates the level and recycles the
+    /// slab slot. O(1).
+    fn unlink_order(&mut self, side: BookSide, idx: usize, node_idx: u32) {
+        let (prev, next, order_id) = {
+            let node = &self.nodes[node_idx as usize];
+            (node.prev, node.next, node.order_id)
         };
 
-        let queue = self.ask_levels[idx]
-            .get_or_insert_with(|| RingBuffer::with_capacity(self.spec.queue_capacity));
-
-        if queue.push(order).is_err() {
-            eprintln!("Warning: Ask queue full at index {idx}");
+        if prev != NONE {
+            self.nodes[prev as usize].next = next;
         } else {
-            // 记录订单位置
-            self.order_locations.insert(
-                order_id,
-                OrderLocation {
-                    price_idx: idx,
-                    is_bid: false,
-                },
-            );
+            self.level_mut(side, idx).head = next;
         }
+        if next != NONE {
+            self.nodes[next as usize].prev = prev;
+        } else {
+            self.level_mut(side, idx).tail = prev;
+        }
+        self.level_mut(side, idx).len -= 1;
+        let empty = self.level(side, idx).len == 0;
 
-        // 设置位图标记
-        self.ask_bitmap.set(idx, true);
+        self.order_locations.remove(&order_id);
+        self.nodes[node_idx as usize].next = self.free_head;
+        self.free_head = node_idx;
 
-        // 更新最优卖价
-        if self
-            .best_ask_idx
-            .is_none_or(|current_best| idx < current_best)
-        {
-            self.best_ask_idx = Some(idx);
+        if empty {
+            self.clear_level(side, idx);
+        }
+    }
+
+    /// Marks `idx` as non-empty on `side` and updates the cached best price.
+    fn mark_level(&mut self, side: BookSide, idx: usize) {
+        match side {
+            BookSide::Bid => {
+                self.bid_bitmap.set(idx, true);
+                if self.best_bid_idx.is_none_or(|best| idx > best) {
+                    self.best_bid_idx = Some(idx);
+                }
+            }
+            BookSide::Ask => {
+                self.ask_bitmap.set(idx, true);
+                if self.best_ask_idx.is_none_or(|best| idx < best) {
+                    self.best_ask_idx = Some(idx);
+                }
+            }
+        }
+    }
+
+    /// Marks `idx` as empty on `side` and recomputes the cached best price if
+    /// the removed level was the best one.
+    fn clear_level(&mut self, side: BookSide, idx: usize) {
+        match side {
+            BookSide::Bid => {
+                self.bid_bitmap.set(idx, false);
+                if self.best_bid_idx == Some(idx) {
+                    self.best_bid_idx = self.find_best_bid();
+                }
+            }
+            BookSide::Ask => {
+                self.ask_bitmap.set(idx, false);
+                if self.best_ask_idx == Some(idx) {
+                    self.best_ask_idx = self.find_best_ask();
+                }
+            }
+        }
+    }
+
+    /// Returns the price-level queue for `side` at `idx`.
+    #[inline]
+    fn level(&self, side: BookSide, idx: usize) -> &LevelQueue {
+        match side {
+            BookSide::Bid => &self.bid_levels[idx],
+            BookSide::Ask => &self.ask_levels[idx],
+        }
+    }
+
+    /// Returns the mutable price-level queue for `side` at `idx`.
+    #[inline]
+    fn level_mut(&mut self, side: BookSide, idx: usize) -> &mut LevelQueue {
+        match side {
+            BookSide::Bid => &mut self.bid_levels[idx],
+            BookSide::Ask => &mut self.ask_levels[idx],
         }
     }
 
@@ -583,168 +734,226 @@ impl TickBasedOrderBook {
     pub fn best_ask(&self) -> Option<u64> {
         self.best_ask_idx.map(|idx| self.index_to_price(idx))
     }
-}
 
-// ============================================================================
-// OrderBook Trait Implementation
-// ============================================================================
-
-impl crate::domain::orderbook::traits::OrderBook for TickBasedOrderBook {
-    fn match_order(
-        &mut self,
-        request: NewOrderRequest,
-    ) -> (SmallVec<[TradeNotification; 8]>, Option<OrderConfirmation>) {
-        // Delegate to the existing implementation
-        self.match_order(request)
-    }
-
-    fn cancel_order(&mut self, order_id: u64, user_id: u64) -> Result<(), String> {
-        // Step 1: 查找订单位置
-        let location = self
+    /// Cancels the resting order `order_id` on behalf of `user_id`.
+    ///
+    /// Returns an error if the order does not exist or belongs to another user.
+    pub fn cancel_order(&mut self, order_id: u64, user_id: u64) -> Result<(), String> {
+        let location = *self
             .order_locations
             .get(&order_id)
-            .cloned()
             .ok_or_else(|| format!("Order {order_id} not found"))?;
 
-        // Step 2: 获取对应的价格层队列
-        let levels = if location.is_bid {
-            &mut self.bid_levels
-        } else {
-            &mut self.ask_levels
-        };
-
-        let queue = levels[location.price_idx]
-            .as_mut()
-            .ok_or_else(|| format!("Price level not found for order {order_id}"))?;
-
-        // Step 3: 从队列中移除订单（物理删除），并验证授权
-        // 注意: 由于RingBuffer无iter_mut，需要重建队列
-        let mut found = false;
-        let mut authorized = false;
-        let capacity = queue.capacity();
-        let mut temp_orders = Vec::with_capacity(capacity);
-
-        // 将队列中的订单取出，过滤掉目标订单
-        while let Some(order) = queue.pop() {
-            if order.order_id == order_id {
-                // 找到目标订单
-                found = true;
-                // 验证授权：检查user_id是否匹配
-                if order.user_id == user_id {
-                    authorized = true;
-                    // 授权通过，不放回队列（物理删除）
-                } else {
-                    // 授权失败，需要将订单放回
-                    temp_orders.push(order);
-                }
-            } else {
-                // 保留其他订单
-                temp_orders.push(order);
-            }
-        }
-
-        // 将剩余订单放回队列
-        for order in temp_orders {
-            let _ = queue.push(order);
-        }
-
-        if !found {
-            return Err(format!("Order {order_id} not found in queue"));
-        }
-
-        // 验证授权
-        if !authorized {
+        let node = &self.nodes[location.node_idx as usize];
+        if node.user_id != user_id {
             return Err(format!(
                 "User {user_id} not authorized to cancel order {order_id}"
             ));
         }
 
-        // Step 4: 如果价格层变空，更新位图
-        if queue.is_empty() {
-            if location.is_bid {
-                self.bid_bitmap.set(location.price_idx, false);
-                // 如果这是最优买价，需要重新查找
-                if self.best_bid_idx == Some(location.price_idx) {
-                    self.best_bid_idx = self.find_best_bid();
-                }
-            } else {
-                self.ask_bitmap.set(location.price_idx, false);
-                // 如果这是最优卖价，需要重新查找
-                if self.best_ask_idx == Some(location.price_idx) {
-                    self.best_ask_idx = self.find_best_ask();
-                }
-            }
-        }
-
-        // Step 5: 从位置映射中删除
-        self.order_locations.remove(&order_id);
-
+        self.unlink_order(location.side, location.price_idx, location.node_idx);
         Ok(())
     }
 
-    fn get_best_bid(&self) -> Option<u64> {
-        self.best_bid()
+    /// Returns the next order id that will be assigned.
+    #[must_use]
+    pub fn next_order_id(&self) -> u64 {
+        self.next_order_id
     }
 
-    fn get_best_ask(&self) -> Option<u64> {
-        self.best_ask()
+    /// Returns the contract specification.
+    #[must_use]
+    pub fn spec(&self) -> &ContractSpec {
+        &self.spec
     }
 
-    fn get_order_status(&self, order_id: u64) -> Option<crate::shared::protocol::OrderStatus> {
-        use crate::shared::protocol::{OrderStatus, OrderStatusType};
-
-        // Step 1: 查找订单位置
-        let location = self.order_locations.get(&order_id)?;
-
-        // Step 2: 获取对应的价格层队列
-        let levels = if location.is_bid {
-            &self.bid_levels
-        } else {
-            &self.ask_levels
-        };
-
-        let queue = levels[location.price_idx].as_ref()?;
-
-        // Step 3: 在队列中查找订单
-        // 由于RingBuffer现在支持Clone，我们可以克隆队列并遍历查找
-        let mut temp_queue = queue.clone();
-        while let Some(order) = temp_queue.pop() {
-            if order.order_id == order_id {
-                // 找到订单，构建状态
-                let side = if location.is_bid {
-                    OrderType::Buy
-                } else {
-                    OrderType::Sell
-                };
-
-                // 判断订单状态：如果剩余数量 < 原始数量，说明已部分成交
-                let status = if order.quantity < order.original_quantity {
-                    OrderStatusType::PartiallyFilled
-                } else {
-                    OrderStatusType::Resting
-                };
-
-                return Some(OrderStatus {
-                    order_id: order.order_id,
-                    user_id: order.user_id,
-                    side,
-                    price: order.price,
-                    original_quantity: order.original_quantity,
-                    remaining_quantity: order.quantity,
-                    status,
-                });
+    /// Exports all resting orders in level/FIFO order for a snapshot.
+    #[must_use]
+    pub fn snapshot_orders(&self) -> Vec<RestingOrder> {
+        let mut orders = Vec::with_capacity(self.order_locations.len());
+        for side in [BookSide::Bid, BookSide::Ask] {
+            let levels = match side {
+                BookSide::Bid => &self.bid_levels,
+                BookSide::Ask => &self.ask_levels,
+            };
+            for level in levels {
+                let mut node = level.head;
+                while node != NONE {
+                    let order = &self.nodes[node as usize];
+                    orders.push(RestingOrder {
+                        user_id: order.user_id,
+                        order_id: order.order_id,
+                        side: match side {
+                            BookSide::Bid => OrderType::Buy,
+                            BookSide::Ask => OrderType::Sell,
+                        },
+                        price: order.price,
+                        quantity: order.quantity,
+                        original_quantity: order.original_quantity,
+                    });
+                    node = order.next;
+                }
             }
         }
+        orders
+    }
 
-        // 订单在locations中但不在队列中，可能是数据不一致
-        None
+    /// Rebuilds a book directly from snapshot orders without matching them.
+    ///
+    /// # Errors
+    /// Returns a reason if an order is invalid or the snapshot exceeds the
+    /// configured level capacity.
+    pub fn restore(
+        spec: ContractSpec,
+        orders: &[RestingOrder],
+        next_order_id: u64,
+    ) -> Result<Self, String> {
+        let mut book = Self::new(spec);
+        for order in orders {
+            if order.quantity == 0 || order.original_quantity == 0 {
+                return Err(format!("order {} has zero quantity", order.order_id));
+            }
+            if book.order_locations.contains_key(&order.order_id) {
+                return Err(format!("duplicate order id {}", order.order_id));
+            }
+            let idx = book
+                .price_to_index(order.price)
+                .ok_or_else(|| format!("order {} price is off the tick grid", order.order_id))?;
+            let side = match order.side {
+                OrderType::Buy => BookSide::Bid,
+                OrderType::Sell => BookSide::Ask,
+            };
+            if book.level(side, idx).len as usize >= book.spec.queue_capacity {
+                return Err(format!("price level for order {} is full", order.order_id));
+            }
+            let node_idx = book.allocate_node(OrderNode {
+                user_id: order.user_id,
+                order_id: order.order_id,
+                price: order.price,
+                quantity: order.quantity,
+                original_quantity: order.original_quantity,
+                prev: NONE,
+                next: NONE,
+            });
+            let tail = book.level(side, idx).tail;
+            book.nodes[node_idx as usize].prev = tail;
+            if tail != NONE {
+                book.nodes[tail as usize].next = node_idx;
+            }
+            {
+                let level = book.level_mut(side, idx);
+                if level.tail == NONE {
+                    level.head = node_idx;
+                }
+                level.tail = node_idx;
+                level.len += 1;
+            }
+            book.order_locations.insert(
+                order.order_id,
+                OrderLocation {
+                    price_idx: idx,
+                    side,
+                    node_idx,
+                },
+            );
+            book.mark_level(side, idx);
+            book.next_order_id = book.next_order_id.max(order.order_id + 1);
+        }
+        book.next_order_id = book.next_order_id.max(next_order_id);
+        Ok(book)
+    }
+
+    /// Returns the contract symbol this book matches.
+    #[must_use]
+    pub fn symbol(&self) -> &str {
+        &self.spec.symbol
+    }
+
+    /// Returns the owner of resting order `order_id`, if present.
+    #[must_use]
+    pub fn order_owner(&self, order_id: u64) -> Option<u64> {
+        self.get_order_status(order_id).map(|status| status.user_id)
+    }
+
+    /// Validates an incoming order against the contract specification.
+    ///
+    /// # Errors
+    /// Returns a human-readable reason when the order cannot be accepted.
+    pub fn validate_order(&self, order: &NewOrderRequest) -> Result<(), String> {
+        if order.symbol != self.symbol {
+            return Err(format!(
+                "unknown symbol {}: this book matches {}",
+                order.symbol, self.spec.symbol
+            ));
+        }
+        if order.quantity == 0 {
+            return Err("quantity must be greater than zero".to_string());
+        }
+        if self.price_to_index(order.price).is_none() {
+            return Err(format!(
+                "price {} is outside [{}, {}] or not on a {} tick",
+                order.price, self.spec.min_price, self.spec.max_price, self.spec.tick_size
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validates an order and checks that its own price level can accept a
+    /// resting order.
+    ///
+    /// The service calls this before writing to the WAL so a full queue is
+    /// rejected up front rather than acknowledged and silently dropped.
+    ///
+    /// # Errors
+    /// Returns a human-readable rejection reason.
+    pub fn can_accept_order(&self, order: &NewOrderRequest) -> Result<(), String> {
+        self.validate_order(order)?;
+        let idx = self
+            .price_to_index(order.price)
+            .ok_or_else(|| "price is outside the tick grid".to_string())?;
+        let side = match order.order_type {
+            OrderType::Buy => BookSide::Bid,
+            OrderType::Sell => BookSide::Ask,
+        };
+        if self.level(side, idx).len as usize >= self.spec.queue_capacity {
+            return Err("price-level queue is full".to_string());
+        }
+        Ok(())
+    }
+
+    /// Returns the full status of resting order `order_id`, if present.
+    #[must_use]
+    pub fn get_order_status(&self, order_id: u64) -> Option<OrderStatus> {
+        let location = *self.order_locations.get(&order_id)?;
+        let order = &self.nodes[location.node_idx as usize];
+        let side = match location.side {
+            BookSide::Bid => OrderType::Buy,
+            BookSide::Ask => OrderType::Sell,
+        };
+
+        // A remaining quantity smaller than the original means the order was
+        // partially filled.
+        let status = if order.quantity < order.original_quantity {
+            OrderStatusType::PartiallyFilled
+        } else {
+            OrderStatusType::Resting
+        };
+
+        Some(OrderStatus {
+            order_id: order.order_id,
+            user_id: order.user_id,
+            side,
+            price: order.price,
+            original_quantity: order.original_quantity,
+            remaining_quantity: order.quantity,
+            status,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::orderbook::traits::OrderBook as OrderBookTrait;
 
     #[test]
     fn test_price_to_index() {
@@ -759,6 +968,69 @@ mod tests {
     }
 
     #[test]
+    fn test_match_outcome_is_explicit() {
+        let spec = ContractSpec::new("TEST", 1, 1000, 2000);
+        let mut book = TickBasedOrderBook::new(spec);
+
+        let invalid = book.match_order(NewOrderRequest {
+            user_id: 1,
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
+            order_type: OrderType::Buy,
+            price: 999,
+            quantity: 1,
+        });
+        assert!(matches!(invalid, MatchOutcome::Rejected { .. }));
+
+        let resting = book.match_order(NewOrderRequest {
+            user_id: 1,
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
+            order_type: OrderType::Buy,
+            price: 1500,
+            quantity: 5,
+        });
+        assert!(matches!(resting, MatchOutcome::Rested { .. }));
+
+        let filled = book.match_order(NewOrderRequest {
+            user_id: 2,
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
+            order_type: OrderType::Sell,
+            price: 1500,
+            quantity: 5,
+        });
+        assert!(matches!(filled, MatchOutcome::Filled { .. }));
+    }
+
+    #[test]
+    fn test_queue_full_is_rejected_not_silent() {
+        let mut spec = ContractSpec::new("TEST", 1, 1000, 2000);
+        spec.queue_capacity = 1;
+        let mut book = TickBasedOrderBook::new(spec);
+
+        let first = book.match_order(NewOrderRequest {
+            user_id: 1,
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
+            order_type: OrderType::Sell,
+            price: 1500,
+            quantity: 1,
+        });
+        assert!(matches!(first, MatchOutcome::Rested { .. }));
+
+        let second = book.match_order(NewOrderRequest {
+            user_id: 2,
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
+            order_type: OrderType::Sell,
+            price: 1500,
+            quantity: 1,
+        });
+        assert!(matches!(second, MatchOutcome::Rejected { .. }));
+    }
+
+    #[test]
     fn test_basic_matching() {
         let spec = ContractSpec::new("TEST", 10, 1000, 2000);
         let mut book = TickBasedOrderBook::new(spec);
@@ -766,13 +1038,14 @@ mod tests {
         // 添加卖单
         let sell = NewOrderRequest {
             user_id: 1,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Sell,
             price: 1500,
             quantity: 100,
         };
 
-        let (trades, conf) = book.match_order(sell);
+        let (trades, conf) = book.match_order(sell).into_parts();
         assert!(trades.is_empty());
         assert!(conf.is_some());
         assert_eq!(book.best_ask(), Some(1500));
@@ -780,13 +1053,14 @@ mod tests {
         // 添加买单（完全匹配）
         let buy = NewOrderRequest {
             user_id: 2,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Buy,
             price: 1500,
             quantity: 100,
         };
 
-        let (trades, conf) = book.match_order(buy);
+        let (trades, conf) = book.match_order(buy).into_parts();
         assert_eq!(trades.len(), 1);
         assert_eq!(trades[0].matched_quantity, 100);
         assert_eq!(trades[0].matched_price, 1500);
@@ -802,7 +1076,8 @@ mod tests {
         // 添加买单
         book.match_order(NewOrderRequest {
             user_id: 1,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Buy,
             price: 1490,
             quantity: 100,
@@ -811,7 +1086,8 @@ mod tests {
         // 添加卖单
         book.match_order(NewOrderRequest {
             user_id: 2,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Sell,
             price: 1510,
             quantity: 100,
@@ -831,13 +1107,14 @@ mod tests {
         // 添加买单（没有对手方，会挂单）
         let buy = NewOrderRequest {
             user_id: 1,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Buy,
             price: 1500,
             quantity: 100,
         };
 
-        let (trades, conf) = book.match_order(buy);
+        let (trades, conf) = book.match_order(buy).into_parts();
         assert!(trades.is_empty(), "Should have no trades");
         assert!(conf.is_some(), "Should have confirmation for pending order");
 
@@ -870,12 +1147,13 @@ mod tests {
         for i in 1..=3 {
             let sell = NewOrderRequest {
                 user_id: i,
-                symbol: Arc::from("TEST"),
+                client_order_id: 0,
+                symbol: crate::shared::SymbolId::intern("TEST"),
                 order_type: OrderType::Sell,
                 price: 1500,
                 quantity: 50,
             };
-            let (trades, conf) = book.match_order(sell);
+            let (trades, conf) = book.match_order(sell).into_parts();
             assert!(trades.is_empty(), "Should have no trades initially");
             assert!(conf.is_some(), "Should have confirmation for pending order");
             order_ids.push(conf.unwrap().order_id);
@@ -900,13 +1178,14 @@ mod tests {
         // 添加买单匹配剩余订单
         let buy = NewOrderRequest {
             user_id: 100,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Buy,
             price: 1500,
             quantity: 100, // 正好匹配所有剩余订单（2个卖单 x 50 = 100）
         };
 
-        let (trades, conf) = book.match_order(buy);
+        let (trades, conf) = book.match_order(buy).into_parts();
 
         // 买单应该完全成交，无剩余挂单
         assert!(
@@ -960,13 +1239,14 @@ mod tests {
         // 用户1创建订单
         let order_user1 = NewOrderRequest {
             user_id: 1,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Buy,
             price: 1500,
             quantity: 100,
         };
 
-        let (trades, conf) = book.match_order(order_user1);
+        let (trades, conf) = book.match_order(order_user1).into_parts();
         assert!(trades.is_empty(), "Should have no trades");
         assert!(conf.is_some(), "Should have confirmation for pending order");
 
@@ -1014,12 +1294,13 @@ mod tests {
         for user_id in 1..=3 {
             let order = NewOrderRequest {
                 user_id,
-                symbol: Arc::from("TEST"),
+                client_order_id: 0,
+                symbol: crate::shared::SymbolId::intern("TEST"),
                 order_type: OrderType::Sell,
                 price: 1500,
                 quantity: 50,
             };
-            let (_, conf) = book.match_order(order);
+            let (_, conf) = book.match_order(order).into_parts();
             if let Some(c) = conf {
                 order_ids.push((c.order_id, user_id));
             }
@@ -1079,7 +1360,8 @@ mod tests {
         // 价格层1: 1500, 数量50
         book.match_order(NewOrderRequest {
             user_id: 1,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Sell,
             price: 1500,
             quantity: 50,
@@ -1088,7 +1370,8 @@ mod tests {
         // 价格层2: 1510, 数量30
         book.match_order(NewOrderRequest {
             user_id: 2,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Sell,
             price: 1510,
             quantity: 30,
@@ -1097,7 +1380,8 @@ mod tests {
         // 价格层3: 1520, 数量40
         book.match_order(NewOrderRequest {
             user_id: 3,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Sell,
             price: 1520,
             quantity: 40,
@@ -1109,13 +1393,14 @@ mod tests {
         // 提交大额买单，价格足够高以匹配所有3个价格层
         let buy = NewOrderRequest {
             user_id: 100,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Buy,
             price: 1530,   // 高于所有卖单价格
             quantity: 120, // 正好匹配所有卖单 (50 + 30 + 40 = 120)
         };
 
-        let (trades, conf) = book.match_order(buy);
+        let (trades, conf) = book.match_order(buy).into_parts();
 
         // 验证成交结果
         assert_eq!(
@@ -1191,12 +1476,13 @@ mod tests {
         for user_id in 1..=5 {
             let sell = NewOrderRequest {
                 user_id,
-                symbol: Arc::from("TEST"),
+                client_order_id: 0,
+                symbol: crate::shared::SymbolId::intern("TEST"),
                 order_type: OrderType::Sell,
                 price,
                 quantity: quantity_per_order,
             };
-            let (trades, conf) = book.match_order(sell);
+            let (trades, conf) = book.match_order(sell).into_parts();
             assert!(
                 trades.is_empty(),
                 "No trades should occur when adding sell orders"
@@ -1214,13 +1500,14 @@ mod tests {
         // 提交第一个买单，只匹配第一个订单（用户1）
         let buy1 = NewOrderRequest {
             user_id: 100,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Buy,
             price,
             quantity: quantity_per_order,
         };
 
-        let (trades1, _) = book.match_order(buy1);
+        let (trades1, _) = book.match_order(buy1).into_parts();
         assert_eq!(trades1.len(), 1, "Should have exactly 1 trade");
         assert_eq!(
             trades1[0].seller_user_id, 1,
@@ -1231,13 +1518,14 @@ mod tests {
         // 提交第二个买单，应该匹配第二个订单（用户2）
         let buy2 = NewOrderRequest {
             user_id: 101,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Buy,
             price,
             quantity: quantity_per_order,
         };
 
-        let (trades2, _) = book.match_order(buy2);
+        let (trades2, _) = book.match_order(buy2).into_parts();
         assert_eq!(trades2.len(), 1, "Should have exactly 1 trade");
         assert_eq!(
             trades2[0].seller_user_id, 2,
@@ -1247,13 +1535,14 @@ mod tests {
         // 提交大额买单匹配剩余所有订单（用户3、4、5）
         let buy3 = NewOrderRequest {
             user_id: 102,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Buy,
             price,
             quantity: quantity_per_order * 3, // 匹配剩余3个订单
         };
 
-        let (trades3, _) = book.match_order(buy3);
+        let (trades3, _) = book.match_order(buy3).into_parts();
         assert_eq!(
             trades3.len(),
             3,
@@ -1283,8 +1572,8 @@ mod tests {
     }
 
     #[test]
-    fn test_ringbuffer_capacity() {
-        // P1: 测试RingBuffer容量限制
+    fn test_queue_capacity_limit() {
+        // 测试价位队列容量限制
         // 验证当价格层队列达到容量上限时的行为
 
         // 创建小容量配置以便测试
@@ -1300,12 +1589,13 @@ mod tests {
         for user_id in 1..=capacity {
             let sell = NewOrderRequest {
                 user_id: user_id as u64,
-                symbol: Arc::from("TEST"),
+                client_order_id: 0,
+                symbol: crate::shared::SymbolId::intern("TEST"),
                 order_type: OrderType::Sell,
                 price,
                 quantity: 10,
             };
-            let (trades, conf) = book.match_order(sell);
+            let (trades, conf) = book.match_order(sell).into_parts();
             assert!(
                 trades.is_empty(),
                 "No trades should occur when adding sell orders"
@@ -1314,34 +1604,34 @@ mod tests {
         }
 
         // 验证队列已满 - 尝试添加第11个订单
-        // 注意：当RingBuffer满时，push返回Err，订单不会被添加
+        // 注意：当价位队列满时，订单不会被添加
         let overflow_order = NewOrderRequest {
             user_id: 999,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Sell,
             price,
             quantity: 10,
         };
 
-        let (trades_overflow, _conf_overflow) = book.match_order(overflow_order);
+        let (trades_overflow, conf_overflow) = book.match_order(overflow_order).into_parts();
         assert!(trades_overflow.is_empty(), "No trades should occur");
+        assert!(
+            conf_overflow.is_none(),
+            "a dropped order must not be confirmed as resting"
+        );
 
-        // RingBuffer满时，订单不会被添加，但不会panic
-        // 实现中会打印warning但继续执行
-        // 由于add_ask_order中push失败后不会添加到order_locations，
-        // 所以remaining_quantity > 0但没有挂单，confirmation应该是None
-        // 但实际上代码会返回confirmation，这是一个边界情况
-
-        // 验证前10个订单仍然存在并可以被匹配
+        // Verify the first 10 orders are still present and matchable.
         let buy_all = NewOrderRequest {
             user_id: 100,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Buy,
             price,
             quantity: 100, // 足以匹配所有10个订单
         };
 
-        let (trades_match, _) = book.match_order(buy_all);
+        let (trades_match, _) = book.match_order(buy_all).into_parts();
 
         // 应该只有10笔成交（容量限制）
         assert_eq!(
@@ -1370,6 +1660,52 @@ mod tests {
     }
 
     #[test]
+    fn test_cancel_middle_preserves_fifo_and_cleanup() {
+        let spec = ContractSpec::new("TEST", 1, 1000, 2000);
+        let mut book = TickBasedOrderBook::new(spec);
+        let price = 1500;
+        let mut order_ids = Vec::new();
+
+        for user_id in 1..=100u64 {
+            let order = NewOrderRequest {
+                user_id,
+                client_order_id: 0,
+                symbol: crate::shared::SymbolId::intern("TEST"),
+                order_type: OrderType::Sell,
+                price,
+                quantity: 1,
+            };
+            let (_, confirmation) = book.match_order(order).into_parts();
+            order_ids.push(confirmation.expect("order must rest").order_id);
+        }
+
+        // Cancel every other order from the middle of the queue.
+        for (index, order_id) in order_ids.iter().enumerate() {
+            if index % 2 == 0 {
+                continue;
+            }
+            book.cancel_order(*order_id, (index + 1) as u64)
+                .expect("cancel must succeed");
+        }
+        assert_eq!(book.order_locations.len(), 50);
+
+        let buy = NewOrderRequest {
+            user_id: 999,
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
+            order_type: OrderType::Buy,
+            price,
+            quantity: 50,
+        };
+        let (trades, _) = book.match_order(buy).into_parts();
+        assert_eq!(trades.len(), 50);
+        let sellers: Vec<u64> = trades.iter().map(|trade| trade.seller_user_id).collect();
+        let expected: Vec<u64> = (1..=100u64).filter(|user_id| user_id % 2 == 1).collect();
+        assert_eq!(sellers, expected, "cancellation must preserve FIFO order");
+        assert!(book.order_locations.is_empty());
+    }
+
+    #[test]
     fn test_get_order_status_resting() {
         use crate::shared::protocol::OrderStatusType;
 
@@ -1380,13 +1716,14 @@ mod tests {
         // 添加一个买单（没有对手方，会挂单）
         let buy = NewOrderRequest {
             user_id: 123,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Buy,
             price: 1500,
             quantity: 100,
         };
 
-        let (trades, conf) = book.match_order(buy);
+        let (trades, conf) = book.match_order(buy).into_parts();
         assert!(trades.is_empty(), "Should have no trades");
         assert!(conf.is_some(), "Should have confirmation");
 
@@ -1417,7 +1754,8 @@ mod tests {
         // 先添加一个小的卖单
         let sell_small = NewOrderRequest {
             user_id: 1,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Sell,
             price: 1500,
             quantity: 30,
@@ -1427,13 +1765,14 @@ mod tests {
         // 添加一个大的买单（会部分成交）
         let buy_large = NewOrderRequest {
             user_id: 123,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Buy,
             price: 1500,
             quantity: 100,
         };
 
-        let (trades, conf) = book.match_order(buy_large);
+        let (trades, conf) = book.match_order(buy_large).into_parts();
         assert_eq!(trades.len(), 1, "Should have 1 trade");
         assert_eq!(trades[0].matched_quantity, 30);
         assert!(conf.is_some(), "Should have confirmation for remaining");
@@ -1473,13 +1812,14 @@ mod tests {
         // 添加订单
         let buy = NewOrderRequest {
             user_id: 123,
-            symbol: Arc::from("TEST"),
+            client_order_id: 0,
+            symbol: crate::shared::SymbolId::intern("TEST"),
             order_type: OrderType::Buy,
             price: 1500,
             quantity: 100,
         };
 
-        let (_, conf) = book.match_order(buy);
+        let (_, conf) = book.match_order(buy).into_parts();
         let order_id = conf.unwrap().order_id;
 
         // 验证订单存在
@@ -1513,12 +1853,13 @@ mod tests {
         for (user_id, order_type, price, quantity) in orders {
             let request = NewOrderRequest {
                 user_id,
-                symbol: Arc::from("TEST"),
+                client_order_id: 0,
+                symbol: crate::shared::SymbolId::intern("TEST"),
                 order_type,
                 price,
                 quantity,
             };
-            let (_, conf) = book.match_order(request);
+            let (_, conf) = book.match_order(request).into_parts();
             if let Some(c) = conf {
                 order_ids.push((c.order_id, user_id, order_type, price, quantity));
             }

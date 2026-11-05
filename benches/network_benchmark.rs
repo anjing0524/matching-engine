@@ -1,10 +1,9 @@
 use bytes::{BufMut, BytesMut};
 /// Network Layer Performance Benchmarks
 /// Tests the zero-copy networking stack impact on total latency
-use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType, TradeNotification};
 use std::hint::black_box;
-use std::sync::Arc;
 
 /// # 1. JSON SERIALIZATION COST
 fn bench_json_encode_order_request(c: &mut Criterion) {
@@ -14,7 +13,8 @@ fn bench_json_encode_order_request(c: &mut Criterion) {
     group.bench_function("new_order_request", |b| {
         let order = NewOrderRequest {
             user_id: 12345,
-            symbol: Arc::from("BTC/USD"),
+            client_order_id: 0,
+            symbol: matching_engine::shared::SymbolId::intern("BTC/USD"),
             order_type: OrderType::Buy,
             price: 50000,
             quantity: 100,
@@ -47,7 +47,7 @@ fn bench_json_encode_trade_notification(c: &mut Criterion) {
     group.bench_function("trade_notification", |b| {
         let trade = TradeNotification {
             trade_id: 1,
-            symbol: Arc::from("BTC/USD"),
+            symbol: matching_engine::shared::SymbolId::intern("BTC/USD"),
             matched_price: 50000,
             matched_quantity: 100,
             buyer_user_id: 1,
@@ -113,7 +113,8 @@ fn bench_full_request_pipeline(c: &mut Criterion) {
     group.bench_function("order_to_json_to_bytes", |b| {
         let order = NewOrderRequest {
             user_id: 12345,
-            symbol: Arc::from("BTC/USD"),
+            client_order_id: 0,
+            symbol: matching_engine::shared::SymbolId::intern("BTC/USD"),
             order_type: OrderType::Buy,
             price: 50000,
             quantity: 100,
@@ -142,7 +143,7 @@ fn bench_full_response_pipeline(c: &mut Criterion) {
     group.bench_function("trade_to_json_to_bytes", |b| {
         let trade = TradeNotification {
             trade_id: 1,
-            symbol: Arc::from("BTC/USD"),
+            symbol: matching_engine::shared::SymbolId::intern("BTC/USD"),
             matched_price: 50000,
             matched_quantity: 100,
             buyer_user_id: 1,

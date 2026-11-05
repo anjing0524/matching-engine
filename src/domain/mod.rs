@@ -1,24 +1,9 @@
-pub mod entities;
-pub mod matching;
-/// Domain Layer - Core Business Logic
-///
-/// This is the heart of the matching engine, containing pure business logic
-/// with zero external dependencies. The domain layer is framework-agnostic
-/// and can be tested in isolation.
-///
-/// ## Modules
-/// - `orderbook`: Order book implementations (`TickBasedOrderBook` is production)
-/// - `matching`: Matching algorithms and rules
-/// - `entities`: Domain entities (Order, Trade, etc.)
-///
-/// ## Principles
-/// 1. **Pure Business Logic**: No I/O, no frameworks, no infrastructure
-/// 2. **Framework Independent**: Can be used with any I/O or framework
-/// 3. **Testable**: Easy to unit test without mocks
-/// 4. **Performance Critical**: Highly optimized, zero-allocation where possible
+//! Domain layer: core business logic with no I/O.
+//!
+//! - [`orderbook`]: the production order book implementation
+//!
+//! Order validity is enforced by [`orderbook::TickBasedOrderBook::validate_order`]
+//! before anything is persisted.
 pub mod orderbook;
-pub mod validation;
 
-// Re-export key types
-pub use orderbook::{ContractSpec, OrderBook, OrderNode, TickBasedOrderBook};
-pub use validation::{OrderValidator, ValidationConfig, ValidationError};
+pub use orderbook::{ContractSpec, OrderNode, TickBasedOrderBook};

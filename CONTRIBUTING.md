@@ -76,7 +76,7 @@
 
 在提交功能请求前：
 
-1. **检查路线图** - 查看 [ARCHITECTURE.md](ARCHITECTURE.md)
+1. **了解架构** - 查看 [README.md](README.md#架构)
 2. **讨论设计** - 在Issue中先讨论设计思路
 3. **考虑性能影响** - HFT系统对性能极其敏感
 
@@ -144,8 +144,6 @@ cargo install flamegraph
 # 依赖检查
 cargo install cargo-audit cargo-outdated
 
-# 文档工具
-cargo install mdbook
 ```
 
 ### 3. 验证环境
@@ -615,9 +613,6 @@ cargo doc --no-deps --open
 # 包含私有项
 cargo doc --document-private-items
 
-# 生成项目文档 (mdbook)
-mdbook build docs/
-mdbook serve docs/
 ```
 
 ---

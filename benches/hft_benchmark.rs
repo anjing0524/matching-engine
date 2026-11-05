@@ -5,11 +5,9 @@
 /// 2. 极端吞吐量压测 (百万级TPS)
 /// 3. 订单簿深度压力测试
 /// 4. 市场微观结构模拟 (真实交易模式)
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matching_engine::domain::orderbook::traits::OrderBook;
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use matching_engine::shared::protocol::{NewOrderRequest, OrderType};
-use std::sync::Arc;
 use std::time::Duration;
 
 // ============================================================================
@@ -34,7 +32,8 @@ fn bench_single_order_latency_cold(c: &mut Criterion) {
                 // Measure: 冷启动延迟
                 let order = NewOrderRequest {
                     user_id: 1,
-                    symbol: Arc::from("BTC2501"),
+                    client_order_id: 0,
+                    symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                     order_type: OrderType::Buy,
                     price: 50000,
                     quantity: 10,
@@ -61,7 +60,8 @@ fn bench_single_order_latency_hot(c: &mut Criterion) {
     for i in 0..50 {
         let buy = NewOrderRequest {
             user_id: i,
-            symbol: Arc::from("BTC2501"),
+            client_order_id: 0,
+            symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
             order_type: OrderType::Buy,
             price: 49000 + i * 10,
             quantity: 10,
@@ -70,7 +70,8 @@ fn bench_single_order_latency_hot(c: &mut Criterion) {
 
         let sell = NewOrderRequest {
             user_id: i + 100,
-            symbol: Arc::from("BTC2501"),
+            client_order_id: 0,
+            symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
             order_type: OrderType::Sell,
             price: 51000 + i * 10,
             quantity: 10,
@@ -85,7 +86,8 @@ fn bench_single_order_latency_hot(c: &mut Criterion) {
             // 测试热路径：订单簿已预热
             let order = NewOrderRequest {
                 user_id: 999,
-                symbol: Arc::from("BTC2501"),
+                client_order_id: 0,
+                symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                 order_type: OrderType::Buy,
                 price: price_counter,
                 quantity: 1,
@@ -115,7 +117,8 @@ fn bench_immediate_match_latency(c: &mut Criterion) {
                 // 添加卖单
                 let sell = NewOrderRequest {
                     user_id: 1,
-                    symbol: Arc::from("BTC2501"),
+                    client_order_id: 0,
+                    symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                     order_type: OrderType::Sell,
                     price: 50000,
                     quantity: 100,
@@ -128,7 +131,8 @@ fn bench_immediate_match_latency(c: &mut Criterion) {
                 // Measure: 成交延迟
                 let buy = NewOrderRequest {
                     user_id: 2,
-                    symbol: Arc::from("BTC2501"),
+                    client_order_id: 0,
+                    symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                     order_type: OrderType::Buy,
                     price: 50000,
                     quantity: 10,
@@ -171,7 +175,8 @@ fn bench_extreme_throughput(c: &mut Criterion) {
 
                         let order = NewOrderRequest {
                             user_id: i as u64,
-                            symbol: Arc::from("BTC2501"),
+                            client_order_id: 0,
+                            symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                             order_type,
                             price: 50000 + (i % 100) as u64,
                             quantity: 10,
@@ -209,7 +214,8 @@ fn bench_orderbook_depth_stress(c: &mut Criterion) {
                 for i in 0..depth / 2 {
                     let buy = NewOrderRequest {
                         user_id: i as u64,
-                        symbol: Arc::from("BTC2501"),
+                        client_order_id: 0,
+                        symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                         order_type: OrderType::Buy,
                         price: 49000 - (i % 1000) as u64,
                         quantity: 10,
@@ -221,7 +227,8 @@ fn bench_orderbook_depth_stress(c: &mut Criterion) {
                 for i in 0..depth / 2 {
                     let sell = NewOrderRequest {
                         user_id: (i + depth / 2) as u64,
-                        symbol: Arc::from("BTC2501"),
+                        client_order_id: 0,
+                        symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                         order_type: OrderType::Sell,
                         price: 51000 + (i % 1000) as u64,
                         quantity: 10,
@@ -233,7 +240,8 @@ fn bench_orderbook_depth_stress(c: &mut Criterion) {
                 b.iter(|| {
                     let order = NewOrderRequest {
                         user_id: 999999,
-                        symbol: Arc::from("BTC2501"),
+                        client_order_id: 0,
+                        symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                         order_type: OrderType::Buy,
                         price: 50000,
                         quantity: 1,
@@ -264,7 +272,8 @@ fn bench_best_price_lookup(c: &mut Criterion) {
                 for i in 0..levels / 2 {
                     let buy = NewOrderRequest {
                         user_id: i as u64,
-                        symbol: Arc::from("BTC2501"),
+                        client_order_id: 0,
+                        symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                         order_type: OrderType::Buy,
                         price: 49000 - (i as u64) * 10,
                         quantity: 10,
@@ -273,7 +282,8 @@ fn bench_best_price_lookup(c: &mut Criterion) {
 
                     let sell = NewOrderRequest {
                         user_id: (i + 10_000) as u64,
-                        symbol: Arc::from("BTC2501"),
+                        client_order_id: 0,
+                        symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                         order_type: OrderType::Sell,
                         price: 51000 + (i as u64) * 10,
                         quantity: 10,
@@ -283,8 +293,8 @@ fn bench_best_price_lookup(c: &mut Criterion) {
 
                 // 测试查找最优价性能
                 b.iter(|| {
-                    let bid = orderbook.get_best_bid();
-                    let ask = orderbook.get_best_ask();
+                    let bid = orderbook.best_bid();
+                    let ask = orderbook.best_ask();
                     (bid, ask)
                 });
             },
@@ -313,21 +323,23 @@ fn bench_market_maker_pattern(c: &mut Criterion) {
             // 模拟做市商：双边报价
             let bid = NewOrderRequest {
                 user_id: 1,
-                symbol: Arc::from("BTC2501"),
+                client_order_id: 0,
+                symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                 order_type: OrderType::Buy,
                 price: 49995,
                 quantity: 100,
             };
-            let (_, conf_bid) = orderbook.match_order(bid);
+            let (_, conf_bid) = orderbook.match_order(bid).into_parts();
 
             let ask = NewOrderRequest {
                 user_id: 1,
-                symbol: Arc::from("BTC2501"),
+                client_order_id: 0,
+                symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                 order_type: OrderType::Sell,
                 price: 50005,
                 quantity: 100,
             };
-            let (_, conf_ask) = orderbook.match_order(ask);
+            let (_, conf_ask) = orderbook.match_order(ask).into_parts();
 
             // 取消订单（模拟报价更新）
             if let Some(conf) = conf_bid {
@@ -364,7 +376,8 @@ fn bench_market_impact(c: &mut Criterion) {
                         for i in 0..layers {
                             let sell = NewOrderRequest {
                                 user_id: i as u64,
-                                symbol: Arc::from("BTC2501"),
+                                client_order_id: 0,
+                                symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                                 order_type: OrderType::Sell,
                                 price: 50000 + i as u64,
                                 quantity: 10,
@@ -378,7 +391,8 @@ fn bench_market_impact(c: &mut Criterion) {
                         // Measure: 大单吃穿多个价格层
                         let aggressive_buy = NewOrderRequest {
                             user_id: 999,
-                            symbol: Arc::from("BTC2501"),
+                            client_order_id: 0,
+                            symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                             order_type: OrderType::Buy,
                             price: 50100,
                             quantity: layers as u64 * 10, // 吃穿所有层
@@ -407,7 +421,8 @@ fn bench_hft_arbitrage_strategy(c: &mut Criterion) {
         for i in 0..10 {
             let buy = NewOrderRequest {
                 user_id: i,
-                symbol: Arc::from("BTC2501"),
+                client_order_id: 0,
+                symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                 order_type: OrderType::Buy,
                 price: 49900 + i * 10,
                 quantity: 100,
@@ -416,7 +431,8 @@ fn bench_hft_arbitrage_strategy(c: &mut Criterion) {
 
             let sell = NewOrderRequest {
                 user_id: i + 100,
-                symbol: Arc::from("BTC2501"),
+                client_order_id: 0,
+                symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                 order_type: OrderType::Sell,
                 price: 50100 - i * 10,
                 quantity: 100,
@@ -426,17 +442,18 @@ fn bench_hft_arbitrage_strategy(c: &mut Criterion) {
 
         b.iter(|| {
             // HFT策略：检测到套利机会 → 立即成交
-            let best_ask = orderbook.get_best_ask().unwrap();
+            let best_ask = orderbook.best_ask().unwrap();
 
             // 买入
             let buy = NewOrderRequest {
                 user_id: 999,
-                symbol: Arc::from("BTC2501"),
+                client_order_id: 0,
+                symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                 order_type: OrderType::Buy,
                 price: best_ask,
                 quantity: 10,
             };
-            let (trades, _) = orderbook.match_order(buy);
+            let (trades, _) = orderbook.match_order(buy).into_parts();
 
             // 验证成交
             assert!(!trades.is_empty(), "Should have trades");
@@ -471,13 +488,14 @@ fn bench_order_cancel_performance(c: &mut Criterion) {
                         for i in 0..depth {
                             let order = NewOrderRequest {
                                 user_id: i as u64,
-                                symbol: Arc::from("BTC2501"),
+                                client_order_id: 0,
+                                symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
                                 order_type: OrderType::Buy,
                                 price: 50000, // 同一价格
                                 quantity: 10,
                             };
 
-                            let (_, conf) = orderbook.match_order(order);
+                            let (_, conf) = orderbook.match_order(order).into_parts();
                             if let Some(c) = conf {
                                 order_ids.push(c.order_id);
                             }

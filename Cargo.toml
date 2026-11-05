@@ -1,70 +1,39 @@
 [package]
 name = "matching-engine"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.99"
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
-bytes = "1.11"
-tokio-util = { version = "0.7", features = ["codec"] }
-parking_lot = "0.12"
-bumpalo = { version = "3.16.0", features = ["collections"] }
-bincode = { version = "2.0.0-rc.3", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tikv-jemallocator = "0.5"
 crossbeam = "0.8"
-futures = "0.3"
+mio = { version = "1.0", features = ["os-poll", "net"] }
+socket2 = { version = "0.5", features = ["all"] }
 rand = "0.8"
-num_cpus = "1.16"
 smallvec = "1.13"
-bit-vec = "0.6"
-async-trait = "0.1"
 thiserror = "2.0"
 clap = { version = "4.5.52", features = ["derive"] }
 prometheus = "0.14"
-lazy_static = "1.4"
-axum = "0.8"
-hyper = "1.0"
-tracing-opentelemetry = { version = "0.23", optional = true }
-opentelemetry = { version = "0.22", optional = true }
-opentelemetry-otlp = { version = "0.15", optional = true }
 crc32fast = "1.4"
-flate2 = "1.0"
+signal-hook = "0.3"
+serde_json = "1.0"
 
-# 可选依赖
+# Optional dependencies
 core_affinity = { version = "0.8", optional = true }
-tokio-uring = { version = "0.5", optional = true }
-libc = "0.2"
-# socket2: 移除直接依赖，使用tokio传递的版本
-# tower: 移除直接依赖，使用axum传递的版本
 
 [features]
-# CPU亲和性特性（需要平台支持）
+# CPU affinity support (requires platform support)
 cpu-affinity = ["core_affinity"]
 
-# io_uring高性能网络
-io-uring = ["tokio-uring"]
-
-# DPDK网络加速（需要DPDK库）
-dpdk = []
-
-# FPGA硬件加速（需要FPGA驱动）
-fpga = []
-
 [dev-dependencies]
+bytes = "1.11"
 criterion = "0.7"
 tempfile = "3.10"
-
-[[bench]]
-name = "orderbook_benchmark"
-harness = false
-
-[[bench]]
-name = "comprehensive_benchmark"
-harness = false
+parking_lot = "0.12"
+num_cpus = "1.16"
 
 [[bench]]
 name = "network_benchmark"
@@ -74,29 +43,12 @@ harness = false
 name = "e2e_network_benchmark"
 harness = false
 
-
-[[bench]]
-name = "partitioned_engine_benchmark"
-harness = false
-
-[[bench]]
-name = "high_load_benchmark"
-harness = false
-
-[[bench]]
-name = "ringbuffer_comparison"
-harness = false
-
 [[bench]]
 name = "tick_orderbook_benchmark"
 harness = false
 
 [[bench]]
 name = "network_middleware_benchmark"
-harness = false
-
-[[bench]]
-name = "network_backend_comparison"
 harness = false
 
 [[bench]]
@@ -111,18 +63,22 @@ harness = false
 name = "hft_benchmark"
 harness = false
 
-# 性能优化配置
-[profile.release]
-opt-level = 3           # 最大性能优化
-lto = "thin"            # 瘦链接时优化（平衡编译时间和性能）
-codegen-units = 16      # 并行代码生成单元（平衡编译时间）
-strip = false           # 保留符号表以便调试（生产环境可设为true）
+[[bench]]
+name = "latency_percentiles"
+harness = false
 
-# 二进制大小优化配置（可选，用于部署）
+# Performance profile
+[profile.release]
+opt-level = 3           # maximum performance
+lto = "thin"            # thin LTO (balances compile time and performance)
+codegen-units = 16      # parallel codegen units
+strip = false           # keep symbols for debugging (set to true in production)
+
+# Binary-size profile (optional, for deployment)
 [profile.release-small]
 inherits = "release"
-opt-level = "z"         # 优化二进制大小
-lto = true              # 完整链接时优化
-codegen-units = 1       # 单一代码生成单元
-strip = true            # 剥离符号表
-panic = "abort"         # panic时直接abort，减小二进制
+opt-level = "z"         # optimize for binary size
+lto = true              # full link-time optimization
+codegen-units = 1       # single codegen unit
+strip = true            # strip symbols
+panic = "abort"         # abort on panic to shrink the binary
