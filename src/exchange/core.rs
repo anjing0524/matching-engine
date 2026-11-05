@@ -228,7 +228,7 @@ impl ExchangeCore {
         price_ticks: u64,
         quantity: u64,
     ) -> u64 {
-        let order_id = self.auction_order_seq;
+        let order_id = self.book.reserve_order_id();
         self.auction_order_seq += 1;
         self.auction_orders.push(AuctionOrder {
             order_id,
@@ -244,7 +244,22 @@ impl ExchangeCore {
     /// Uncrosses the collected auction orders at the maximum-volume price.
     pub fn uncross_auction(&mut self, previous_settlement: u64) -> AuctionResult {
         let orders = std::mem::take(&mut self.auction_orders);
-        auction::uncross(&orders, previous_settlement)
+        let result = auction::uncross(&orders, previous_settlement);
+        for order in &result.remaining {
+            let side = match order.side {
+                Side::Buy => OrderType::Buy,
+                Side::Sell => OrderType::Sell,
+            };
+            let _ = self.book.insert_resting_order(
+                order.user_id,
+                side,
+                order.price_ticks,
+                order.quantity,
+                order.quantity,
+                order.order_id,
+            );
+        }
+        result
     }
 
     #[must_use]
@@ -1146,6 +1161,8 @@ mod tests {
         assert_eq!(result.price_ticks, Some(50_000));
         assert_eq!(result.volume, 8);
         assert_eq!(core.auction_order_count(), 0);
+        assert_eq!(core.best_bid(), Some(50_000));
+        assert_eq!(core.best_ask(), None);
     }
 
     #[test]

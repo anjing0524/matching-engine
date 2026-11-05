@@ -761,6 +761,56 @@ impl TickBasedOrderBook {
         self.next_order_id
     }
 
+    /// Reserves and returns the next exchange order id.
+    pub fn reserve_order_id(&mut self) -> u64 {
+        let id = self.next_order_id;
+        self.next_order_id += 1;
+        id
+    }
+
+    /// Inserts a pre-existing resting order without matching it.
+    ///
+    /// Used to move call-auction remainder into the continuous book while
+    /// preserving the auction-assigned order id.
+    ///
+    /// # Errors
+    /// Returns a reason for duplicate ids, off-grid prices, or a full level.
+    pub fn insert_resting_order(
+        &mut self,
+        user_id: u64,
+        side: OrderType,
+        price: u64,
+        quantity: u64,
+        original_quantity: u64,
+        order_id: u64,
+    ) -> Result<(), String> {
+        if quantity == 0 || original_quantity == 0 {
+            return Err(format!("order {order_id} has zero quantity"));
+        }
+        if self.order_locations.contains_key(&order_id) {
+            return Err(format!("duplicate order id {order_id}"));
+        }
+        let idx = self
+            .price_to_index(price)
+            .ok_or_else(|| format!("order {order_id} price is off the tick grid"))?;
+        let book_side = match side {
+            OrderType::Buy => BookSide::Bid,
+            OrderType::Sell => BookSide::Ask,
+        };
+        if !self.add_order(
+            book_side,
+            idx,
+            user_id,
+            quantity,
+            original_quantity,
+            order_id,
+        ) {
+            return Err(format!("price level for order {order_id} is full"));
+        }
+        self.next_order_id = self.next_order_id.max(order_id + 1);
+        Ok(())
+    }
+
     /// Returns the contract specification.
     #[must_use]
     pub fn spec(&self) -> &ContractSpec {
