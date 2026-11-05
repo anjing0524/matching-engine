@@ -154,6 +154,7 @@ WAL。故障时停止 standby，用 `matching-engine --data-dir ./standby-data` 
 ```bash
 ./scripts/replication-drill.sh
 ./scripts/gateway-reconnect-drill.sh
+./scripts/failover-drill.sh
 ```
 
 当前限制：
