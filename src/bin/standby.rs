@@ -6,7 +6,8 @@
 //! seed the standby directory offline when attaching to an existing primary.
 use clap::Parser;
 use matching_engine::infrastructure::persistence::{
-    Journal, PersistenceConfig, ReplicationBatch, replication::read_batch,
+    Journal, PersistenceConfig, Snapshot,
+    replication::{ReplicationFrame, read_frame},
 };
 use std::io::{self, Write};
 use std::os::unix::net::UnixStream;
@@ -54,15 +55,34 @@ fn run() -> io::Result<()> {
     let mut last_seq = 0u64;
     let mut batches = 0u64;
     loop {
-        let batch = read_batch(&mut stream).map_err(|error| io::Error::other(error.to_string()))?;
-        let Some(ReplicationBatch { records }) = batch else {
+        let frame = read_frame(&mut stream).map_err(|error| io::Error::other(error.to_string()))?;
+        let Some(frame) = frame else {
             break;
         };
+        let records = match frame {
+            ReplicationFrame::Bootstrap { snapshot, records } => {
+                if !snapshot.is_empty() {
+                    let snapshot_path = config.data_dir.join("snapshot.bin");
+                    std::fs::write(&snapshot_path, &snapshot)?;
+                    std::fs::File::open(&snapshot_path)?.sync_all()?;
+                    if let Some(snapshot) = Snapshot::load(&config.data_dir)
+                        .map_err(|error| io::Error::other(error.to_string()))?
+                    {
+                        last_seq = last_seq.max(snapshot.last_seq);
+                    }
+                }
+                records
+            }
+            ReplicationFrame::Live(batch) => batch.records,
+        };
         for record in &records {
+            if record.seq <= last_seq {
+                continue;
+            }
             journal
                 .append_record(record)
                 .map_err(|error| io::Error::other(error.to_string()))?;
-            last_seq = last_seq.max(record.seq);
+            last_seq = record.seq;
         }
         journal
             .commit()

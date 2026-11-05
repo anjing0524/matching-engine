@@ -4,8 +4,11 @@
 //! processes. A slow standby is disconnected rather than backpressuring the
 //! matching path. This is a warm-standby transport, not consensus: catch-up
 //! from a pre-existing primary WAL requires an offline data-directory copy.
-use crate::infrastructure::persistence::ReplicationBatch;
 use crate::infrastructure::persistence::replication::{encode_batch, write_batch};
+use crate::infrastructure::persistence::wal::WalReader;
+use crate::infrastructure::persistence::{
+    ReplicationBatch, Snapshot, read_start_file, replication::encode_bootstrap,
+};
 use crate::shared::metrics::METRICS;
 use crossbeam::channel::{Receiver, Sender, bounded};
 use std::io::{self, Read, Write};
@@ -28,6 +31,7 @@ struct Subscriber {
 pub fn start(
     path: PathBuf,
     receiver: Receiver<ReplicationBatch>,
+    data_dir: PathBuf,
     shutdown: Arc<AtomicBool>,
 ) -> io::Result<thread::JoinHandle<()>> {
     if let Some(parent) = path.parent()
@@ -43,7 +47,6 @@ pub fn start(
         .spawn(move || {
             let mut subscribers: Vec<Subscriber> = Vec::new();
             let sent_seq = Arc::new(AtomicU64::new(0));
-            let mut started = false;
             while !shutdown.load(Ordering::Acquire) {
                 loop {
                     match listener.accept() {
@@ -51,15 +54,11 @@ pub fn start(
                             // Accepted sockets may inherit nonblocking mode from
                             // the listener; the writer/ack threads use blocking IO.
                             let _ = stream.set_nonblocking(false);
-                            if started {
-                                // No catch-up yet: a late standby would silently
-                                // miss the earlier WAL prefix.
-                                tracing::warn!(
-                                    "rejecting late standby connection (no WAL catch-up)"
-                                );
+                            let Ok(bootstrap) = bootstrap_frame(&data_dir) else {
+                                tracing::error!("failed to build standby bootstrap");
                                 let _ = stream.shutdown(std::net::Shutdown::Both);
                                 continue;
-                            }
+                            };
                             let (sender, receiver) = bounded(64);
                             let Ok(ack_reader) = stream.try_clone() else {
                                 continue;
@@ -75,8 +74,10 @@ pub fn start(
                                 let _ = thread::Builder::new()
                                     .name("replication-ack".to_string())
                                     .spawn(move || read_acks(ack_reader, ack_state, sent_state));
-                                subscribers.push(Subscriber { sender, acked_seq });
-                                METRICS.replication_connected.set(subscribers.len() as i64);
+                                if sender.try_send(bootstrap).is_ok() {
+                                    subscribers.push(Subscriber { sender, acked_seq });
+                                    METRICS.replication_connected.set(subscribers.len() as i64);
+                                }
                             }
                         }
                         Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
@@ -95,7 +96,6 @@ pub fn start(
                         let Ok(encoded) = encode_batch(&batch) else {
                             continue;
                         };
-                        started = true;
                         let sent = batch
                             .records
                             .last()
@@ -133,6 +133,23 @@ pub fn start(
             }
             let _ = std::fs::remove_file(&path);
         })
+}
+
+fn bootstrap_frame(data_dir: &std::path::Path) -> io::Result<Vec<u8>> {
+    let snapshot = std::fs::read(data_dir.join("snapshot.bin")).unwrap_or_default();
+    let snapshot_seq = Snapshot::load(data_dir)
+        .map_err(|error| io::Error::other(error.to_string()))?
+        .map(|snapshot| snapshot.last_seq);
+    let start = read_start_file(data_dir).map_err(|error| io::Error::other(error.to_string()))?;
+    if snapshot_seq.is_none() && start > 0 {
+        return Err(io::Error::other(
+            "cannot bootstrap standby: WAL prefix was pruned and no snapshot exists",
+        ));
+    }
+    let scan = WalReader::new(data_dir.to_path_buf())
+        .scan_from(snapshot_seq)
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    encode_bootstrap(&snapshot, &scan.records).map_err(|error| io::Error::other(error.to_string()))
 }
 
 fn read_acks(mut stream: UnixStream, acked_seq: Arc<AtomicU64>, sent_seq: Arc<AtomicU64>) {

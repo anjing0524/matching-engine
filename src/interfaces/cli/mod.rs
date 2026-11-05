@@ -329,7 +329,12 @@ fn run_server(config: CliConfig) -> Result<(), CliError> {
         if let Some(path) = config.replica_listen.clone() {
             let (sender, receiver) = crossbeam::channel::bounded(1024);
             let shutdown = Arc::new(AtomicBool::new(false));
-            let handle = replication::start(path, receiver, Arc::clone(&shutdown))?;
+            let handle = replication::start(
+                path,
+                receiver,
+                config.data_dir.clone(),
+                Arc::clone(&shutdown),
+            )?;
             (Some(sender), Some(shutdown), Some(handle))
         } else {
             (None, None, None)
