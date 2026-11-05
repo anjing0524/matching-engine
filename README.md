@@ -236,6 +236,9 @@ runtime。理由：
 架构提升路线（问题→决策→阶段验收）见
 [docs/architecture-improvement-plan.md](docs/architecture-improvement-plan.md)。
 
+交易所核心系统（gateway / middleware / core）的需求澄清与架构决策见
+[docs/exchange-core-architecture.md](docs/exchange-core-architecture.md)。
+
 使用 Prometheus `histogram_quantile(0.99, ...)` / `0.999` / `0.9999` 查看尾部；
 `max` 应结合进程/SO 监控单独观察。`load_generator` 会直接抓取 `/metrics` 并打印
 p50/p90/p99/p99.9/p99.99，不再输出平均值。基准 `cargo bench --bench latency_percentiles`
