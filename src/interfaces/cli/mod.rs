@@ -16,6 +16,7 @@ use crate::interfaces::session::{self, SessionMetrics};
 use clap::Parser;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
+use std::fs::{File, OpenOptions};
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -106,6 +107,11 @@ pub struct CliConfig {
     /// Primary-only warm-standby replication socket path.
     #[arg(long)]
     pub replica_listen: Option<PathBuf>,
+
+    /// Shared exclusive lease path; a second engine on the same lease refuses
+    /// to start, preventing local split-brain during promotion.
+    #[arg(long)]
+    pub lease_file: Option<PathBuf>,
 
     /// Data directory for WAL files.
     #[arg(short = 'd', long, default_value = "./data")]
@@ -212,6 +218,27 @@ fn validate_config(config: &CliConfig) -> Result<(), CliError> {
     Ok(())
 }
 
+fn acquire_lease(path: &std::path::Path) -> Result<File, CliError> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(path)?;
+    file.try_lock().map_err(|error| {
+        CliError::Config(format!(
+            "failed to acquire engine lease {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(file)
+}
+
 /// Errors that can terminate the server.
 #[derive(Debug, thiserror::Error)]
 enum CliError {
@@ -267,6 +294,11 @@ pub fn run() {
 /// Runs the persistent matching server until SIGINT/SIGTERM.
 fn run_server(config: CliConfig) -> Result<(), CliError> {
     validate_config(&config)?;
+
+    let _lease = match &config.lease_file {
+        Some(path) => Some(acquire_lease(path)?),
+        None => None,
+    };
 
     let mut spec = ContractSpec::new(
         &config.symbol,
