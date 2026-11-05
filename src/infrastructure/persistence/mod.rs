@@ -8,12 +8,14 @@
 //! in-memory states identical.
 pub mod journal;
 pub(crate) mod recovery;
+pub mod replication;
 pub mod snapshot;
 pub mod types;
 pub(crate) mod wal;
 
 pub use journal::{Journal, JournalRecovery};
 pub(crate) use recovery::RecoveryManager;
+pub use replication::ReplicationBatch;
 pub use snapshot::Snapshot;
 pub use types::{PersistenceConfig, WalEntry, WalRecord};
 pub(crate) use wal::{WalReader, WalWriter, read_start_file, write_start_file};

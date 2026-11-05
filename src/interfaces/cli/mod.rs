@@ -11,6 +11,7 @@ use crate::infrastructure::observability::ObservabilityServer;
 use crate::infrastructure::persistence::{PersistenceConfig, PersistenceError};
 use crate::interfaces::engine_ipc::{self, EngineIpcConfig};
 use crate::interfaces::gateway::{Gateway, GatewayConfig, GatewayError};
+use crate::interfaces::replication;
 use crate::interfaces::session::{self, SessionMetrics};
 use clap::Parser;
 use signal_hook::consts::{SIGINT, SIGTERM};
@@ -94,6 +95,10 @@ pub struct CliConfig {
     #[arg(long)]
     pub engine_uds: Option<PathBuf>,
 
+    /// Primary-only warm-standby replication socket path.
+    #[arg(long)]
+    pub replica_listen: Option<PathBuf>,
+
     /// Data directory for WAL files.
     #[arg(short = 'd', long, default_value = "./data")]
     pub data_dir: PathBuf,
@@ -172,6 +177,11 @@ fn validate_config(config: &CliConfig) -> Result<(), CliError> {
         return Err(CliError::Config(format!(
             "price range covers {levels} levels, exceeding the limit of {MAX_PRICE_LEVELS}"
         )));
+    }
+    if config.replica_listen.is_some() && config.engine_uds.is_none() {
+        return Err(CliError::Config(
+            "replication requires --engine-uds (decoupled journaler)".into(),
+        ));
     }
     if config.async_fsync && !config.wal_sync {
         return Err(CliError::Config(
@@ -262,6 +272,16 @@ fn run_server(config: CliConfig) -> Result<(), CliError> {
         PersistentMatchingService::new(spec, persistence_config)?
     };
 
+    let (replication_sender, _replication_shutdown, _replication_thread) =
+        if let Some(path) = config.replica_listen.clone() {
+            let (sender, receiver) = crossbeam::channel::bounded(1024);
+            let shutdown = Arc::new(AtomicBool::new(false));
+            let handle = replication::start(path, receiver, Arc::clone(&shutdown))?;
+            (Some(sender), Some(shutdown), Some(handle))
+        } else {
+            (None, None, None)
+        };
+
     let runtime = MatchingRuntime::start(
         service,
         RuntimeConfig {
@@ -271,6 +291,7 @@ fn run_server(config: CliConfig) -> Result<(), CliError> {
             busy_poll: config.busy_poll,
             async_fsync: config.async_fsync && config.engine_uds.is_none(),
             decouple_wal: config.engine_uds.is_some(),
+            replication: replication_sender,
         },
     )?;
     let matching = runtime.handle();

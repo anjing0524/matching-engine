@@ -8,7 +8,9 @@
 use crate::application::services::persistent_service::{
     PersistentMatchingService, ServiceError, ServiceResult,
 };
-use crate::infrastructure::persistence::{Journal, PersistenceError, Snapshot, WalRecord};
+use crate::infrastructure::persistence::{
+    Journal, PersistenceError, ReplicationBatch, Snapshot, WalRecord,
+};
 use crate::shared::metrics::METRICS;
 use crate::shared::protocol::{
     CancelOrderRequest, NewOrderRequest, OrderConfirmation, TradeNotification,
@@ -113,6 +115,8 @@ pub struct RuntimeConfig {
     /// Move the entire WAL writer to a journaler thread. The matching thread
     /// only stages sequenced records in memory.
     pub decouple_wal: bool,
+    /// Optional warm-standby replication sink for committed WAL batches.
+    pub replication: Option<Sender<ReplicationBatch>>,
 }
 
 impl Default for RuntimeConfig {
@@ -124,6 +128,7 @@ impl Default for RuntimeConfig {
             busy_poll: false,
             async_fsync: false,
             decouple_wal: false,
+            replication: None,
         }
     }
 }
@@ -314,6 +319,7 @@ impl MatchingRuntime {
         let busy_poll = config.busy_poll;
         let async_fsync = config.async_fsync;
         let decouple_wal = config.decouple_wal;
+        let replication = config.replication;
 
         let (commit_sender, commit_worker) = if async_fsync && !decouple_wal {
             let (sender, commit_receiver) = bounded(config.queue_capacity.max(1));
@@ -346,6 +352,7 @@ impl MatchingRuntime {
                         journal_durable,
                         journal_control,
                         journal_commit_latency,
+                        replication,
                     )
                 })?;
 
@@ -747,6 +754,7 @@ fn run_journaler(
     durable_seq: Arc<AtomicU64>,
     control: Arc<RuntimeControl>,
     commit_latency: Histogram,
+    replication: Option<Sender<ReplicationBatch>>,
 ) {
     const MAX_GROUP: usize = 64;
     let mut failed: Option<PersistenceError> = None;
@@ -813,6 +821,14 @@ fn run_journaler(
                 if result.is_ok() {
                     commit_latency.observe(started.elapsed().as_nanos() as f64);
                     durable_seq.store(journal.current_seq().saturating_sub(1), Ordering::Release);
+                    if let Some(replication) = &replication {
+                        let batch = ReplicationBatch {
+                            records: records.clone(),
+                        };
+                        if replication.try_send(batch).is_err() {
+                            tracing::warn!("replication sink is full or stopped");
+                        }
+                    }
                 } else if failed.is_none()
                     && let Err(error) = &result
                 {
