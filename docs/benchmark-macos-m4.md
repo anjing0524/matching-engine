@@ -67,6 +67,25 @@ journaler 会把已排队的多个 batch 合并成一次 commit；Mac APFS 的 f
 这组数字**不能**用于 Linux 生产磁盘结论；生产应使用独立 journaler + 批量 commit、
 fsync 队列、或复制/持久内存方案。
 
+## 2026-11-05 复现结果（同一台 M4，10 logical / 4P+6E）
+
+`scripts/benchmark-macos.sh` 最新一次输出：
+
+| 项目 | 结果 |
+|---|---|
+| UDS closed-loop，4 clients | 28,640/s，p50 67.7 µs，p99 115.8 µs |
+| ring closed-loop，4 clients，4 loops + notify/backpressure | 25,611/s，p50 76.9 µs，p99 119.7 µs |
+| UDS fire-and-forget，64 clients | 64,474/s |
+| ring fire-and-forget，64 clients | 43,262/s（上一次同配置约 62k/s，波动明显） |
+| durable group commit，UDS，16 clients closed-loop | 818/s，p50 7.99 ms，p99 8.62 ms |
+
+说明：
+
+- ring 高并发吞吐在多次运行间波动较大，当前仍**没有稳定超过 UDS**，所以默认保持 UDS；
+- durable 数字是“16 个 closed-loop client、每单等待 commit”的口径，和
+  fire-and-forget 的 group commit 吞吐不是同一工作负载；APFS fsync 仍限制尾延迟；
+- 同机运行客户端会争抢 P/E 核，不能作为生产容量承诺。
+
 ## 复现
 
 ```bash
@@ -86,3 +105,9 @@ target/release/latency_probe --server 127.0.0.1:18200 --clients 4 --seconds 10
 - engine IPC writer 批量回包；
 - 更大 batch 与 journaler group commit（fsync 模式）；
 - CPU 隔离/绑核、硬件时间戳后再做正式尾延迟对比。
+
+
+## 可复现脚本
+
+`scripts/benchmark-macos.sh` 会读取 `hw.ncpu` / P/E 核数，依次跑 UDS、ring
+closed-loop、64-client 吞吐和 durable group commit，并使用临时目录清理进程。
