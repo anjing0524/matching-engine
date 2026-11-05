@@ -23,6 +23,7 @@ static GLOBAL: Jemalloc = Jemalloc;
 
 pub mod application;
 pub mod domain;
+pub mod exchange;
 pub mod infrastructure;
 pub mod interfaces;
 pub mod shared;
