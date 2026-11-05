@@ -161,7 +161,10 @@ WAL。故障时停止 standby，用 `matching-engine --data-dir ./standby-data` 
 - 没有历史 WAL catch-up：standby 必须在 primary 开始接收订单前连接，否则 primary
   会拒绝迟到连接；接入已有 primary 前需离线复制 data directory；
 - primary 的 replication channel 是异步有界队列，如果 standby 长期落后，可能丢弃
-  副本而不是阻塞撮合；这会导致该 standby 不可安全提升，需要监控/修复；
+  副本而不是阻塞撮合；监控 `matching_engine_replication_lag_records`、
+  `matching_engine_replication_connected`、`matching_engine_replication_dropped_batches`，
+  出现 dropped/lag 增长时该 standby 不可安全提升；
+- standby 每个 batch commit 后回 ack；primary 用 ack 计算 lag，但还没有自动 fencing；
 - 没有复制确认、票据 fencing 或 leader election。
 
 ### 为什么去掉 Tokio / 不用 `Box<dyn Connection>`

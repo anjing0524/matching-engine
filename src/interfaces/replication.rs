@@ -6,17 +6,19 @@
 //! from a pre-existing primary WAL requires an offline data-directory copy.
 use crate::infrastructure::persistence::ReplicationBatch;
 use crate::infrastructure::persistence::replication::{encode_batch, write_batch};
+use crate::shared::metrics::METRICS;
 use crossbeam::channel::{Receiver, Sender, bounded};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
 struct Subscriber {
     sender: Sender<Vec<u8>>,
+    acked_seq: Arc<AtomicU64>,
 }
 
 /// Starts the replication listener in a background thread.
@@ -40,6 +42,7 @@ pub fn start(
         .name("wal-replication".to_string())
         .spawn(move || {
             let mut subscribers: Vec<Subscriber> = Vec::new();
+            let mut sent_seq = 0u64;
             let mut started = false;
             while !shutdown.load(Ordering::Acquire) {
                 loop {
@@ -55,12 +58,21 @@ pub fn start(
                                 continue;
                             }
                             let (sender, receiver) = bounded(64);
+                            let Ok(ack_reader) = stream.try_clone() else {
+                                continue;
+                            };
+                            let acked_seq = Arc::new(AtomicU64::new(0));
+                            let ack_state = Arc::clone(&acked_seq);
                             if thread::Builder::new()
                                 .name("replication-writer".to_string())
                                 .spawn(move || writer(stream, receiver))
                                 .is_ok()
                             {
-                                subscribers.push(Subscriber { sender });
+                                let _ = thread::Builder::new()
+                                    .name("replication-ack".to_string())
+                                    .spawn(move || read_acks(ack_reader, ack_state));
+                                subscribers.push(Subscriber { sender, acked_seq });
+                                METRICS.replication_connected.set(subscribers.len() as i64);
                             }
                         }
                         Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
@@ -80,9 +92,23 @@ pub fn start(
                             continue;
                         };
                         started = true;
+                        sent_seq = batch.records.last().map_or(sent_seq, |record| record.seq);
+                        let before = subscribers.len();
                         subscribers.retain(|subscriber| {
                             matches!(subscriber.sender.try_send(encoded.clone()), Ok(()))
                         });
+                        if subscribers.len() < before {
+                            METRICS
+                                .replication_dropped_batches
+                                .inc_by((before - subscribers.len()) as u64);
+                        }
+                        METRICS.replication_connected.set(subscribers.len() as i64);
+                        let lag = subscribers
+                            .iter()
+                            .map(|subscriber| subscriber.acked_seq.load(Ordering::Acquire))
+                            .min()
+                            .map_or(0, |acked| sent_seq.saturating_sub(acked));
+                        METRICS.replication_lag_records.set(lag as i64);
                     }
                     Err(crossbeam::channel::RecvTimeoutError::Timeout) => {}
                     Err(crossbeam::channel::RecvTimeoutError::Disconnected) => break,
@@ -90,6 +116,13 @@ pub fn start(
             }
             let _ = std::fs::remove_file(&path);
         })
+}
+
+fn read_acks(mut stream: UnixStream, acked_seq: Arc<AtomicU64>) {
+    let mut buf = [0u8; 8];
+    while stream.read_exact(&mut buf).is_ok() {
+        acked_seq.store(u64::from_be_bytes(buf), Ordering::Release);
+    }
 }
 
 fn writer(mut stream: UnixStream, receiver: Receiver<Vec<u8>>) {

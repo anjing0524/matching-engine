@@ -8,7 +8,7 @@ use clap::Parser;
 use matching_engine::infrastructure::persistence::{
     Journal, PersistenceConfig, ReplicationBatch, replication::read_batch,
 };
-use std::io;
+use std::io::{self, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::thread;
@@ -66,6 +66,9 @@ fn run() -> io::Result<()> {
         }
         journal
             .commit()
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        stream
+            .write_all(&last_seq.to_be_bytes())
             .map_err(|error| io::Error::other(error.to_string()))?;
         batches += 1;
         if batches.is_multiple_of(100) {
