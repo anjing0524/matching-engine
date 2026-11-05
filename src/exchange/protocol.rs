@@ -125,6 +125,14 @@ pub enum Side {
 }
 
 impl Side {
+    #[must_use]
+    pub const fn opposite(self) -> Self {
+        match self {
+            Self::Buy => Self::Sell,
+            Self::Sell => Self::Buy,
+        }
+    }
+
     fn tag(self) -> u8 {
         match self {
             Self::Buy => 1,

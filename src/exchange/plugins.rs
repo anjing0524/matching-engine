@@ -77,8 +77,13 @@ impl PreTradePlugin for AvailableClosePlugin {
         if order.offset == Offset::Open {
             return Ok(());
         }
+        let position_side = if order.offset == Offset::Open {
+            order.side
+        } else {
+            order.side.opposite()
+        };
         let key = CloseKey::new(
-            PositionKey::new(order.account_id, order.side, order.hedge),
+            PositionKey::new(order.account_id, position_side, order.hedge),
             order.offset,
         );
         if context.frozen_close.available(key, context.positions) < order.quantity {
@@ -114,7 +119,11 @@ mod tests {
     fn order(offset: Offset, quantity: u64) -> RiskOrder {
         RiskOrder {
             account_id: 1,
-            side: Side::Buy,
+            side: if offset == Offset::Open {
+                Side::Buy
+            } else {
+                Side::Sell
+            },
             offset,
             hedge: Hedge::Spec,
             quantity,

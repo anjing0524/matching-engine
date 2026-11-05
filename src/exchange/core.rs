@@ -13,9 +13,12 @@
 //! - deterministic replay: same command sequence produces the same events.
 
 use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
-use crate::exchange::protocol::{Command, CommandType, PriceType, Side};
+use crate::exchange::plugins::{PreTradePlugin, RiskOrder, ValidationContext};
+use crate::exchange::positions::{CloseKey, FrozenClose, PositionKey, Positions};
+use crate::exchange::protocol::{Command, CommandType, Offset, PriceType, Side};
 use crate::shared::SymbolId;
 use crate::shared::protocol::{NewOrderRequest, OrderType};
+use std::collections::HashMap;
 
 /// A new limit order submitted to the core.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +71,9 @@ pub struct ExchangeCore {
     book: TickBasedOrderBook,
     symbol: SymbolId,
     next_trade_id: u64,
+    positions: Positions,
+    frozen_close: FrozenClose,
+    close_reservations: HashMap<u64, (CloseKey, u64)>,
 }
 
 impl ExchangeCore {
@@ -77,7 +83,24 @@ impl ExchangeCore {
             book: TickBasedOrderBook::new(spec),
             symbol,
             next_trade_id: 1,
+            positions: Positions::new(),
+            frozen_close: FrozenClose::new(),
+            close_reservations: HashMap::new(),
         }
+    }
+
+    #[must_use]
+    pub fn positions(&self) -> &Positions {
+        &self.positions
+    }
+
+    pub fn positions_mut(&mut self) -> &mut Positions {
+        &mut self.positions
+    }
+
+    #[must_use]
+    pub fn frozen_close(&self) -> &FrozenClose {
+        &self.frozen_close
     }
 
     /// Submits one limit order and returns every event it produced.
@@ -130,15 +153,125 @@ impl ExchangeCore {
     /// Cancels a resting order. A missing/foreign order is rejected locally.
     pub fn cancel(&mut self, command: CancelCommand) -> CoreEvent {
         match self.book.cancel_order(command.order_id, command.user_id) {
-            Ok(()) => CoreEvent::Canceled {
-                order_id: command.order_id,
-                user_id: command.user_id,
-            },
+            Ok(()) => {
+                if let Some((key, quantity)) = self.close_reservations.remove(&command.order_id) {
+                    self.frozen_close.release(key, quantity);
+                }
+                CoreEvent::Canceled {
+                    order_id: command.order_id,
+                    user_id: command.user_id,
+                }
+            }
             Err(reason) => CoreEvent::Rejected {
                 client_order_id: 0,
                 reason,
             },
         }
+    }
+
+    /// Executes a command through a static pre-trade plugin chain.
+    ///
+    /// Close orders reserve `frozen_close` before reaching the book. A fully
+    /// filled or rejected order releases the reservation immediately; a
+    /// resting order keeps it until it fills or is canceled. Fills do not yet
+    /// mutate positions in this slice.
+    pub fn execute_with_plugins<P: PreTradePlugin>(
+        &mut self,
+        command: Command,
+        plugin: &P,
+    ) -> Vec<CoreEvent> {
+        if command.command_type != CommandType::NewOrder || command.price_type != PriceType::Limit {
+            return self.execute(command);
+        }
+        if command.price_ticks < 0 || command.quantity == 0 {
+            return vec![CoreEvent::Rejected {
+                client_order_id: command.client_order_id,
+                reason: "invalid price or quantity".to_string(),
+            }];
+        }
+
+        let side = match command.side {
+            Side::Buy => OrderType::Buy,
+            Side::Sell => OrderType::Sell,
+        };
+        let risk_order = RiskOrder {
+            account_id: u64::from(command.user_id),
+            side: command.side,
+            offset: command.offset,
+            hedge: command.hedge,
+            quantity: command.quantity,
+        };
+        let context = ValidationContext {
+            positions: &self.positions,
+            frozen_close: &self.frozen_close,
+        };
+        if let Err(reason) = plugin.check(&risk_order, &context) {
+            return vec![CoreEvent::Rejected {
+                client_order_id: command.client_order_id,
+                reason: reason.to_string(),
+            }];
+        }
+
+        let close_key = if command.offset == Offset::Open {
+            None
+        } else {
+            let key = CloseKey::new(
+                PositionKey::new(
+                    u64::from(command.user_id),
+                    if command.offset == Offset::Open {
+                        command.side
+                    } else {
+                        command.side.opposite()
+                    },
+                    command.hedge,
+                ),
+                command.offset,
+            );
+            if let Err(error) = self
+                .frozen_close
+                .reserve(key, &self.positions, command.quantity)
+            {
+                return vec![CoreEvent::Rejected {
+                    client_order_id: command.client_order_id,
+                    reason: format!("close reservation failed: {error:?}"),
+                }];
+            }
+            Some((key, command.quantity))
+        };
+
+        let events = self.submit_limit(LimitOrderCommand {
+            user_id: u64::from(command.user_id),
+            client_order_id: command.client_order_id,
+            side,
+            price_ticks: command.price_ticks as u64,
+            quantity: command.quantity,
+        });
+
+        let Some((key, reserved)) = close_key else {
+            return events;
+        };
+        let remaining = events.iter().find_map(|event| match event {
+            CoreEvent::Accepted {
+                order_id,
+                remaining_quantity,
+                ..
+            } => Some((*order_id, *remaining_quantity)),
+            _ => None,
+        });
+        match remaining {
+            Some((order_id, remaining_quantity)) => {
+                // Filled part has left the book; keep only the resting part.
+                let filled = reserved.saturating_sub(remaining_quantity);
+                self.frozen_close.release(key, filled);
+                self.close_reservations
+                    .insert(order_id, (key, remaining_quantity));
+            }
+            None => {
+                // Filled or rejected: no resting close order remains.
+                self.frozen_close.release(key, reserved);
+            }
+        }
+        events
     }
 
     /// Executes one fixed-size command-log record.
@@ -359,6 +492,35 @@ mod tests {
         let mut command = wire_command(Side::Buy, 50_000, 5);
         command.command_type = CommandType::TimeTick;
         let events = core.execute(command);
+        assert!(matches!(events.as_slice(), [CoreEvent::Rejected { .. }]));
+    }
+
+    #[test]
+    fn close_order_reserves_and_releases_position() {
+        use crate::exchange::plugins::AvailableClosePlugin;
+        use crate::exchange::positions::PositionKey;
+        use crate::exchange::protocol::Offset;
+
+        let mut core = core();
+        core.positions_mut()
+            .apply_open(
+                PositionKey::new(1, Side::Buy, crate::exchange::protocol::Hedge::Spec),
+                10,
+            )
+            .unwrap();
+        let mut command = wire_command(Side::Sell, 50_000, 5);
+        command.offset = Offset::CloseToday;
+        let events = core.execute_with_plugins(command, &AvailableClosePlugin);
+        assert!(matches!(events.as_slice(), [CoreEvent::Accepted { .. }]));
+        let key = crate::exchange::positions::CloseKey::new(
+            PositionKey::new(1, Side::Buy, crate::exchange::protocol::Hedge::Spec),
+            Offset::CloseToday,
+        );
+        assert_eq!(core.frozen_close().available(key, core.positions()), 5);
+
+        let mut too_large = wire_command(Side::Sell, 50_000, 6);
+        too_large.offset = Offset::CloseToday;
+        let events = core.execute_with_plugins(too_large, &AvailableClosePlugin);
         assert!(matches!(events.as_slice(), [CoreEvent::Rejected { .. }]));
     }
 
