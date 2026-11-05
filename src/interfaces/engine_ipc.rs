@@ -8,6 +8,7 @@ use crate::application::services::matching_runtime::{
     CancelTicket, MatchingHandle, OrderOutcome, OrderTicket, RuntimeError,
 };
 use crate::application::services::persistent_service::ServiceError;
+use crate::shared::metrics::METRICS;
 use crate::shared::protocol::{
     CancelOrderRequest, ClientMessage, ClientRequest, ErrorCode, OrderConfirmation,
     PROTOCOL_VERSION, ServerMessage, ServerResponse,
@@ -19,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Maximum internal/client payload accepted from a peer.
 pub const MAX_IPC_PAYLOAD: usize = 1024 * 1024;
@@ -185,6 +186,7 @@ fn read_u32<R: Read>(reader: &mut R) -> io::Result<Option<u32>> {
 pub struct EngineIpcConfig {
     pub path: PathBuf,
     pub max_connections: usize,
+    pub symbol: String,
 }
 
 /// Starts the engine IPC listener in a background thread.
@@ -219,10 +221,11 @@ pub fn start(
                         }
                         let handle = handle.clone();
                         let active = Arc::clone(&active);
+                        let symbol = config.symbol.clone();
                         let _ = thread::Builder::new()
                             .name("engine-ipc-conn".to_string())
                             .spawn(move || {
-                                handle_connection(stream, handle);
+                                handle_connection(stream, handle, &symbol);
                                 active.fetch_sub(1, Ordering::AcqRel);
                             });
                     }
@@ -239,25 +242,26 @@ pub fn start(
         })
 }
 
-enum Pending {
+struct Pending {
+    client_id: u64,
+    started: Instant,
+    kind: PendingKind,
+}
+
+enum PendingKind {
     Order {
-        client_id: u64,
         request_id: u64,
         ticket: OrderTicket,
     },
     Cancel {
-        client_id: u64,
         request_id: u64,
         cancel: CancelOrderRequest,
         ticket: CancelTicket,
     },
-    Immediate {
-        client_id: u64,
-        payloads: Vec<Vec<u8>>,
-    },
+    Immediate(Vec<Vec<u8>>),
 }
 
-fn handle_connection(stream: UnixStream, handle: MatchingHandle) {
+fn handle_connection(stream: UnixStream, handle: MatchingHandle, symbol: &str) {
     tracing::info!("engine IPC handler started");
     // The listener was set nonblocking; accepted sockets may inherit that on
     // some platforms. Engine handlers intentionally use blocking reads.
@@ -270,15 +274,17 @@ fn handle_connection(stream: UnixStream, handle: MatchingHandle) {
         return;
     };
     let (sender, receiver) = crossbeam::channel::bounded::<Pending>(1024);
+    let latency = METRICS.request_latency_ns.with_label_values(&[symbol]);
     let writer = thread::Builder::new()
         .name("engine-ipc-writer".to_string())
         .spawn(move || {
             let mut writer = stream;
             while let Ok(pending) = receiver.recv() {
-                let response = build_pending(pending);
+                let (response, started) = build_pending(pending);
                 if write_response(&mut writer, &response).is_err() {
                     break;
                 }
+                latency.observe(started.elapsed().as_nanos() as f64);
             }
         });
 
@@ -295,50 +301,49 @@ fn handle_connection(stream: UnixStream, handle: MatchingHandle) {
             }
         };
         let client_id = request.client_id;
-        let pending = match decode_frame_payload::<ClientRequest>(&request.payload) {
-            Ok(client) if client.version != PROTOCOL_VERSION => Pending::Immediate {
-                client_id,
-                payloads: rejection(
-                    client.request_id,
-                    ErrorCode::ProtocolVersion,
-                    format!("unsupported protocol version {}", client.version),
-                ),
-            },
+        let started = Instant::now();
+        let kind = match decode_frame_payload::<ClientRequest>(&request.payload) {
+            Ok(client) if client.version != PROTOCOL_VERSION => PendingKind::Immediate(rejection(
+                client.request_id,
+                ErrorCode::ProtocolVersion,
+                format!("unsupported protocol version {}", client.version),
+            )),
             Ok(ClientRequest {
                 request_id,
                 message: ClientMessage::NewOrder(order),
                 ..
             }) => match handle.submit_order_ticket(order) {
-                Ok(ticket) => Pending::Order {
-                    client_id,
+                Ok(ticket) => PendingKind::Order { request_id, ticket },
+                Err(error) => PendingKind::Immediate(rejection(
                     request_id,
-                    ticket,
-                },
-                Err(error) => Pending::Immediate {
-                    client_id,
-                    payloads: rejection(request_id, ErrorCode::Internal, error.to_string()),
-                },
+                    ErrorCode::Internal,
+                    error.to_string(),
+                )),
             },
             Ok(ClientRequest {
                 request_id,
                 message: ClientMessage::CancelOrder(cancel),
                 ..
             }) => match handle.submit_cancel_ticket(cancel.clone()) {
-                Ok(ticket) => Pending::Cancel {
-                    client_id,
+                Ok(ticket) => PendingKind::Cancel {
                     request_id,
                     cancel,
                     ticket,
                 },
-                Err(error) => Pending::Immediate {
-                    client_id,
-                    payloads: rejection(request_id, ErrorCode::Internal, error.to_string()),
-                },
+                Err(error) => PendingKind::Immediate(rejection(
+                    request_id,
+                    ErrorCode::Internal,
+                    error.to_string(),
+                )),
             },
-            Err(error) => Pending::Immediate {
-                client_id,
-                payloads: rejection(0, ErrorCode::Internal, error.to_string()),
-            },
+            Err(error) => {
+                PendingKind::Immediate(rejection(0, ErrorCode::Internal, error.to_string()))
+            }
+        };
+        let pending = Pending {
+            client_id,
+            started,
+            kind,
         };
         if sender.send(pending).is_err() {
             break;
@@ -351,33 +356,28 @@ fn handle_connection(stream: UnixStream, handle: MatchingHandle) {
     }
 }
 
-fn build_pending(pending: Pending) -> IpcResponse {
-    match pending {
-        Pending::Order {
-            client_id,
-            request_id,
-            ticket,
-        } => IpcResponse {
-            client_id,
-            payloads: order_frames(request_id, ticket.wait()),
-        },
-        Pending::Cancel {
-            client_id,
+fn build_pending(pending: Pending) -> (IpcResponse, Instant) {
+    let Pending {
+        client_id,
+        started,
+        kind,
+    } = pending;
+    let payloads = match kind {
+        PendingKind::Order { request_id, ticket } => order_frames(request_id, ticket.wait()),
+        PendingKind::Cancel {
             request_id,
             cancel,
             ticket,
-        } => IpcResponse {
-            client_id,
-            payloads: cancel_frames(request_id, &cancel, ticket.wait()),
-        },
-        Pending::Immediate {
-            client_id,
-            payloads,
-        } => IpcResponse {
+        } => cancel_frames(request_id, &cancel, ticket.wait()),
+        PendingKind::Immediate(payloads) => payloads,
+    };
+    (
+        IpcResponse {
             client_id,
             payloads,
         },
-    }
+        started,
+    )
 }
 
 fn response_payload(request_id: u64, message: ServerMessage) -> Vec<u8> {

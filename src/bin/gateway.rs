@@ -19,7 +19,7 @@ use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -135,10 +135,12 @@ fn run() -> io::Result<()> {
         })?;
 
     let config = Arc::new(config);
+    let connections = Arc::new(AtomicUsize::new(0));
     let mut handles = Vec::with_capacity(config.io_threads);
     for loop_id in 0..config.io_threads {
         let config = Arc::clone(&config);
         let shutdown = Arc::clone(&shutdown);
+        let connections = Arc::clone(&connections);
         let listener = bind_listener(addr, config.io_threads > 1)?;
         let local = listener.local_addr()?;
         println!(
@@ -148,7 +150,7 @@ fn run() -> io::Result<()> {
         handles.push(
             thread::Builder::new()
                 .name(format!("gateway-io-{loop_id}"))
-                .spawn(move || run_loop(config, listener, shutdown))?,
+                .spawn(move || run_loop(config, listener, shutdown, connections))?,
         );
     }
 
@@ -198,6 +200,7 @@ fn run_loop(
     config: Arc<Config>,
     mut listener: TcpListener,
     shutdown: Arc<AtomicBool>,
+    connections: Arc<AtomicUsize>,
 ) -> io::Result<()> {
     let upstream_stream = connect_engine(&config.engine_uds)?;
     let mut upstream = Upstream {
@@ -228,6 +231,7 @@ fn run_loop(
                     &mut clients,
                     &mut next_token,
                     &config,
+                    &connections,
                 )?,
                 UPSTREAM => {
                     if !service_upstream(&mut upstream, &mut poll, &mut clients, &config)? {
@@ -240,6 +244,7 @@ fn run_loop(
                 token => {
                     if !service_client(token, &mut poll, &mut clients, &mut upstream, &config)? {
                         clients.remove(&token);
+                        connections.fetch_sub(1, Ordering::AcqRel);
                     }
                 }
             }
@@ -254,11 +259,13 @@ fn accept_clients(
     clients: &mut HashMap<Token, Client>,
     next_token: &mut u64,
     config: &Config,
+    connections: &AtomicUsize,
 ) -> io::Result<()> {
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
-                if clients.len() >= config.max_connections {
+                if connections.fetch_add(1, Ordering::AcqRel) >= config.max_connections {
+                    connections.fetch_sub(1, Ordering::AcqRel);
                     let _ = stream.shutdown(std::net::Shutdown::Both);
                     continue;
                 }

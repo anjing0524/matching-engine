@@ -297,6 +297,7 @@ fn run_server(config: CliConfig) -> Result<(), CliError> {
             EngineIpcConfig {
                 path: engine_uds.clone(),
                 max_connections: config.max_connections,
+                symbol: config.symbol.clone(),
             },
             matching,
             Arc::clone(&shutdown),

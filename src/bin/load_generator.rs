@@ -76,6 +76,19 @@ fn main() {
                     request_count as f64 / elapsed.as_secs_f64()
                 );
             }
+            if let Some(order_count) = counter_sum(&body, "matching_engine_orders_total") {
+                println!("引擎订单数: {order_count}");
+                println!(
+                    "引擎订单速率: {:.2}/s",
+                    order_count as f64 / elapsed.as_secs_f64()
+                );
+            }
+            if let Some(trade_count) = counter_sum(&body, "matching_engine_trades_total") {
+                println!(
+                    "引擎成交速率: {:.2}/s",
+                    trade_count as f64 / elapsed.as_secs_f64()
+                );
+            }
             let series = [
                 (
                     "请求(engine)",
@@ -255,6 +268,30 @@ fn scrape_metrics(addr: &str) -> io::Result<String> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "malformed HTTP response"))?;
     String::from_utf8(response[body_start..].to_vec())
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
+/// Sums all `metric` samples (before `_count` suffix matching).
+fn counter_sum(body: &str, metric: &str) -> Option<u64> {
+    let mut total = 0u64;
+    let mut found = false;
+    for line in body.lines() {
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some(name) = line.split_whitespace().next() else {
+            continue;
+        };
+        if name != metric && !name.starts_with(&format!("{metric}{{")) {
+            continue;
+        }
+        if let Some(value) = line.split_whitespace().last()
+            && let Ok(value) = value.parse::<f64>()
+        {
+            total = total.saturating_add(value as u64);
+            found = true;
+        }
+    }
+    found.then_some(total)
 }
 
 /// Returns the total count of a Prometheus histogram.
