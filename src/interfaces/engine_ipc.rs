@@ -451,6 +451,19 @@ pub fn cleanup(path: &Path) {
 pub const RING_REQUEST_FILE: &str = "request.ring";
 pub const RING_RESPONSE_FILE: &str = "response.ring";
 
+/// Paths for ring pair `index`; index 0 keeps the original single-ring names.
+#[must_use]
+pub fn ring_paths(dir: &Path, index: usize) -> (PathBuf, PathBuf) {
+    if index == 0 {
+        (dir.join(RING_REQUEST_FILE), dir.join(RING_RESPONSE_FILE))
+    } else {
+        (
+            dir.join(format!("request-{index}.ring")),
+            dir.join(format!("response-{index}.ring")),
+        )
+    }
+}
+
 /// Configuration for the engine-side SPSC ring transport.
 #[derive(Debug, Clone)]
 pub struct RingIpcConfig {
@@ -480,19 +493,50 @@ pub fn start_ring(
     symbol: String,
     shutdown: Arc<AtomicBool>,
 ) -> io::Result<thread::JoinHandle<()>> {
+    let mut handles = start_rings(config, 1, handle, symbol, shutdown)?;
+    Ok(handles.pop().expect("one ring handle"))
+}
+
+/// Starts `count` independent ring pairs, one consumer thread per pair.
+///
+/// # Errors
+/// Returns an error if any ring file cannot be created or a thread cannot be
+/// spawned.
+pub fn start_rings(
+    config: RingIpcConfig,
+    count: usize,
+    handle: MatchingHandle,
+    symbol: String,
+    shutdown: Arc<AtomicBool>,
+) -> io::Result<Vec<thread::JoinHandle<()>>> {
     std::fs::create_dir_all(&config.dir)?;
-    let request = SpscRing::create(
-        &config.dir.join(RING_REQUEST_FILE),
-        config.capacity,
-        config.slot_size,
-    )?;
-    let response_ring = SpscRing::create(
-        &config.dir.join(RING_RESPONSE_FILE),
-        config.capacity,
-        config.slot_size,
-    )?;
+    let mut handles = Vec::with_capacity(count);
+    for index in 0..count {
+        handles.push(start_ring_at(
+            &config,
+            index,
+            handle.clone(),
+            &symbol,
+            Arc::clone(&shutdown),
+        )?);
+    }
+    Ok(handles)
+}
+
+fn start_ring_at(
+    config: &RingIpcConfig,
+    index: usize,
+    handle: MatchingHandle,
+    symbol: &str,
+    shutdown: Arc<AtomicBool>,
+) -> io::Result<thread::JoinHandle<()>> {
+    let (request_path, response_path) = ring_paths(&config.dir, index);
+    let request = SpscRing::create(&request_path, config.capacity, config.slot_size)?;
+    let response_ring = SpscRing::create(&response_path, config.capacity, config.slot_size)?;
+    let symbol = symbol.to_string();
+    let slot_size = config.slot_size;
     thread::Builder::new()
-        .name("engine-ipc-ring".to_string())
+        .name(format!("engine-ipc-ring-{index}"))
         .spawn(move || {
             let (sender, receiver) = crossbeam::channel::bounded::<Pending>(1024);
             let latency = METRICS.request_latency_ns.with_label_values(&[&symbol]);
@@ -526,7 +570,7 @@ pub fn start_ring(
                         latency.observe(started.elapsed().as_nanos() as f64);
                     }
                 });
-            let mut request_buf = Vec::with_capacity(config.slot_size);
+            let mut request_buf = Vec::with_capacity(slot_size);
             while !shutdown.load(Ordering::Acquire) {
                 if !request.try_pop_into(&mut request_buf) {
                     std::hint::spin_loop();
@@ -545,8 +589,8 @@ pub fn start_ring(
             if let Ok(writer) = writer {
                 let _ = writer.join();
             }
-            let _ = std::fs::remove_file(config.dir.join(RING_REQUEST_FILE));
-            let _ = std::fs::remove_file(config.dir.join(RING_RESPONSE_FILE));
+            let _ = std::fs::remove_file(request_path);
+            let _ = std::fs::remove_file(response_path);
         })
 }
 

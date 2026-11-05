@@ -99,6 +99,10 @@ pub struct CliConfig {
     #[arg(long)]
     pub ipc_ring_dir: Option<PathBuf>,
 
+    /// Number of independent engine ring pairs (match gateway --io-threads).
+    #[arg(long, default_value_t = 1)]
+    pub ipc_ring_threads: usize,
+
     /// Primary-only warm-standby replication socket path.
     #[arg(long)]
     pub replica_listen: Option<PathBuf>,
@@ -181,6 +185,11 @@ fn validate_config(config: &CliConfig) -> Result<(), CliError> {
         return Err(CliError::Config(format!(
             "price range covers {levels} levels, exceeding the limit of {MAX_PRICE_LEVELS}"
         )));
+    }
+    if config.ipc_ring_threads == 0 {
+        return Err(CliError::Config(
+            "ipc ring threads must be greater than zero".into(),
+        ));
     }
     if config.engine_uds.is_some() && config.ipc_ring_dir.is_some() {
         return Err(CliError::Config(
@@ -327,7 +336,7 @@ fn run_server(config: CliConfig) -> Result<(), CliError> {
         }
 
         let shutdown = Arc::new(AtomicBool::new(false));
-        let (ipc, ring, engine_path) = if let Some(engine_uds) = config.engine_uds.clone() {
+        let (ipc, rings, engine_path) = if let Some(engine_uds) = config.engine_uds.clone() {
             let ipc = engine_ipc::start(
                 EngineIpcConfig {
                     path: engine_uds.clone(),
@@ -338,20 +347,25 @@ fn run_server(config: CliConfig) -> Result<(), CliError> {
                 Arc::clone(&shutdown),
             )?;
             println!("🔌 Engine IPC: {}", engine_uds.display());
-            (Some(ipc), None, Some(engine_uds))
+            (Some(ipc), Vec::new(), Some(engine_uds))
         } else {
             let ring_dir = config.ipc_ring_dir.clone().expect("ring dir");
-            let ring = engine_ipc::start_ring(
+            let rings = engine_ipc::start_rings(
                 engine_ipc::RingIpcConfig {
                     dir: ring_dir.clone(),
                     ..Default::default()
                 },
+                config.ipc_ring_threads,
                 matching,
                 config.symbol.clone(),
                 Arc::clone(&shutdown),
             )?;
-            println!("🔌 Engine IPC ring: {}", ring_dir.display());
-            (None, Some(ring), None)
+            println!(
+                "🔌 Engine IPC rings: {} ({} pairs)",
+                ring_dir.display(),
+                config.ipc_ring_threads
+            );
+            (None, rings, None)
         };
 
         let mut signals = Signals::new([SIGINT, SIGTERM])?;
@@ -368,7 +382,7 @@ fn run_server(config: CliConfig) -> Result<(), CliError> {
         if let Some(ipc) = ipc {
             let _ = ipc.join();
         }
-        if let Some(ring) = ring {
+        for ring in rings {
             let _ = ring.join();
         }
         if let Some(engine_uds) = engine_path {

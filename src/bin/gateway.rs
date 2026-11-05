@@ -7,8 +7,7 @@
 //! process is decoupled through IPC.
 use clap::Parser;
 use matching_engine::interfaces::engine_ipc::{
-    IpcRequest, MAX_IPC_PAYLOAD, RING_REQUEST_FILE, RING_RESPONSE_FILE, decode_response,
-    encode_request,
+    IpcRequest, MAX_IPC_PAYLOAD, decode_response, encode_request, ring_paths,
 };
 use matching_engine::shared::spsc_ring::{PushError, SpscRing};
 use mio::net::{TcpListener, TcpStream, UnixStream};
@@ -22,7 +21,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const LISTENER: Token = Token(0);
@@ -140,22 +139,30 @@ fn run() -> io::Result<()> {
             }
         })?;
 
-    if config.ipc_ring_dir.is_some() && config.io_threads > 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "shared-memory ring transport supports exactly one io thread",
-        ));
-    }
     let config = Arc::new(config);
     let connections = Arc::new(AtomicUsize::new(0));
     if let Some(ring_dir) = config.ipc_ring_dir.clone() {
-        let listener = bind_listener(addr, false)?;
-        let local = listener.local_addr()?;
-        println!(
-            "gateway ring loop listening on {local}, rings {}",
-            ring_dir.display()
-        );
-        return run_ring_loop(config, listener, shutdown, connections, ring_dir);
+        let mut handles = Vec::with_capacity(config.io_threads);
+        for loop_id in 0..config.io_threads {
+            let config = Arc::clone(&config);
+            let shutdown = Arc::clone(&shutdown);
+            let connections = Arc::clone(&connections);
+            let listener = bind_listener(addr, config.io_threads > 1)?;
+            let local = listener.local_addr()?;
+            println!(
+                "gateway ring loop {loop_id} listening on {local}, rings {}",
+                ring_dir.display()
+            );
+            let ring_dir = ring_dir.clone();
+            handles.push(
+                thread::Builder::new()
+                    .name(format!("gateway-ring-{loop_id}"))
+                    .spawn(move || {
+                        run_ring_loop(config, listener, shutdown, connections, ring_dir, loop_id)
+                    })?,
+            );
+        }
+        return join_loops(handles, shutdown);
     }
     let mut handles = Vec::with_capacity(config.io_threads);
     for loop_id in 0..config.io_threads {
@@ -177,6 +184,30 @@ fn run() -> io::Result<()> {
 
     let mut first_error: Option<io::Error> = None;
     for handle in handles {
+        match handle.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                first_error.get_or_insert(error);
+                shutdown.store(true, Ordering::Release);
+            }
+            Err(_) => {
+                first_error.get_or_insert_with(error_from_join);
+                shutdown.store(true, Ordering::Release);
+            }
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn join_loops(
+    mut handles: Vec<JoinHandle<io::Result<()>>>,
+    shutdown: Arc<AtomicBool>,
+) -> io::Result<()> {
+    let mut first_error = None;
+    while let Some(handle) = handles.pop() {
         match handle.join() {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
@@ -280,9 +311,8 @@ struct RingTransport {
     response_buf: Vec<u8>,
 }
 
-fn connect_rings(dir: &std::path::Path) -> io::Result<RingTransport> {
-    let request_path = dir.join(RING_REQUEST_FILE);
-    let response_path = dir.join(RING_RESPONSE_FILE);
+fn connect_rings(dir: &std::path::Path, index: usize) -> io::Result<RingTransport> {
+    let (request_path, response_path) = ring_paths(dir, index);
     let mut last = None;
     for _ in 0..300 {
         if request_path.exists() && response_path.exists() {
@@ -315,8 +345,9 @@ fn run_ring_loop(
     shutdown: Arc<AtomicBool>,
     connections: Arc<AtomicUsize>,
     ring_dir: PathBuf,
+    ring_index: usize,
 ) -> io::Result<()> {
-    let mut ring = connect_rings(&ring_dir)?;
+    let mut ring = connect_rings(&ring_dir, ring_index)?;
     let mut poll = Poll::new()?;
     poll.registry()
         .register(&mut listener, LISTENER, Interest::READABLE)?;
