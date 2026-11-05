@@ -1,9 +1,10 @@
 //! WAL shipping server for a warm standby.
 //!
 //! The primary journaler broadcasts committed batches to connected standby
-//! processes. A slow standby is disconnected rather than backpressuring the
-//! matching path. This is a warm-standby transport, not consensus: catch-up
-//! from a pre-existing primary WAL requires an offline data-directory copy.
+//! processes. Late standbys receive an asynchronous bootstrap (snapshot plus
+//! WAL tail) while live batches queue for that subscriber; existing standbys
+//! keep streaming. A slow standby is disconnected rather than backpressuring
+//! the matching path. This is a warm-standby transport, not consensus.
 use crate::infrastructure::persistence::replication::{encode_batch, write_batch};
 use crate::infrastructure::persistence::wal::WalReader;
 use crate::infrastructure::persistence::{
@@ -11,6 +12,7 @@ use crate::infrastructure::persistence::{
 };
 use crate::shared::metrics::METRICS;
 use crossbeam::channel::{Receiver, Sender, bounded};
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -20,8 +22,16 @@ use std::thread;
 use std::time::Duration;
 
 struct Subscriber {
+    id: u64,
     sender: Sender<Vec<u8>>,
     acked_seq: Arc<AtomicU64>,
+    bootstrapping: bool,
+    pending: VecDeque<Vec<u8>>,
+}
+
+enum BootstrapReady {
+    Ready { id: u64, frame: Vec<u8> },
+    Failed { id: u64 },
 }
 
 /// Starts the replication listener in a background thread.
@@ -47,18 +57,19 @@ pub fn start(
         .spawn(move || {
             let mut subscribers: Vec<Subscriber> = Vec::new();
             let sent_seq = Arc::new(AtomicU64::new(0));
+            let (ready_tx, ready_rx) = bounded::<BootstrapReady>(16);
+            let mut next_id = 0u64;
             while !shutdown.load(Ordering::Acquire) {
+                while let Ok(event) = ready_rx.try_recv() {
+                    apply_bootstrap_event(&mut subscribers, event);
+                    METRICS.replication_connected.set(subscribers.len() as i64);
+                }
                 loop {
                     match listener.accept() {
                         Ok((stream, _)) => {
                             // Accepted sockets may inherit nonblocking mode from
                             // the listener; the writer/ack threads use blocking IO.
                             let _ = stream.set_nonblocking(false);
-                            let Ok(bootstrap) = bootstrap_frame(&data_dir) else {
-                                tracing::error!("failed to build standby bootstrap");
-                                let _ = stream.shutdown(std::net::Shutdown::Both);
-                                continue;
-                            };
                             let (sender, receiver) = bounded(64);
                             let Ok(ack_reader) = stream.try_clone() else {
                                 continue;
@@ -74,10 +85,30 @@ pub fn start(
                                 let _ = thread::Builder::new()
                                     .name("replication-ack".to_string())
                                     .spawn(move || read_acks(ack_reader, ack_state, sent_state));
-                                if sender.try_send(bootstrap).is_ok() {
-                                    subscribers.push(Subscriber { sender, acked_seq });
-                                    METRICS.replication_connected.set(subscribers.len() as i64);
-                                }
+                                let id = next_id;
+                                next_id += 1;
+                                subscribers.push(Subscriber {
+                                    id,
+                                    sender,
+                                    acked_seq,
+                                    bootstrapping: true,
+                                    pending: VecDeque::new(),
+                                });
+                                METRICS.replication_connected.set(subscribers.len() as i64);
+                                let bootstrap_tx = ready_tx.clone();
+                                let bootstrap_dir = data_dir.clone();
+                                let _ = thread::Builder::new()
+                                    .name("replication-bootstrap".to_string())
+                                    .spawn(move || {
+                                        let event = match bootstrap_frame(&bootstrap_dir) {
+                                            Ok(frame) => BootstrapReady::Ready { id, frame },
+                                            Err(error) => {
+                                                tracing::error!(%error, "failed to build standby bootstrap");
+                                                BootstrapReady::Failed { id }
+                                            }
+                                        };
+                                        let _ = bootstrap_tx.send(event);
+                                    });
                             }
                         }
                         Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
@@ -102,8 +133,16 @@ pub fn start(
                             .map_or(sent_seq.load(Ordering::Acquire), |record| record.seq);
                         sent_seq.store(sent, Ordering::Release);
                         let before = subscribers.len();
-                        subscribers.retain(|subscriber| {
-                            matches!(subscriber.sender.try_send(encoded.clone()), Ok(()))
+                        subscribers.retain_mut(|subscriber| {
+                            if subscriber.bootstrapping {
+                                if subscriber.pending.len() >= 1024 {
+                                    return false;
+                                }
+                                subscriber.pending.push_back(encoded.clone());
+                                true
+                            } else {
+                                subscriber.sender.try_send(encoded.clone()).is_ok()
+                            }
                         });
                         if subscribers.len() < before {
                             METRICS
@@ -133,6 +172,37 @@ pub fn start(
             }
             let _ = std::fs::remove_file(&path);
         })
+}
+
+fn apply_bootstrap_event(subscribers: &mut Vec<Subscriber>, event: BootstrapReady) {
+    match event {
+        BootstrapReady::Failed { id } => {
+            subscribers.retain(|subscriber| subscriber.id != id);
+        }
+        BootstrapReady::Ready { id, frame } => {
+            let Some(index) = subscribers
+                .iter()
+                .position(|subscriber| subscriber.id == id)
+            else {
+                return;
+            };
+            let subscriber = &mut subscribers[index];
+            let mut ok = subscriber.sender.try_send(frame).is_ok();
+            if ok {
+                while let Some(bytes) = subscriber.pending.pop_front() {
+                    if subscriber.sender.try_send(bytes).is_err() {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                subscriber.bootstrapping = false;
+            } else {
+                subscribers.remove(index);
+            }
+        }
+    }
 }
 
 fn bootstrap_frame(data_dir: &std::path::Path) -> io::Result<Vec<u8>> {

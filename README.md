@@ -171,6 +171,7 @@ WAL。故障时停止 standby，用 `matching-engine --data-dir ./standby-data` 
   已被裁剪且没有 snapshot，primary 会拒绝 bootstrap；
 - standby data directory 目前要求为空/全新，不能把一个已有 WAL 的目录作为 bootstrap
   目标；
+- bootstrap 队列在极端高流量下仍可能丢弃过慢的新 standby；需要更强的快照/追平控制面；
 - primary 的 replication channel 是异步有界队列，如果 standby 长期落后，可能丢弃
   副本而不是阻塞撮合；监控 `matching_engine_replication_lag_records`、
   `matching_engine_replication_connected`、`matching_engine_replication_dropped_batches`；

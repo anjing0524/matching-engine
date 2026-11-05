@@ -42,6 +42,10 @@ RUST_LOG=warn "$ROOT/target/release/standby" \
 STANDBY=$!
 PIDS+=("$STANDBY")
 
+# Keep writing while the bootstrap snapshot/WAL tail is built: live batches
+# must queue for the bootstrapping subscriber, not block existing replication.
+"$ROOT/target/release/latency_probe" --server "$LISTEN" --clients 8 --seconds 2   >/dev/null 2>&1 || true
+
 HEALTH=""
 for _ in $(seq 1 100); do
   HEALTH=$(curl -sf "http://127.0.0.1:$METRICS/health" || true)
