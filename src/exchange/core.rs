@@ -13,6 +13,7 @@
 //! - deterministic replay: same command sequence produces the same events.
 
 use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
+use crate::exchange::auction::{self, AuctionOrder, AuctionResult};
 use crate::exchange::plugins::{PreTradePlugin, RiskOrder, ValidationContext};
 use crate::exchange::positions::{CloseKey, FrozenClose, PositionKey, Positions};
 use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
@@ -104,6 +105,8 @@ pub struct ExchangeCore {
     orders: HashMap<u64, OrderMeta>,
     private_seq: u64,
     private_events: Vec<PrivateEvent>,
+    auction_orders: Vec<AuctionOrder>,
+    auction_order_seq: u64,
 }
 
 impl ExchangeCore {
@@ -118,6 +121,8 @@ impl ExchangeCore {
             orders: HashMap::new(),
             private_seq: 1,
             private_events: Vec::new(),
+            auction_orders: Vec::new(),
+            auction_order_seq: 1,
         }
     }
 
@@ -205,6 +210,46 @@ impl ExchangeCore {
             client_order_id: command.client_order_id,
             reason,
         }]
+    }
+
+    /// Clears the current auction collection.
+    pub fn begin_auction(&mut self) {
+        self.auction_orders.clear();
+    }
+
+    /// Queues one limit order into the call auction and returns its assigned id.
+    ///
+    /// The caller is responsible for rejecting market/arbitrage orders; this
+    /// slice only models collected limit orders.
+    pub fn queue_auction_order(
+        &mut self,
+        user_id: u64,
+        side: Side,
+        price_ticks: u64,
+        quantity: u64,
+    ) -> u64 {
+        let order_id = self.auction_order_seq;
+        self.auction_order_seq += 1;
+        self.auction_orders.push(AuctionOrder {
+            order_id,
+            user_id,
+            side,
+            price_ticks,
+            quantity,
+            arrival_seq: order_id,
+        });
+        order_id
+    }
+
+    /// Uncrosses the collected auction orders at the maximum-volume price.
+    pub fn uncross_auction(&mut self, previous_settlement: u64) -> AuctionResult {
+        let orders = std::mem::take(&mut self.auction_orders);
+        auction::uncross(&orders, previous_settlement)
+    }
+
+    #[must_use]
+    pub fn auction_order_count(&self) -> usize {
+        self.auction_orders.len()
     }
 
     /// Submits one limit order and returns every event it produced.
@@ -1088,6 +1133,19 @@ mod tests {
         );
         assert_eq!(core.best_ask(), None);
         assert_eq!(core.best_bid(), None);
+    }
+
+    #[test]
+    fn auction_collects_and_uncrosses() {
+        let mut core = core();
+        core.begin_auction();
+        core.queue_auction_order(1, Side::Buy, 50_000, 10);
+        core.queue_auction_order(2, Side::Sell, 49_900, 8);
+        assert_eq!(core.auction_order_count(), 2);
+        let result = core.uncross_auction(50_000);
+        assert_eq!(result.price_ticks, Some(50_000));
+        assert_eq!(result.volume, 8);
+        assert_eq!(core.auction_order_count(), 0);
     }
 
     #[test]
