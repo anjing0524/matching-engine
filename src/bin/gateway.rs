@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const LISTENER: Token = Token(0);
 const UPSTREAM: Token = Token(1);
@@ -77,6 +77,7 @@ struct Client {
     write_buf: Vec<u8>,
     in_flight: usize,
     read_paused: bool,
+    ring_paused: bool,
     registered: bool,
 }
 
@@ -421,6 +422,14 @@ fn run_ring_loop(
             &shutdown,
             &mut request_notify_pending,
         )?;
+        resume_ring_paused(
+            &mut ring,
+            &mut poll,
+            &mut clients,
+            &config,
+            &shutdown,
+            &mut request_notify_pending,
+        )?;
     }
     Ok(())
 }
@@ -431,7 +440,7 @@ fn service_client_ring(
     clients: &mut HashMap<Token, Client>,
     ring: &RingTransport,
     config: &Config,
-    shutdown: &AtomicBool,
+    _shutdown: &AtomicBool,
     request_notify_pending: &mut bool,
 ) -> io::Result<bool> {
     let Some(client) = clients.get_mut(&token) else {
@@ -483,30 +492,27 @@ fn service_client_ring(
                 client.registered = false;
                 break;
             }
+            if ring.request.len() >= ring.request.capacity() {
+                client.ring_paused = true;
+                poll.registry().deregister(&mut client.stream)?;
+                client.registered = false;
+                break;
+            }
             let payload = client.read_buf[4..4 + len].to_vec();
             client.read_buf.drain(..4 + len);
             let bytes = encode_request(&IpcRequest {
                 client_id: client.id,
                 payload,
             });
-            let deadline = Instant::now() + Duration::from_millis(100);
-            loop {
-                match ring.request.try_push(&bytes) {
-                    Ok(()) => break,
-                    Err(PushError::Full) if Instant::now() < deadline => {
-                        std::hint::spin_loop();
-                    }
-                    Err(PushError::Full) => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::WouldBlock,
-                            "engine ring is not draining",
-                        ));
-                    }
-                    Err(PushError::TooLarge) => return Ok(false),
+            match ring.request.try_push(&bytes) {
+                Ok(()) => {}
+                Err(PushError::Full) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "engine ring full after capacity check",
+                    ));
                 }
-                if shutdown.load(Ordering::Acquire) {
-                    return Ok(false);
-                }
+                Err(PushError::TooLarge) => return Ok(false),
             }
             client.in_flight += 1;
             *request_notify_pending = true;
@@ -588,6 +594,44 @@ fn drain_ring_responses(
     Ok(())
 }
 
+fn resume_ring_paused(
+    ring: &mut RingTransport,
+    poll: &mut Poll,
+    clients: &mut HashMap<Token, Client>,
+    config: &Config,
+    shutdown: &AtomicBool,
+    request_notify_pending: &mut bool,
+) -> io::Result<()> {
+    if ring.request.len() >= ring.request.capacity() {
+        return Ok(());
+    }
+    let mut tokens = Vec::new();
+    for (token, client) in clients.iter_mut() {
+        if client.ring_paused {
+            client.ring_paused = false;
+            if !client.registered {
+                let interest = client_interest(client);
+                poll.registry()
+                    .register(&mut client.stream, *token, interest)?;
+                client.registered = true;
+            }
+            tokens.push(*token);
+        }
+    }
+    for token in tokens {
+        let _ = service_client_ring(
+            token,
+            poll,
+            clients,
+            ring,
+            config,
+            shutdown,
+            request_notify_pending,
+        )?;
+    }
+    Ok(())
+}
+
 fn accept_clients(
     listener: &mut TcpListener,
     poll: &mut Poll,
@@ -619,6 +663,7 @@ fn accept_clients(
                         write_buf: Vec::with_capacity(16 * 1024),
                         in_flight: 0,
                         read_paused: false,
+                        ring_paused: false,
                         registered: true,
                     },
                 );

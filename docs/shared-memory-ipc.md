@@ -76,13 +76,15 @@ Mac M4 release，无 fsync：
 | gateway ring，1 loop，busy-poll | 21.4k/s, p50 87 µs | ~24k/s |
 | gateway ring，4 loops，busy-poll | 18.3k/s, p50 100 µs | ~9.5k/s |
 | gateway ring，4 loops，datagram notify | 26.6k/s, p50 74 µs | ~7.9k/s |
+| gateway ring，4 loops，notify + ring-full backpressure | 23.2k/s, p50 79 µs | ~62k/s |
 
-加 datagram 通知后，closed-loop 延迟已经接近 UDS，说明唤醒路径有效；但 64-client
-高并发吞吐仍然很差，说明响应通知/ring 调度/引擎 consumer 结构还有瓶颈，不能切换默认。
+关键修正是 **ring 满时不再自旋**：gateway 暂停该 client 的读事件，保留未消费帧，
+等 engine drain 后再恢复；这避免了 event-loop 卡在 `try_push` 上，吞吐从 ~8k/s
+恢复到 ~62k/s，已与 UDS 高并发吞吐持平；低并发 RTT 仍略高于 UDS。
 
 当前 ring 仍只是实验路径，默认 UDS。下一步：
 
-1. 合并/批量 response 通知，减少 datagram 数量；
-2. engine ring consumer 批处理请求，减少每次唤醒的工作量；
-3. 多 ring 与 gateway loop 的负载均衡；
-4. 重新做同口径 Mac 基准，达到 UDS 水平后再考虑默认切换。
+1. 批量化 response 通知，减少每响应 datagram；
+2. engine consumer 批处理请求；
+3. 低并发 RTT 优化（减少 notify 往返）；
+4. 达到/超过 UDS 后再考虑默认切换。
