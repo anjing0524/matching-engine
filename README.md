@@ -130,8 +130,8 @@ client TCP ──► gateway 进程（mio event loop，固定线程数）
 - 单进程 `matching-engine --port` 路径保留用于测试/兼容，但生产部署应使用两进程。
 
 当前边界：撮合线程仍做订单簿状态转移和内存 staging，不碰文件/网络系统调用；
-journal channel 满时会有界背压（不会无界增长）。decoupled journaler 暂不做
-WAL rotate/prune，因此启用快照后旧 WAL 文件仍会保留（后续 compaction）。
+journal channel 满时会有界背压（不会无界增长）。snapshotter 写完快照后会通知
+journaler rotate + prune 已覆盖 WAL 文件，因此 decoupled 模式的 WAL 也会收敛。
 
 ### 为什么去掉 Tokio / 不用 `Box<dyn Connection>`
 

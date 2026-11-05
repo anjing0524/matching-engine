@@ -144,8 +144,13 @@ enum StagedReply {
 
 struct CommitSenders {
     async_fsync: Option<Sender<CommitTask>>,
-    journal: Option<Sender<JournalTask>>,
+    journal: Option<Sender<JournalerCommand>>,
     snapshot: Option<Sender<Snapshot>>,
+}
+
+enum JournalerCommand {
+    Batch(JournalTask),
+    Compact { through_seq: u64 },
 }
 
 struct JournalTask {
@@ -338,10 +343,17 @@ impl MatchingRuntime {
             let (snapshot_sender, snapshot_receiver) = bounded(64);
             let data_dir = service.data_dir().to_path_buf();
             let snapshot_control = Arc::clone(&control);
+            let compact_sender = sender.clone();
             let snapshotter = thread::Builder::new()
                 .name("wal-snapshotter".to_string())
                 .spawn(move || {
-                    run_snapshotter(snapshot_receiver, data_dir, durable_seq, snapshot_control)
+                    run_snapshotter(
+                        snapshot_receiver,
+                        compact_sender,
+                        data_dir,
+                        durable_seq,
+                        snapshot_control,
+                    )
                 })?;
             (
                 Some(sender),
@@ -567,7 +579,7 @@ fn run_worker(
                 staged,
                 barrier,
             };
-            if journal_sender.send(task).is_err() {
+            if journal_sender.send(JournalerCommand::Batch(task)).is_err() {
                 fatal_error.get_or_insert_with(|| "journaler stopped".to_string());
             } else if let Some(barrier_rx) = barrier_rx {
                 match barrier_rx.recv() {
@@ -692,6 +704,7 @@ fn run_worker(
 
 fn run_snapshotter(
     receiver: Receiver<Snapshot>,
+    compact_sender: Sender<JournalerCommand>,
     data_dir: std::path::PathBuf,
     durable_seq: Arc<AtomicU64>,
     control: Arc<RuntimeControl>,
@@ -707,45 +720,70 @@ fn run_snapshotter(
             control.set_fatal(error.to_string());
             return;
         }
+        if compact_sender
+            .send(JournalerCommand::Compact {
+                through_seq: snapshot.last_seq,
+            })
+            .is_err()
+        {
+            control.set_fatal("journaler stopped before WAL compaction".to_string());
+            return;
+        }
     }
 }
 
 fn run_journaler(
     mut journal: Journal,
-    receiver: Receiver<JournalTask>,
+    receiver: Receiver<JournalerCommand>,
     durable_seq: Arc<AtomicU64>,
     control: Arc<RuntimeControl>,
 ) {
     let mut failed: Option<PersistenceError> = None;
-    while let Ok(task) = receiver.recv() {
-        let result = if let Some(error) = &failed {
-            Err(copy_persistence_error(error))
-        } else {
-            let mut result = Ok(());
-            for record in &task.records {
-                if let Err(error) = journal.append_record(record) {
-                    result = Err(error);
-                    break;
+    while let Ok(command) = receiver.recv() {
+        match command {
+            JournalerCommand::Compact { through_seq } => {
+                if failed.is_some() {
+                    continue;
+                }
+                if let Err(error) = journal
+                    .rotate()
+                    .and_then(|()| journal.prune_through(through_seq))
+                {
+                    control.set_fatal(error.to_string());
+                    failed = Some(copy_persistence_error(&error));
                 }
             }
-            if result.is_ok() {
-                result = journal.commit();
+            JournalerCommand::Batch(task) => {
+                let result = if let Some(error) = &failed {
+                    Err(copy_persistence_error(error))
+                } else {
+                    let mut result = Ok(());
+                    for record in &task.records {
+                        if let Err(error) = journal.append_record(record) {
+                            result = Err(error);
+                            break;
+                        }
+                    }
+                    if result.is_ok() {
+                        result = journal.commit();
+                    }
+                    result
+                };
+                if result.is_ok() {
+                    durable_seq.store(journal.current_seq().saturating_sub(1), Ordering::Release);
+                } else if failed.is_none()
+                    && let Err(error) = &result
+                {
+                    control.set_fatal(error.to_string());
+                    failed = Some(copy_persistence_error(error));
+                }
+                for item in task.staged {
+                    send_staged_reply(item, &result);
+                }
+                if let Some(barrier) = task.barrier {
+                    let _ = barrier.send(result);
+                }
             }
-            result
-        };
-        if result.is_ok() {
-            durable_seq.store(journal.current_seq().saturating_sub(1), Ordering::Release);
-        } else if failed.is_none()
-            && let Err(error) = &result
-        {
-            control.set_fatal(error.to_string());
-            failed = Some(copy_persistence_error(error));
-        }
-        for item in task.staged {
-            send_staged_reply(item, &result);
-        }
-        if let Some(barrier) = task.barrier {
-            let _ = barrier.send(result);
         }
     }
 }
@@ -957,6 +995,10 @@ mod tests {
         runtime.shutdown().expect("shutdown");
 
         assert!(temp_dir.path().join("snapshot.bin").exists());
+        assert!(
+            temp_dir.path().join("wal.start").exists(),
+            "snapshotter must trigger WAL compaction"
+        );
         let recovered = PersistentMatchingService::recover(spec, config).unwrap();
         assert!(recovered.orderbook().order_owner(1).is_some());
         assert!(recovered.orderbook().order_owner(2).is_some());
