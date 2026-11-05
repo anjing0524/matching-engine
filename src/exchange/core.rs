@@ -303,14 +303,32 @@ impl ExchangeCore {
         command: Command,
         plugin: &P,
     ) -> Vec<CoreEvent> {
-        if command.command_type != CommandType::NewOrder || command.price_type != PriceType::Limit {
+        if command.command_type != CommandType::NewOrder {
+            return self.execute(command);
+        }
+        if !matches!(command.price_type, PriceType::Limit | PriceType::Market) {
             return self.execute(command);
         }
         if command.price_ticks < 0 || command.quantity == 0 {
             return self.reject_private(&command, "invalid price or quantity".to_string());
         }
+        let matching_price = match command.price_type {
+            PriceType::Limit => command.price_ticks as u64,
+            // A market order sweeps the whole opposite book; any remainder is
+            // canceled immediately below instead of resting at an extreme price.
+            PriceType::Market => match command.side {
+                Side::Buy => self.book.spec().max_price,
+                Side::Sell => self.book.spec().min_price,
+            },
+            PriceType::AdvancedMarket => {
+                return self.reject_private(
+                    &command,
+                    "advanced market orders are not implemented".to_string(),
+                );
+            }
+        };
         if command.volume_condition == VolumeCondition::All
-            && !self.can_fill(command.side, command.price_ticks as u64, command.quantity)
+            && !self.can_fill(command.side, matching_price, command.quantity)
         {
             return self.reject_private(&command, "FOK cannot be fully filled".to_string());
         }
@@ -359,7 +377,7 @@ impl ExchangeCore {
             user_id: u64::from(command.user_id),
             client_order_id: command.client_order_id,
             side,
-            price_ticks: command.price_ticks as u64,
+            price_ticks: matching_price,
             quantity: command.quantity,
         });
 
@@ -460,7 +478,7 @@ impl ExchangeCore {
         }
 
         let mut events = events;
-        if command.time_condition == TimeCondition::Ioc
+        if (command.price_type == PriceType::Market || command.time_condition == TimeCondition::Ioc)
             && let Some(order_id) = incoming_id
             && self
                 .orders
@@ -1016,6 +1034,60 @@ mod tests {
                 .any(|event| matches!(event, CoreEvent::Canceled { .. }))
         );
         assert_eq!(core.best_ask(), None);
+    }
+
+    #[test]
+    fn market_buy_sweeps_multiple_price_levels() {
+        use crate::exchange::plugins::AvailableClosePlugin;
+        use crate::exchange::protocol::{Offset, PriceType};
+
+        let mut core = core();
+        let mut sell1 = wire_command(Side::Sell, 50_000, 5);
+        sell1.user_id = 2;
+        sell1.offset = Offset::Open;
+        core.execute_with_plugins(sell1, &AvailableClosePlugin);
+        let mut sell2 = wire_command(Side::Sell, 50_100, 5);
+        sell2.user_id = 3;
+        sell2.offset = Offset::Open;
+        core.execute_with_plugins(sell2, &AvailableClosePlugin);
+
+        let mut buy = wire_command(Side::Buy, 0, 8);
+        buy.offset = Offset::Open;
+        buy.price_type = PriceType::Market;
+        let events = core.execute_with_plugins(buy, &AvailableClosePlugin);
+        let traded: u64 = events
+            .iter()
+            .filter_map(|event| match event {
+                CoreEvent::Trade { quantity, .. } => Some(*quantity),
+                _ => None,
+            })
+            .sum();
+        assert_eq!(traded, 8);
+        assert_eq!(core.best_ask(), Some(50_100));
+    }
+
+    #[test]
+    fn market_order_cancels_unfilled_remainder() {
+        use crate::exchange::plugins::AvailableClosePlugin;
+        use crate::exchange::protocol::{Offset, PriceType};
+
+        let mut core = core();
+        let mut sell = wire_command(Side::Sell, 50_000, 5);
+        sell.user_id = 2;
+        sell.offset = Offset::Open;
+        core.execute_with_plugins(sell, &AvailableClosePlugin);
+
+        let mut buy = wire_command(Side::Buy, 0, 8);
+        buy.offset = Offset::Open;
+        buy.price_type = PriceType::Market;
+        let events = core.execute_with_plugins(buy, &AvailableClosePlugin);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, CoreEvent::Canceled { .. }))
+        );
+        assert_eq!(core.best_ask(), None);
+        assert_eq!(core.best_bid(), None);
     }
 
     #[test]
