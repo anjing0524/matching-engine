@@ -442,7 +442,9 @@ fn bench_hft_arbitrage_strategy(c: &mut Criterion) {
 
         b.iter(|| {
             // HFT策略：检测到套利机会 → 立即成交
-            let best_ask = orderbook.best_ask().unwrap();
+            let Some(best_ask) = orderbook.best_ask() else {
+                return;
+            };
 
             // 买入
             let buy = NewOrderRequest {
@@ -457,6 +459,18 @@ fn bench_hft_arbitrage_strategy(c: &mut Criterion) {
 
             // 验证成交
             assert!(!trades.is_empty(), "Should have trades");
+
+            // Replenish the consumed ask so later iterations keep measuring the
+            // intended arbitrage path instead of draining the book empty.
+            let replenish = NewOrderRequest {
+                user_id: 1000,
+                client_order_id: 0,
+                symbol: matching_engine::shared::SymbolId::intern("BTC2501"),
+                order_type: OrderType::Sell,
+                price: best_ask,
+                quantity: 10,
+            };
+            orderbook.match_order(replenish);
         });
     });
 
