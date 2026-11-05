@@ -24,6 +24,7 @@ METRICS=19236
 
 RUST_LOG=warn "$ROOT/target/release/matching-engine" \
   --engine-uds "$SOCK" --data-dir "$TMP/primary" --replica-listen "$REPL" \
+  --lease-file "$TMP/engine.lease" \
   --queue-capacity 100000 --snapshot-interval 0 --wal-sync false \
   --metrics-port "$METRICS" --log-level error >"$TMP/primary.log" 2>&1 &
 PRIMARY=$!
@@ -64,6 +65,7 @@ echo "$HEALTH" | grep -q '"replication_lag_records":0' || {
   sleep 0.3
   RUST_LOG=warn "$ROOT/target/release/matching-engine" \
     --engine-uds "$SOCK" --data-dir "$STANDBY_DATA" \
+    --lease-file "$TMP/engine.lease" \
     --queue-capacity 100000 --snapshot-interval 0 --wal-sync false \
     --metrics-port 0 --log-level error >"$TMP/promoted.log" 2>&1 &
   echo $! >"$TMP/promoted.pid"

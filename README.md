@@ -156,12 +156,16 @@ WAL。故障时停止 standby，用 `matching-engine --data-dir ./standby-data` 
 ./scripts/gateway-reconnect-drill.sh
 ./scripts/failover-drill.sh
 ./scripts/auto-failover-drill.sh
+./scripts/lease-fencing-drill.sh
 ```
 
 当前限制：
 
 - 没有生产级自动 failover；`scripts/auto-failover-drill.sh` 只是“最后已知健康状态 +
-  watchdog 提升”的演练，不是 lease/fencing 或共识控制面；
+  watchdog 提升”的演练；
+- 新增本地 `--lease-file` 独占锁：primary 持有 lease 时第二个 engine 拒绝启动，
+  primary 崩溃后 OS 释放 lease，promotion 可获取。它只提供**本机/共享文件系统**
+  的 fencing，不是分布式 lease/共识；
 - 没有历史 WAL catch-up：standby 必须在 primary 开始接收订单前连接，否则 primary
   会拒绝迟到连接；接入已有 primary 前需离线复制 data directory；
 - primary 的 replication channel 是异步有界队列，如果 standby 长期落后，可能丢弃

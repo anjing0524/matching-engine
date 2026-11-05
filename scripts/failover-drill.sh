@@ -25,6 +25,7 @@ METRICS=19235
 
 RUST_LOG=warn "$ROOT/target/release/matching-engine" \
   --engine-uds "$SOCK" --data-dir "$PRIMARY_DATA" --replica-listen "$REPL" \
+  --lease-file "$TMP/engine.lease" \
   --queue-capacity 100000 --snapshot-interval 0 --wal-sync false \
   --metrics-port "$METRICS" --log-level error >"$TMP/primary.log" 2>&1 &
 PRIMARY=$!
@@ -72,6 +73,7 @@ sleep 0.5
 # Promote the standby WAL on the same engine UDS path.
 RUST_LOG=warn "$ROOT/target/release/matching-engine" \
   --engine-uds "$SOCK" --data-dir "$STANDBY_DATA" \
+  --lease-file "$TMP/engine.lease" \
   --queue-capacity 100000 --snapshot-interval 0 --wal-sync false \
   --metrics-port 0 --log-level error >"$TMP/promoted.log" 2>&1 &
 PROMOTED=$!
