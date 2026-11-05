@@ -143,6 +143,7 @@ impl ExchangeCore {
         &self.private_events
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn push_private(
         &mut self,
         order_id: u64,
