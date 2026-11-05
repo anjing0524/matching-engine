@@ -334,10 +334,19 @@ impl MatchingRuntime {
             let (sender, journal_receiver) = bounded(config.queue_capacity.max(1));
             let journal_control = Arc::clone(&control);
             let journal_durable = Arc::clone(&durable_seq);
+            let journal_commit_latency = METRICS
+                .commit_latency_ns
+                .with_label_values(&[service.orderbook().symbol()]);
             let handle = thread::Builder::new()
                 .name("wal-journaler".to_string())
                 .spawn(move || {
-                    run_journaler(journal, journal_receiver, journal_durable, journal_control)
+                    run_journaler(
+                        journal,
+                        journal_receiver,
+                        journal_durable,
+                        journal_control,
+                        journal_commit_latency,
+                    )
                 })?;
 
             let (snapshot_sender, snapshot_receiver) = bounded(64);
@@ -737,6 +746,7 @@ fn run_journaler(
     receiver: Receiver<JournalerCommand>,
     durable_seq: Arc<AtomicU64>,
     control: Arc<RuntimeControl>,
+    commit_latency: Histogram,
 ) {
     let mut failed: Option<PersistenceError> = None;
     while let Ok(command) = receiver.recv() {
@@ -754,6 +764,7 @@ fn run_journaler(
                 }
             }
             JournalerCommand::Batch(task) => {
+                let started = Instant::now();
                 let result = if let Some(error) = &failed {
                     Err(copy_persistence_error(error))
                 } else {
@@ -770,6 +781,7 @@ fn run_journaler(
                     result
                 };
                 if result.is_ok() {
+                    commit_latency.observe(started.elapsed().as_nanos() as f64);
                     durable_seq.store(journal.current_seq().saturating_sub(1), Ordering::Release);
                 } else if failed.is_none()
                     && let Err(error) = &result
