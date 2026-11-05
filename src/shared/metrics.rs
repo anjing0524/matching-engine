@@ -7,7 +7,8 @@
 //! [`METRICS`] panics if registration fails, which indicates a programming
 //! error (duplicate registration).
 use prometheus::{
-    CounterVec, Encoder, HistogramVec, TextEncoder, register_counter_vec, register_histogram_vec,
+    CounterVec, Encoder, HistogramVec, IntCounter, IntGauge, TextEncoder, register_counter_vec,
+    register_histogram_vec, register_int_counter, register_int_gauge,
 };
 use std::sync::LazyLock;
 
@@ -99,6 +100,15 @@ pub struct Metrics {
 
     /// 订单大小分布
     pub order_size: HistogramVec,
+
+    /// Replication lag in WAL records (sent - min acked).
+    pub replication_lag_records: IntGauge,
+
+    /// Number of connected standby replicas.
+    pub replication_connected: IntGauge,
+
+    /// Batches dropped because a standby was too slow.
+    pub replication_dropped_batches: IntCounter,
 }
 
 impl Metrics {
@@ -195,6 +205,18 @@ impl Metrics {
                 &["order_type"],
                 vec![1.0, 10.0, 100.0, 1000.0, 10_000.0, 100_000.0]
             )?,
+            replication_lag_records: register_int_gauge!(
+                "matching_engine_replication_lag_records",
+                "WAL records between sent and minimum acked standby position"
+            )?,
+            replication_connected: register_int_gauge!(
+                "matching_engine_replication_connected",
+                "Number of connected standby replicas"
+            )?,
+            replication_dropped_batches: register_int_counter!(
+                "matching_engine_replication_dropped_batches",
+                "Replication batches dropped because a standby was too slow"
+            )?,
         })
     }
 
@@ -227,6 +249,9 @@ impl Metrics {
         self.socket_send_ns.reset();
         self.socket_to_socket_ns.reset();
         self.order_size.reset();
+        self.replication_lag_records.set(0);
+        self.replication_connected.set(0);
+        self.replication_dropped_batches.reset();
     }
 }
 

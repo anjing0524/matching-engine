@@ -10,4 +10,5 @@
 pub mod cli;
 pub mod engine_ipc;
 pub mod gateway;
+pub mod replication;
 pub mod session;

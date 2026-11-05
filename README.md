@@ -133,6 +133,40 @@ client TCP ──► gateway 进程（mio event loop，固定线程数）
 journal channel 满时会有界背压（不会无界增长）。snapshotter 写完快照后会通知
 journaler rotate + prune 已覆盖 WAL 文件，因此 decoupled 模式的 WAL 也会收敛。
 
+### 主备复制（warm standby）
+
+engine 可以额外启动 WAL shipping：
+
+```bash
+# primary
+cargo run --release --bin matching-engine -- --engine-uds ./data/engine.sock   --replica-listen ./data/repl.sock --data-dir ./data --snapshot-interval 0
+
+# standby（必须在 primary 开始接收订单前连接）
+cargo run --release --bin standby -- --primary-uds ./data/repl.sock   --data-dir ./standby-data --wal-sync true
+```
+
+primary journaler 在 WAL commit 后把已提交记录发给 standby；standby 只持久化
+WAL。故障时停止 standby，用 `matching-engine --data-dir ./standby-data` 恢复并
+人工提升。
+
+自动化演练：
+
+```bash
+./scripts/replication-drill.sh
+```
+
+当前限制：
+
+- 没有自动 failover；
+- 没有历史 WAL catch-up：standby 必须在 primary 开始接收订单前连接，否则 primary
+  会拒绝迟到连接；接入已有 primary 前需离线复制 data directory；
+- primary 的 replication channel 是异步有界队列，如果 standby 长期落后，可能丢弃
+  副本而不是阻塞撮合；监控 `matching_engine_replication_lag_records`、
+  `matching_engine_replication_connected`、`matching_engine_replication_dropped_batches`，
+  出现 dropped/lag 增长时该 standby 不可安全提升；
+- standby 每个 batch commit 后回 ack；primary 用 ack 计算 lag，但还没有自动 fencing；
+- 没有复制确认、票据 fencing 或 leader election。
+
 ### 为什么去掉 Tokio / 不用 `Box<dyn Connection>`
 
 结论：**Tokio 已从整个 crate 移除**，网关和观测端点都是阻塞 OS 线程，撮合核心本来就不依赖
