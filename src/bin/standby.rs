@@ -52,7 +52,7 @@ fn run() -> io::Result<()> {
     );
 
     let mut stream = connect(&config.primary_uds)?;
-    let mut last_seq = 0u64;
+    let mut last_seq: Option<u64> = None;
     let mut batches = 0u64;
     loop {
         let frame = read_frame(&mut stream).map_err(|error| io::Error::other(error.to_string()))?;
@@ -68,7 +68,9 @@ fn run() -> io::Result<()> {
                     if let Some(snapshot) = Snapshot::load(&config.data_dir)
                         .map_err(|error| io::Error::other(error.to_string()))?
                     {
-                        last_seq = last_seq.max(snapshot.last_seq);
+                        last_seq = Some(
+                            last_seq.map_or(snapshot.last_seq, |last| last.max(snapshot.last_seq)),
+                        );
                     }
                 }
                 records
@@ -76,26 +78,42 @@ fn run() -> io::Result<()> {
             ReplicationFrame::Live(batch) => batch.records,
         };
         for record in &records {
-            if record.seq <= last_seq {
-                continue;
+            if let Some(last) = last_seq {
+                if record.seq <= last {
+                    continue;
+                }
+                if record.seq != last + 1 {
+                    return Err(io::Error::other(format!(
+                        "replication gap: expected {}, got {}",
+                        last + 1,
+                        record.seq
+                    )));
+                }
             }
             journal
                 .append_record(record)
                 .map_err(|error| io::Error::other(error.to_string()))?;
-            last_seq = record.seq;
+            last_seq = Some(record.seq);
         }
         journal
             .commit()
             .map_err(|error| io::Error::other(error.to_string()))?;
+        let ack = last_seq.unwrap_or(0);
         stream
-            .write_all(&last_seq.to_be_bytes())
+            .write_all(&ack.to_be_bytes())
             .map_err(|error| io::Error::other(error.to_string()))?;
         batches += 1;
         if batches.is_multiple_of(100) {
-            println!("standby batches={batches} last_seq={last_seq}");
+            println!(
+                "standby batches={batches} last_seq={}",
+                last_seq.unwrap_or(0)
+            );
         }
     }
-    println!("standby primary closed: batches={batches} last_seq={last_seq}");
+    println!(
+        "standby primary closed: batches={batches} last_seq={}",
+        last_seq.unwrap_or(0)
+    );
     Ok(())
 }
 

@@ -149,6 +149,15 @@ fn bootstrap_frame(data_dir: &std::path::Path) -> io::Result<Vec<u8>> {
     let scan = WalReader::new(data_dir.to_path_buf())
         .scan_from(snapshot_seq)
         .map_err(|error| io::Error::other(error.to_string()))?;
+    if let Some(seq) = snapshot_seq
+        && let Some(first) = scan.records.first()
+        && first.seq != seq + 1
+    {
+        return Err(io::Error::other(format!(
+            "standby bootstrap WAL gap: snapshot seq {seq}, first tail seq {}",
+            first.seq
+        )));
+    }
     encode_bootstrap(&snapshot, &scan.records).map_err(|error| io::Error::other(error.to_string()))
 }
 
