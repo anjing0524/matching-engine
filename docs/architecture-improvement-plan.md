@@ -88,8 +88,10 @@
   快照前通过 commit barrier 等待所有先前批次 fsync，再写快照，因此可与快照同时启用。
 - 重启恢复后 writer 打开编号最大的 WAL 文件继续追加，避免 snapshot rotate 后从 0 号文件
   覆盖旧文件或打乱序列；旧 header-only 文件的回收策略仍待做。
-- 新增独立 `gateway` 二进制（mio 单 event-loop、固定线程数）与 engine `--engine-uds`
-  IPC 模式；两进程测试覆盖下单/撤单。单进程阻塞 gateway 仅保留为兼容路径。
+- 新增独立 `gateway` 二进制（固定 event-loop 线程、`--io-threads`）与 engine
+  `--engine-uds` IPC 模式；两进程测试覆盖下单/撤单。单进程阻塞 gateway 仅保留为兼容路径。
+- engine 模式新增 decoupled journaler：撮合线程只 staging WAL record，journaler
+  负责写盘/fsync；engine 模式要求 `--snapshot-interval 0`。
 - 协议拒绝响应已改为 `Rejected { code: ErrorCode, message }`，提供稳定错误类别；
   更细的校验错误码（queue-full/duplicate/unknown-order 等）仍可继续细分。
 - 快照已实现：订单簿/next ids/幂等 key 写入 `snapshot.bin`（CRC/原子替换），恢复时加载

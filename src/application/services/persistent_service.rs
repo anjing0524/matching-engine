@@ -13,7 +13,7 @@
 
 use crate::domain::orderbook::{ContractSpec, MatchOutcome, TickBasedOrderBook};
 use crate::infrastructure::persistence::{
-    Journal, PersistenceConfig, PersistenceError, Snapshot, WalEntry,
+    Journal, PersistenceConfig, PersistenceError, Snapshot, WalEntry, WalRecord,
 };
 use crate::shared::metrics::METRICS;
 use crate::shared::protocol::{
@@ -95,7 +95,11 @@ struct DedupEntry {
 /// A single-order-book matching service with synchronous WAL persistence.
 pub struct PersistentMatchingService {
     orderbook: TickBasedOrderBook,
-    journal: Journal,
+    /// Present while the service owns durable I/O. A decoupled runtime moves it
+    /// to the journaler thread; the service then only stages records in memory.
+    journal: Option<Journal>,
+    staged: Vec<WalRecord>,
+    staged_next_seq: u64,
     metrics: ServiceMetrics,
     next_trade_id: u64,
     /// Bounded in-memory idempotency table keyed by (user_id, client_order_id).
@@ -140,7 +144,9 @@ impl PersistentMatchingService {
 
         Ok(Self {
             orderbook,
-            journal,
+            journal: Some(journal),
+            staged: Vec::new(),
+            staged_next_seq: 0,
             metrics,
             next_trade_id: 1,
             dedup_capacity: config.dedup_cache_size,
@@ -264,9 +270,12 @@ impl PersistentMatchingService {
 
         let metrics = ServiceMetrics::new(orderbook.symbol());
 
+        let staged_next_seq = journal.current_seq();
         Ok(Self {
             orderbook,
-            journal,
+            journal: Some(journal),
+            staged: Vec::new(),
+            staged_next_seq,
             metrics,
             next_trade_id,
             dedup_capacity: config.dedup_cache_size,
@@ -321,8 +330,7 @@ impl PersistentMatchingService {
         let wal_start = Instant::now();
         let timestamp = current_timestamp();
 
-        self.journal
-            .append(WalEntry::NewOrder(order.clone()), timestamp)?;
+        self.append_wal(WalEntry::NewOrder(order.clone()), timestamp)?;
 
         let matching_start = Instant::now();
         let outcome = self.orderbook.match_order(order);
@@ -360,13 +368,11 @@ impl PersistentMatchingService {
         }
 
         for trade in &trades {
-            self.journal
-                .append(WalEntry::Trade(trade.clone()), timestamp)?;
+            self.append_wal(WalEntry::Trade(trade.clone()), timestamp)?;
         }
 
         if let Some(confirmation) = &confirmation {
-            self.journal
-                .append(WalEntry::Confirmation(confirmation.clone()), timestamp)?;
+            self.append_wal(WalEntry::Confirmation(confirmation.clone()), timestamp)?;
         }
 
         self.metrics
@@ -421,12 +427,43 @@ impl PersistentMatchingService {
     /// every order staged since the previous commit.
     pub(crate) fn commit(&mut self) -> Result<(), PersistenceError> {
         let started = Instant::now();
-        self.journal.commit()?;
+        let journal = self.journal.as_mut().ok_or_else(journal_owned)?;
+        journal.commit()?;
         self.metrics
             .commit_latency_ns
             .observe(started.elapsed().as_nanos() as f64);
         self.maybe_snapshot()?;
         Ok(())
+    }
+
+    /// Moves the WAL writer to a journaler thread.
+    ///
+    /// After this call the matching thread only appends `WalRecord`s to an
+    /// in-memory staging buffer; a separate journaler owns all file/fsync I/O.
+    pub(crate) fn take_journal(&mut self) -> Result<Journal, PersistenceError> {
+        let journal = self.journal.take().ok_or_else(journal_owned)?;
+        self.staged_next_seq = journal.current_seq();
+        Ok(journal)
+    }
+
+    /// Removes staged records for the journaler to encode and persist.
+    pub(crate) fn take_staged_wal(&mut self) -> Vec<WalRecord> {
+        std::mem::take(&mut self.staged)
+    }
+
+    fn append_wal(&mut self, entry: WalEntry, timestamp: u64) -> Result<u64, PersistenceError> {
+        if let Some(journal) = self.journal.as_mut() {
+            journal.append(entry, timestamp)
+        } else {
+            let seq = self.staged_next_seq;
+            self.staged_next_seq += 1;
+            self.staged.push(WalRecord {
+                seq,
+                timestamp,
+                entry,
+            });
+            Ok(seq)
+        }
     }
 
     /// Flushes WAL bytes to the OS and returns a file handle for async fsync.
@@ -435,7 +472,8 @@ impl PersistentMatchingService {
     /// barrier and is incompatible with the async-fsync runtime mode.
     pub(crate) fn commit_to_page_cache(&mut self) -> Result<File, PersistenceError> {
         let started = Instant::now();
-        let handle = self.journal.flush_handle()?;
+        let journal = self.journal.as_mut().ok_or_else(journal_owned)?;
+        let handle = journal.flush_handle()?;
         self.metrics
             .commit_latency_ns
             .observe(started.elapsed().as_nanos() as f64);
@@ -446,11 +484,10 @@ impl PersistentMatchingService {
     /// durability barrier.
     pub(crate) fn needs_snapshot(&self) -> bool {
         self.snapshot_every_records > 0
-            && self
-                .journal
-                .current_seq()
-                .saturating_sub(self.last_snapshot_seq)
-                >= self.snapshot_every_records
+            && self.journal.as_ref().is_some_and(|journal| {
+                journal.current_seq().saturating_sub(self.last_snapshot_seq)
+                    >= self.snapshot_every_records
+            })
     }
 
     /// Writes a snapshot after the current WAL state is durable.
@@ -458,7 +495,7 @@ impl PersistentMatchingService {
     /// # Errors
     /// Returns an error if the WAL flush or snapshot write fails.
     pub fn snapshot(&mut self) -> Result<(), PersistenceError> {
-        self.journal.commit()?;
+        self.journal.as_mut().ok_or_else(journal_owned)?.commit()?;
         self.write_snapshot()
     }
 
@@ -466,7 +503,10 @@ impl PersistentMatchingService {
         if self.snapshot_every_records == 0 {
             return Ok(());
         }
-        let current = self.journal.current_seq();
+        let Some(journal) = self.journal.as_ref() else {
+            return Ok(());
+        };
+        let current = journal.current_seq();
         if current.saturating_sub(self.last_snapshot_seq) >= self.snapshot_every_records {
             self.write_snapshot()?;
         }
@@ -474,7 +514,8 @@ impl PersistentMatchingService {
     }
 
     fn write_snapshot(&mut self) -> Result<(), PersistenceError> {
-        let last_seq = self.journal.current_seq().saturating_sub(1);
+        let journal = self.journal.as_mut().ok_or_else(journal_owned)?;
+        let last_seq = journal.current_seq().saturating_sub(1);
         let snapshot = Snapshot {
             contract: self.orderbook.spec().clone(),
             last_seq,
@@ -484,8 +525,8 @@ impl PersistentMatchingService {
             dedup_keys: self.dedup.keys().copied().collect(),
         };
         Snapshot::save(&self.data_dir, &snapshot)?;
-        self.journal.rotate()?;
-        self.journal.prune_through(last_seq)?;
+        journal.rotate()?;
+        journal.prune_through(last_seq)?;
         self.last_snapshot_seq = last_seq;
         info!(last_seq, orders = snapshot.orders.len(), "snapshot written");
         Ok(())
@@ -513,8 +554,7 @@ impl PersistentMatchingService {
         let wal_start = Instant::now();
         let timestamp = current_timestamp();
 
-        self.journal
-            .append(WalEntry::CancelOrder(cancel.clone()), timestamp)?;
+        self.append_wal(WalEntry::CancelOrder(cancel.clone()), timestamp)?;
 
         self.orderbook
             .cancel_order(cancel.order_id, cancel.user_id)
@@ -550,10 +590,19 @@ impl PersistentMatchingService {
 
 impl Drop for PersistentMatchingService {
     fn drop(&mut self) {
+        if self.journal.is_none() {
+            return;
+        }
         if let Err(error) = self.flush() {
             error!(%error, "failed to flush WAL on drop");
         }
     }
+}
+
+fn journal_owned() -> PersistenceError {
+    PersistenceError::Io(std::io::Error::other(
+        "WAL writer is owned by the journaler thread",
+    ))
 }
 
 /// Returns the current time in nanoseconds since the Unix epoch.

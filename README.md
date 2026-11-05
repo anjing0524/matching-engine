@@ -123,12 +123,14 @@ client TCP ──► gateway 进程（mio event loop，固定线程数）
   每连接只有状态机/读写缓冲，不为连接创建线程；慢客户端受每连接写缓冲和
   `--max-in-flight` 限制，不会反压撮合线程。
 - **engine**：`--engine-uds` 启动后不监听客户端 TCP，只接受 gateway 的 IPC；
-  IPC reader/writer 线程把网络与撮合线程隔离；engine 模式自动启用 async fsync，
-  默认关闭快照，避免撮合线程等待 fsync/snapshot barrier。
+  engine 模式把 WAL writer 移交给独立 journaler 线程：撮合线程只把带序号的
+  `WalRecord` 放入有界 staging/channel，由 journaler 负责写盘/flush/fsync；
+  回执仍等待 journaler 提交。engine 模式要求 `--snapshot-interval 0`。
 - 单进程 `matching-engine --port` 路径保留用于测试/兼容，但生产部署应使用两进程。
 
-当前边界：编解码和 WAL page-cache 写入仍在 matching 线程；fsync/快照默认已移出。
-更彻底的做法是独立 journaler/snapshotter（见 [HFT 架构调研](docs/hft-architecture-research.md)）。
+当前边界：撮合线程仍做订单簿状态转移和内存 staging，不碰文件/网络系统调用；
+journal channel 满时会有界背压（不会无界增长）。独立 snapshotter 尚未实现，
+因此 engine 模式暂不支持快照（见 [HFT 架构调研](docs/hft-architecture-research.md)）。
 
 ### 为什么去掉 Tokio / 不用 `Box<dyn Connection>`
 

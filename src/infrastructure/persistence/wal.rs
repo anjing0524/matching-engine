@@ -246,6 +246,12 @@ impl WalWriter {
         &self.data_dir
     }
 
+    /// Advances the writer's next-sequence watermark for externally assigned
+    /// records (decoupled journaler path).
+    pub(crate) fn observe_seq(&self, seq: u64) {
+        self.seq.fetch_max(seq + 1, Ordering::Relaxed);
+    }
+
     /// Returns the sequence number that will be assigned next.
     #[must_use]
     pub fn current_seq(&self) -> u64 {

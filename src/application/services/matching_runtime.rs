@@ -8,7 +8,7 @@
 use crate::application::services::persistent_service::{
     PersistentMatchingService, ServiceError, ServiceResult,
 };
-use crate::infrastructure::persistence::PersistenceError;
+use crate::infrastructure::persistence::{Journal, PersistenceError, WalRecord};
 use crate::shared::metrics::METRICS;
 use crate::shared::protocol::{
     CancelOrderRequest, NewOrderRequest, OrderConfirmation, TradeNotification,
@@ -109,6 +109,9 @@ pub struct RuntimeConfig {
     ///
     /// Incompatible with automatic snapshots; the CLI rejects that combination.
     pub async_fsync: bool,
+    /// Move the entire WAL writer to a journaler thread. The matching thread
+    /// only stages sequenced records in memory.
+    pub decouple_wal: bool,
 }
 
 impl Default for RuntimeConfig {
@@ -119,6 +122,7 @@ impl Default for RuntimeConfig {
             matching_core: None,
             busy_poll: false,
             async_fsync: false,
+            decouple_wal: false,
         }
     }
 }
@@ -135,6 +139,17 @@ enum StagedReply {
         reply: CancelReply,
         result: ServiceResult<()>,
     },
+}
+
+struct CommitSenders {
+    async_fsync: Option<Sender<CommitTask>>,
+    journal: Option<Sender<JournalTask>>,
+}
+
+struct JournalTask {
+    records: Vec<WalRecord>,
+    staged: Vec<StagedReply>,
+    barrier: Option<Sender<Result<(), PersistenceError>>>,
 }
 
 struct CommitTask {
@@ -268,6 +283,7 @@ pub struct MatchingRuntime {
     handle: MatchingHandle,
     worker: Option<JoinHandle<()>>,
     commit_worker: Option<JoinHandle<()>>,
+    journaler: Option<JoinHandle<()>>,
     control: Arc<RuntimeControl>,
 }
 
@@ -277,7 +293,7 @@ impl MatchingRuntime {
     /// # Errors
     /// Returns an error if the OS thread cannot be spawned.
     pub fn start(
-        service: PersistentMatchingService,
+        mut service: PersistentMatchingService,
         config: RuntimeConfig,
     ) -> std::io::Result<Self> {
         let symbol = service.orderbook().symbol().to_string();
@@ -289,13 +305,28 @@ impl MatchingRuntime {
         let matching_core = config.matching_core;
         let busy_poll = config.busy_poll;
         let async_fsync = config.async_fsync;
+        let decouple_wal = config.decouple_wal;
 
-        let (commit_sender, commit_worker) = if async_fsync {
+        let (commit_sender, commit_worker) = if async_fsync && !decouple_wal {
             let (sender, commit_receiver) = bounded(config.queue_capacity.max(1));
             let commit_control = Arc::clone(&control);
             let handle = thread::Builder::new()
                 .name("wal-fsync".to_string())
                 .spawn(move || run_commit_worker(commit_receiver, commit_control))?;
+            (Some(sender), Some(handle))
+        } else {
+            (None, None)
+        };
+
+        let (journal_sender, journaler) = if decouple_wal {
+            let journal = service
+                .take_journal()
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            let (sender, journal_receiver) = bounded(config.queue_capacity.max(1));
+            let journal_control = Arc::clone(&control);
+            let handle = thread::Builder::new()
+                .name("wal-journaler".to_string())
+                .spawn(move || run_journaler(journal, journal_receiver, journal_control))?;
             (Some(sender), Some(handle))
         } else {
             (None, None)
@@ -315,7 +346,10 @@ impl MatchingRuntime {
                     queue_wait,
                     batch_size,
                     busy_poll,
-                    commit_sender,
+                    CommitSenders {
+                        async_fsync: commit_sender,
+                        journal: journal_sender,
+                    },
                 );
             })?;
 
@@ -326,6 +360,7 @@ impl MatchingRuntime {
             },
             worker: Some(worker),
             commit_worker,
+            journaler,
             control,
         })
     }
@@ -356,6 +391,11 @@ impl MatchingRuntime {
         }
         if let Some(commit_worker) = self.commit_worker.take()
             && commit_worker.join().is_err()
+        {
+            panicked = true;
+        }
+        if let Some(journaler) = self.journaler.take()
+            && journaler.join().is_err()
         {
             panicked = true;
         }
@@ -391,6 +431,9 @@ impl Drop for MatchingRuntime {
             if let Some(commit_worker) = self.commit_worker.take() {
                 let _ = commit_worker.join();
             }
+            if let Some(journaler) = self.journaler.take() {
+                let _ = journaler.join();
+            }
         }
     }
 }
@@ -425,8 +468,12 @@ fn run_worker(
     queue_wait: Histogram,
     batch_size: usize,
     busy_poll: bool,
-    commit_sender: Option<Sender<CommitTask>>,
+    senders: CommitSenders,
 ) {
+    let CommitSenders {
+        async_fsync: commit_sender,
+        journal: journal_sender,
+    } = senders;
     'outer: while let Some(first) = next_command(&receiver, busy_poll) {
         let mut staged: Vec<StagedReply> = Vec::with_capacity(batch_size.min(64));
         let mut control_command: Option<Command> = None;
@@ -475,7 +522,36 @@ fn run_worker(
         }
 
         let mut commit_result: Result<(), PersistenceError> = Ok(());
-        if let Some(commit_sender) = commit_sender.as_ref() {
+        if let Some(journal_sender) = journal_sender.as_ref() {
+            let records = service.take_staged_wal();
+            let (barrier, barrier_rx) = if control_command.is_some() {
+                let (tx, rx) = bounded(1);
+                (Some(tx), Some(rx))
+            } else {
+                (None, None)
+            };
+            let task = JournalTask {
+                records,
+                staged,
+                barrier,
+            };
+            if journal_sender.send(task).is_err() {
+                fatal_error.get_or_insert_with(|| "journaler stopped".to_string());
+            } else if let Some(barrier_rx) = barrier_rx {
+                match barrier_rx.recv() {
+                    Ok(result) => commit_result = result,
+                    Err(_) => {
+                        fatal_error.get_or_insert_with(|| "journaler stopped".to_string());
+                        commit_result = Err(PersistenceError::Io(std::io::Error::other(
+                            "journaler stopped",
+                        )));
+                    }
+                }
+            }
+            if let Some(message) = control.fatal() {
+                fatal_error.get_or_insert(message);
+            }
+        } else if let Some(commit_sender) = commit_sender.as_ref() {
             let file = service.commit_to_page_cache();
             match file {
                 Ok(file) => {
@@ -572,6 +648,43 @@ fn run_worker(
         }
     }
     // Dropping the service flushes any remaining WAL buffer.
+}
+
+fn run_journaler(
+    mut journal: Journal,
+    receiver: Receiver<JournalTask>,
+    control: Arc<RuntimeControl>,
+) {
+    let mut failed: Option<PersistenceError> = None;
+    while let Ok(task) = receiver.recv() {
+        let result = if let Some(error) = &failed {
+            Err(copy_persistence_error(error))
+        } else {
+            let mut result = Ok(());
+            for record in &task.records {
+                if let Err(error) = journal.append_record(record) {
+                    result = Err(error);
+                    break;
+                }
+            }
+            if result.is_ok() {
+                result = journal.commit();
+            }
+            result
+        };
+        if let Err(error) = &result
+            && failed.is_none()
+        {
+            control.set_fatal(error.to_string());
+            failed = Some(copy_persistence_error(error));
+        }
+        for item in task.staged {
+            send_staged_reply(item, &result);
+        }
+        if let Some(barrier) = task.barrier {
+            let _ = barrier.send(result);
+        }
+    }
 }
 
 fn run_commit_worker(receiver: Receiver<CommitTask>, control: Arc<RuntimeControl>) {
@@ -704,6 +817,37 @@ mod tests {
             service,
             RuntimeConfig {
                 async_fsync: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let order_id = runtime
+            .handle()
+            .submit_order(order(1, 1, OrderType::Buy))
+            .expect("order")
+            .1
+            .expect("rests")
+            .order_id;
+        runtime.shutdown().expect("shutdown");
+
+        let recovered = PersistentMatchingService::recover(spec, config).unwrap();
+        assert!(recovered.orderbook().order_owner(order_id).is_some());
+    }
+
+    #[test]
+    fn test_decoupled_journaler_ack_survives_recovery() {
+        let temp_dir = TempDir::new().unwrap();
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let config = PersistenceConfig {
+            data_dir: temp_dir.path().to_path_buf(),
+            wal_sync: true,
+            ..Default::default()
+        };
+        let service = PersistentMatchingService::new(spec.clone(), config.clone()).unwrap();
+        let runtime = MatchingRuntime::start(
+            service,
+            RuntimeConfig {
+                decouple_wal: true,
                 ..Default::default()
             },
         )

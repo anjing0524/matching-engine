@@ -88,6 +88,13 @@ impl Journal {
         Ok(seq)
     }
 
+    /// Appends an already-sequenced record (used by a decoupled journaler).
+    pub fn append_record(&mut self, record: &WalRecord) -> Result<u64> {
+        let written = self.writer.write(record)?;
+        self.writer.observe_seq(written);
+        Ok(written)
+    }
+
     /// Returns the next sequence number that will be assigned.
     ///
     /// The last durable sequence is `current_seq() - 1`.

@@ -178,6 +178,11 @@ fn validate_config(config: &CliConfig) -> Result<(), CliError> {
             "async fsync requires WAL fsync to be enabled".into(),
         ));
     }
+    if config.engine_uds.is_some() && config.snapshot_interval != 0 {
+        return Err(CliError::Config(
+            "engine IPC mode uses a decoupled journaler; set --snapshot-interval 0".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -269,7 +274,8 @@ fn run_server(config: CliConfig) -> Result<(), CliError> {
             batch_size: config.commit_batch_size,
             matching_core: config.matching_core,
             busy_poll: config.busy_poll,
-            async_fsync: config.async_fsync || config.engine_uds.is_some(),
+            async_fsync: config.async_fsync && config.engine_uds.is_none(),
+            decouple_wal: config.engine_uds.is_some(),
         },
     )?;
     let matching = runtime.handle();
