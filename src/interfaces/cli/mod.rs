@@ -178,11 +178,6 @@ fn validate_config(config: &CliConfig) -> Result<(), CliError> {
             "async fsync requires WAL fsync to be enabled".into(),
         ));
     }
-    if config.engine_uds.is_some() && config.snapshot_interval != 0 {
-        return Err(CliError::Config(
-            "engine IPC mode uses a decoupled journaler; set --snapshot-interval 0".into(),
-        ));
-    }
     Ok(())
 }
 

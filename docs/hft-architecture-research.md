@@ -71,10 +71,10 @@ Aeron Archive/Chronicle Queue 都是"消息/日志持久化 + 回放"这个方�
 对本项目：
 
 - 当前 `--async-fsync` 已把 fsync 移出撮合线程，但撮合线程仍可能在
-  commit channel 满、快照 barrierr 时停顿；
+  commit channel 满、快照 barrier 时停顿；
 - 目标是把 WAL 记录通过**有界 SPSC/ring**交给独立 journaler，
   撮合线程只在 ingress 有界队列满时对网关施加背压，不做磁盘/快照 I/O；
-- 快照需要独立 snapshotter（从 WAL/副本构建），不能要求撮合线程等待 fsync barrierr。
+- 快照需要独立 snapshotter（从 WAL/副本构建），不能要求撮合线程等待 fsync barrier。
 
 ## 2. 目标架构
 
@@ -152,7 +152,7 @@ Aeron Archive/Chronicle Queue 都是"消息/日志持久化 + 回放"这个方�
 |---|---|---|
 | 前置连接 | 每连接一个阻塞线程 | 固定 event-loop 线程 |
 | 进程边界 | gateway + matching 同进程 | 独立 gateway / engine 进程 |
-| 撮合阻塞 | fsync 可异步，但 commit 队列满/快照 barrierr 仍可能停顿 | 撮合只 push 有界队列，不碰磁盘 |
+| 撮合阻塞 | fsync 可异步，但 commit 队列满/快照 barrier 仍可能停顿 | 撮合只 push 有界队列，不碰磁盘 |
 | IPC | 无 | UDS，后续共享内存 ring |
 | 持久化 | 引擎内 WAL/snapshot | 独立 journaler/snapshotter |
 | 背压 | 连接上限 + 队列容量 | 端到端 in-flight/字节水位 |

@@ -480,14 +480,39 @@ impl PersistentMatchingService {
         Ok(handle)
     }
 
-    /// Whether the async-fsync worker should take a snapshot after the next
-    /// durability barrier.
+    /// Whether a snapshot should be requested at the current logical WAL seq.
     pub(crate) fn needs_snapshot(&self) -> bool {
         self.snapshot_every_records > 0
-            && self.journal.as_ref().is_some_and(|journal| {
-                journal.current_seq().saturating_sub(self.last_snapshot_seq)
-                    >= self.snapshot_every_records
-            })
+            && self
+                .current_wal_seq()
+                .saturating_sub(self.last_snapshot_seq)
+                >= self.snapshot_every_records
+    }
+
+    fn current_wal_seq(&self) -> u64 {
+        self.journal
+            .as_ref()
+            .map_or(self.staged_next_seq, Journal::current_seq)
+    }
+
+    /// Builds snapshot state at the current logical sequence without touching
+    /// the filesystem.
+    pub(crate) fn prepare_snapshot(&mut self) -> Snapshot {
+        let last_seq = self.current_wal_seq().saturating_sub(1);
+        self.last_snapshot_seq = last_seq;
+        Snapshot {
+            contract: self.orderbook.spec().clone(),
+            last_seq,
+            next_order_id: self.orderbook.next_order_id(),
+            next_trade_id: self.next_trade_id,
+            orders: self.orderbook.snapshot_orders(),
+            dedup_keys: self.dedup.keys().copied().collect(),
+        }
+    }
+
+    /// Data directory used by the journaler/snapshotter.
+    pub(crate) fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
     }
 
     /// Writes a snapshot after the current WAL state is durable.

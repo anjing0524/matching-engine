@@ -91,7 +91,8 @@
 - 新增独立 `gateway` 二进制（固定 event-loop 线程、`--io-threads`）与 engine
   `--engine-uds` IPC 模式；两进程测试覆盖下单/撤单。单进程阻塞 gateway 仅保留为兼容路径。
 - engine 模式新增 decoupled journaler：撮合线程只 staging WAL record，journaler
-  负责写盘/fsync；engine 模式要求 `--snapshot-interval 0`。
+  负责写盘/fsync。快照状态由撮合线程内存构建，独立 snapshotter 等待 durable
+  seq 后写文件；当前还没有 decoupled WAL rotate/prune。
 - 协议拒绝响应已改为 `Rejected { code: ErrorCode, message }`，提供稳定错误类别；
   更细的校验错误码（queue-full/duplicate/unknown-order 等）仍可继续细分。
 - 快照已实现：订单簿/next ids/幂等 key 写入 `snapshot.bin`（CRC/原子替换），恢复时加载

@@ -8,7 +8,7 @@
 use crate::application::services::persistent_service::{
     PersistentMatchingService, ServiceError, ServiceResult,
 };
-use crate::infrastructure::persistence::{Journal, PersistenceError, WalRecord};
+use crate::infrastructure::persistence::{Journal, PersistenceError, Snapshot, WalRecord};
 use crate::shared::metrics::METRICS;
 use crate::shared::protocol::{
     CancelOrderRequest, NewOrderRequest, OrderConfirmation, TradeNotification,
@@ -16,6 +16,7 @@ use crate::shared::protocol::{
 use crossbeam::channel::{Receiver, Sender, TryRecvError, bounded};
 use prometheus::Histogram;
 use std::fs::File;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
@@ -144,6 +145,7 @@ enum StagedReply {
 struct CommitSenders {
     async_fsync: Option<Sender<CommitTask>>,
     journal: Option<Sender<JournalTask>>,
+    snapshot: Option<Sender<Snapshot>>,
 }
 
 struct JournalTask {
@@ -284,6 +286,7 @@ pub struct MatchingRuntime {
     worker: Option<JoinHandle<()>>,
     commit_worker: Option<JoinHandle<()>>,
     journaler: Option<JoinHandle<()>>,
+    snapshotter: Option<JoinHandle<()>>,
     control: Arc<RuntimeControl>,
 }
 
@@ -318,18 +321,36 @@ impl MatchingRuntime {
             (None, None)
         };
 
-        let (journal_sender, journaler) = if decouple_wal {
+        let (journal_sender, journaler, snapshot_sender, snapshotter) = if decouple_wal {
             let journal = service
                 .take_journal()
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
+            let durable_seq = Arc::new(AtomicU64::new(journal.current_seq().saturating_sub(1)));
             let (sender, journal_receiver) = bounded(config.queue_capacity.max(1));
             let journal_control = Arc::clone(&control);
+            let journal_durable = Arc::clone(&durable_seq);
             let handle = thread::Builder::new()
                 .name("wal-journaler".to_string())
-                .spawn(move || run_journaler(journal, journal_receiver, journal_control))?;
-            (Some(sender), Some(handle))
+                .spawn(move || {
+                    run_journaler(journal, journal_receiver, journal_durable, journal_control)
+                })?;
+
+            let (snapshot_sender, snapshot_receiver) = bounded(64);
+            let data_dir = service.data_dir().to_path_buf();
+            let snapshot_control = Arc::clone(&control);
+            let snapshotter = thread::Builder::new()
+                .name("wal-snapshotter".to_string())
+                .spawn(move || {
+                    run_snapshotter(snapshot_receiver, data_dir, durable_seq, snapshot_control)
+                })?;
+            (
+                Some(sender),
+                Some(handle),
+                Some(snapshot_sender),
+                Some(snapshotter),
+            )
         } else {
-            (None, None)
+            (None, None, None, None)
         };
 
         let worker = thread::Builder::new()
@@ -349,6 +370,7 @@ impl MatchingRuntime {
                     CommitSenders {
                         async_fsync: commit_sender,
                         journal: journal_sender,
+                        snapshot: snapshot_sender,
                     },
                 );
             })?;
@@ -361,6 +383,7 @@ impl MatchingRuntime {
             worker: Some(worker),
             commit_worker,
             journaler,
+            snapshotter,
             control,
         })
     }
@@ -399,6 +422,11 @@ impl MatchingRuntime {
         {
             panicked = true;
         }
+        if let Some(snapshotter) = self.snapshotter.take()
+            && snapshotter.join().is_err()
+        {
+            panicked = true;
+        }
 
         if let Some(message) = self.control.fatal() {
             return Err(RuntimeError::Fatal(message));
@@ -433,6 +461,9 @@ impl Drop for MatchingRuntime {
             }
             if let Some(journaler) = self.journaler.take() {
                 let _ = journaler.join();
+            }
+            if let Some(snapshotter) = self.snapshotter.take() {
+                let _ = snapshotter.join();
             }
         }
     }
@@ -473,6 +504,7 @@ fn run_worker(
     let CommitSenders {
         async_fsync: commit_sender,
         journal: journal_sender,
+        snapshot: snapshot_sender,
     } = senders;
     'outer: while let Some(first) = next_command(&receiver, busy_poll) {
         let mut staged: Vec<StagedReply> = Vec::with_capacity(batch_size.min(64));
@@ -550,6 +582,14 @@ fn run_worker(
             }
             if let Some(message) = control.fatal() {
                 fatal_error.get_or_insert(message);
+            }
+            if service.needs_snapshot() {
+                let snapshot = service.prepare_snapshot();
+                if let Some(snapshot_sender) = snapshot_sender.as_ref()
+                    && snapshot_sender.send(snapshot).is_err()
+                {
+                    fatal_error.get_or_insert_with(|| "snapshotter stopped".to_string());
+                }
             }
         } else if let Some(commit_sender) = commit_sender.as_ref() {
             let file = service.commit_to_page_cache();
@@ -650,9 +690,30 @@ fn run_worker(
     // Dropping the service flushes any remaining WAL buffer.
 }
 
+fn run_snapshotter(
+    receiver: Receiver<Snapshot>,
+    data_dir: std::path::PathBuf,
+    durable_seq: Arc<AtomicU64>,
+    control: Arc<RuntimeControl>,
+) {
+    while let Ok(snapshot) = receiver.recv() {
+        while durable_seq.load(Ordering::Acquire) < snapshot.last_seq {
+            if control.fatal().is_some() {
+                return;
+            }
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+        if let Err(error) = Snapshot::save(&data_dir, &snapshot) {
+            control.set_fatal(error.to_string());
+            return;
+        }
+    }
+}
+
 fn run_journaler(
     mut journal: Journal,
     receiver: Receiver<JournalTask>,
+    durable_seq: Arc<AtomicU64>,
     control: Arc<RuntimeControl>,
 ) {
     let mut failed: Option<PersistenceError> = None;
@@ -672,8 +733,10 @@ fn run_journaler(
             }
             result
         };
-        if let Err(error) = &result
-            && failed.is_none()
+        if result.is_ok() {
+            durable_seq.store(journal.current_seq().saturating_sub(1), Ordering::Release);
+        } else if failed.is_none()
+            && let Err(error) = &result
         {
             control.set_fatal(error.to_string());
             failed = Some(copy_persistence_error(error));
@@ -863,6 +926,40 @@ mod tests {
 
         let recovered = PersistentMatchingService::recover(spec, config).unwrap();
         assert!(recovered.orderbook().order_owner(order_id).is_some());
+    }
+
+    #[test]
+    fn test_decoupled_snapshotter_writes_snapshot() {
+        let temp_dir = TempDir::new().unwrap();
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let config = PersistenceConfig {
+            data_dir: temp_dir.path().to_path_buf(),
+            wal_sync: true,
+            snapshot_every_records: 2,
+            ..Default::default()
+        };
+        let service = PersistentMatchingService::new(spec.clone(), config.clone()).unwrap();
+        let runtime = MatchingRuntime::start(
+            service,
+            RuntimeConfig {
+                decouple_wal: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let handle = runtime.handle();
+        handle
+            .submit_order(order(1, 1, OrderType::Buy))
+            .expect("first");
+        handle
+            .submit_order(order(2, 2, OrderType::Buy))
+            .expect("second");
+        runtime.shutdown().expect("shutdown");
+
+        assert!(temp_dir.path().join("snapshot.bin").exists());
+        let recovered = PersistentMatchingService::recover(spec, config).unwrap();
+        assert!(recovered.orderbook().order_owner(1).is_some());
+        assert!(recovered.orderbook().order_owner(2).is_some());
     }
 
     #[test]
