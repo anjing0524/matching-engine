@@ -5,3 +5,4 @@
 //! deliberately separate later slices; see `docs/exchange-core-architecture.md`.
 
 pub mod core;
+pub mod protocol;

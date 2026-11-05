@@ -13,6 +13,7 @@
 //! - deterministic replay: same command sequence produces the same events.
 
 use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
+use crate::exchange::protocol::{Command, CommandType, PriceType, Side};
 use crate::shared::SymbolId;
 use crate::shared::protocol::{NewOrderRequest, OrderType};
 
@@ -137,6 +138,41 @@ impl ExchangeCore {
                 client_order_id: 0,
                 reason,
             },
+        }
+    }
+
+    /// Executes one fixed-size command-log record.
+    ///
+    /// This is the only entry point the middleware consumer needs. Unsupported
+    /// commands are rejected explicitly instead of being silently ignored.
+    pub fn execute(&mut self, command: Command) -> Vec<CoreEvent> {
+        match command.command_type {
+            CommandType::NewOrder if command.price_type == PriceType::Limit => {
+                if command.price_ticks < 0 || command.quantity == 0 {
+                    return vec![CoreEvent::Rejected {
+                        client_order_id: command.client_order_id,
+                        reason: "invalid price or quantity".to_string(),
+                    }];
+                }
+                self.submit_limit(LimitOrderCommand {
+                    user_id: u64::from(command.user_id),
+                    client_order_id: command.client_order_id,
+                    side: match command.side {
+                        Side::Buy => OrderType::Buy,
+                        Side::Sell => OrderType::Sell,
+                    },
+                    price_ticks: command.price_ticks as u64,
+                    quantity: command.quantity,
+                })
+            }
+            CommandType::Cancel => vec![self.cancel(CancelCommand {
+                user_id: u64::from(command.user_id),
+                order_id: command.cancel_order_id,
+            })],
+            other => vec![CoreEvent::Rejected {
+                client_order_id: command.client_order_id,
+                reason: format!("unsupported command in this slice: {other:?}"),
+            }],
         }
     }
 
@@ -266,6 +302,64 @@ mod tests {
             }
         );
         assert_eq!(core.best_bid(), None);
+    }
+
+    fn wire_command(side: Side, price: i64, quantity: u64) -> Command {
+        Command {
+            global_seq: 1,
+            gateway_seq: 1,
+            ingress_ts_ns: 0,
+            exchange_ts_ns: 0,
+            client_order_id: 1,
+            session_id: 1,
+            gateway_id: 1,
+            member_id: 1,
+            user_id: 1,
+            seat_id: 1,
+            instrument_id: 1,
+            combo_id: 0,
+            session_epoch: 1,
+            command_type: CommandType::NewOrder,
+            price_type: PriceType::Limit,
+            time_condition: crate::exchange::protocol::TimeCondition::Gfd,
+            volume_condition: crate::exchange::protocol::VolumeCondition::Any,
+            side,
+            offset: crate::exchange::protocol::Offset::Open,
+            hedge: crate::exchange::protocol::Hedge::Spec,
+            flags: 0,
+            leg2_ratio: 0,
+            price_ticks: price,
+            quantity,
+            trigger_price_ticks: 0,
+            leg2_instrument_id: 0,
+            leg2_offset: crate::exchange::protocol::Offset::Open,
+            leg2_hedge: crate::exchange::protocol::Hedge::Spec,
+            trigger_type: crate::exchange::protocol::TriggerType::None,
+            cancel_order_id: 0,
+        }
+    }
+
+    #[test]
+    fn wire_command_enters_kernel() {
+        let mut core = core();
+        let events = core.execute(wire_command(Side::Buy, 50_000, 5));
+        assert!(matches!(
+            events.as_slice(),
+            [CoreEvent::Accepted {
+                remaining_quantity: 5,
+                ..
+            }]
+        ));
+        assert_eq!(core.best_bid(), Some(50_000));
+    }
+
+    #[test]
+    fn unsupported_wire_command_is_rejected() {
+        let mut core = core();
+        let mut command = wire_command(Side::Buy, 50_000, 5);
+        command.command_type = CommandType::TimeTick;
+        let events = core.execute(command);
+        assert!(matches!(events.as_slice(), [CoreEvent::Rejected { .. }]));
     }
 
     #[test]
