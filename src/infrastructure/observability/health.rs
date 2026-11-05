@@ -76,6 +76,12 @@ pub struct HealthDetails {
     pub total_orders: u64,
     /// 总成交数
     pub total_trades: u64,
+    /// Standby replication lag in WAL records.
+    pub replication_lag_records: i64,
+    /// Connected standby replicas.
+    pub replication_connected: i64,
+    /// Replication batches dropped because a standby was too slow.
+    pub replication_dropped_batches: u64,
 }
 
 /// 健康检查器
@@ -222,6 +228,9 @@ mod tests {
             active_connections: 10,
             total_orders: 1000,
             total_trades: 500,
+            replication_lag_records: 0,
+            replication_connected: 1,
+            replication_dropped_batches: 0,
         };
 
         let response = checker.check_health_detailed(details.clone());
