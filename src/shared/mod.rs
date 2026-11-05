@@ -10,6 +10,7 @@ pub mod collections;
 pub mod latency;
 pub mod metrics;
 pub mod protocol;
+pub mod spsc_ring;
 pub mod symbol;
 pub mod timestamp;
 pub mod wire;
