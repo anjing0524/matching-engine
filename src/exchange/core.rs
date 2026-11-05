@@ -170,6 +170,27 @@ impl ExchangeCore {
         });
     }
 
+    /// Conservative all-or-none liquidity check against the current book.
+    ///
+    /// FOK is rare; using the public snapshot keeps the core book API simple.
+    /// A production version should use a dedicated depth scan without allocating.
+    fn can_fill(&self, side: Side, price_ticks: u64, quantity: u64) -> bool {
+        let mut available = 0u64;
+        for order in self.book.snapshot_orders() {
+            let crosses = match side {
+                Side::Buy => order.side == OrderType::Sell && order.price <= price_ticks,
+                Side::Sell => order.side == OrderType::Buy && order.price >= price_ticks,
+            };
+            if crosses {
+                available = available.saturating_add(order.quantity);
+                if available >= quantity {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     fn reject_private(&mut self, command: &Command, reason: String) -> Vec<CoreEvent> {
         self.push_private(
             0,
@@ -288,9 +309,10 @@ impl ExchangeCore {
         if command.price_ticks < 0 || command.quantity == 0 {
             return self.reject_private(&command, "invalid price or quantity".to_string());
         }
-        if command.volume_condition == VolumeCondition::All {
-            return self
-                .reject_private(&command, "FOK is not implemented in this slice".to_string());
+        if command.volume_condition == VolumeCondition::All
+            && !self.can_fill(command.side, command.price_ticks as u64, command.quantity)
+        {
+            return self.reject_private(&command, "FOK cannot be fully filled".to_string());
         }
 
         let side = match command.side {
@@ -964,6 +986,36 @@ mod tests {
         let events = core.execute_with_plugins(buy, &AvailableClosePlugin);
         assert!(matches!(events.as_slice(), [CoreEvent::Rejected { .. }]));
         assert_eq!(core.best_ask(), Some(50_000));
+    }
+
+    #[test]
+    fn fok_fills_atomically_when_liquidity_is_sufficient() {
+        use crate::exchange::plugins::AvailableClosePlugin;
+        use crate::exchange::protocol::{Offset, TimeCondition, VolumeCondition};
+
+        let mut core = core();
+        let mut sell = wire_command(Side::Sell, 50_000, 10);
+        sell.user_id = 2;
+        sell.offset = Offset::Open;
+        core.execute_with_plugins(sell, &AvailableClosePlugin);
+
+        let mut buy = wire_command(Side::Buy, 50_000, 10);
+        buy.offset = Offset::Open;
+        buy.time_condition = TimeCondition::Ioc;
+        buy.volume_condition = VolumeCondition::All;
+        let events = core.execute_with_plugins(buy, &AvailableClosePlugin);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, CoreEvent::Trade { quantity: 10, .. })),
+            "unexpected events: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, CoreEvent::Canceled { .. }))
+        );
+        assert_eq!(core.best_ask(), None);
     }
 
     #[test]
