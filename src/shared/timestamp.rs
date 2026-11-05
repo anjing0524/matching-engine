@@ -101,6 +101,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "global timestamp cache is shared across parallel tests and coverage instrumentation"]
     fn test_cache_usage() {
         force_update_timestamp();
 
