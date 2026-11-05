@@ -42,12 +42,15 @@ pub fn start(
         .name("wal-replication".to_string())
         .spawn(move || {
             let mut subscribers: Vec<Subscriber> = Vec::new();
-            let mut sent_seq = 0u64;
+            let sent_seq = Arc::new(AtomicU64::new(0));
             let mut started = false;
             while !shutdown.load(Ordering::Acquire) {
                 loop {
                     match listener.accept() {
                         Ok((stream, _)) => {
+                            // Accepted sockets may inherit nonblocking mode from
+                            // the listener; the writer/ack threads use blocking IO.
+                            let _ = stream.set_nonblocking(false);
                             if started {
                                 // No catch-up yet: a late standby would silently
                                 // miss the earlier WAL prefix.
@@ -63,6 +66,7 @@ pub fn start(
                             };
                             let acked_seq = Arc::new(AtomicU64::new(0));
                             let ack_state = Arc::clone(&acked_seq);
+                            let sent_state = Arc::clone(&sent_seq);
                             if thread::Builder::new()
                                 .name("replication-writer".to_string())
                                 .spawn(move || writer(stream, receiver))
@@ -70,7 +74,7 @@ pub fn start(
                             {
                                 let _ = thread::Builder::new()
                                     .name("replication-ack".to_string())
-                                    .spawn(move || read_acks(ack_reader, ack_state));
+                                    .spawn(move || read_acks(ack_reader, ack_state, sent_state));
                                 subscribers.push(Subscriber { sender, acked_seq });
                                 METRICS.replication_connected.set(subscribers.len() as i64);
                             }
@@ -92,7 +96,11 @@ pub fn start(
                             continue;
                         };
                         started = true;
-                        sent_seq = batch.records.last().map_or(sent_seq, |record| record.seq);
+                        let sent = batch
+                            .records
+                            .last()
+                            .map_or(sent_seq.load(Ordering::Acquire), |record| record.seq);
+                        sent_seq.store(sent, Ordering::Release);
                         let before = subscribers.len();
                         subscribers.retain(|subscriber| {
                             matches!(subscriber.sender.try_send(encoded.clone()), Ok(()))
@@ -107,10 +115,19 @@ pub fn start(
                             .iter()
                             .map(|subscriber| subscriber.acked_seq.load(Ordering::Acquire))
                             .min()
-                            .map_or(0, |acked| sent_seq.saturating_sub(acked));
+                            .map_or(0, |acked| sent.saturating_sub(acked));
                         METRICS.replication_lag_records.set(lag as i64);
                     }
-                    Err(crossbeam::channel::RecvTimeoutError::Timeout) => {}
+                    Err(crossbeam::channel::RecvTimeoutError::Timeout) => {
+                        let lag = subscribers
+                            .iter()
+                            .map(|subscriber| subscriber.acked_seq.load(Ordering::Acquire))
+                            .min()
+                            .map_or(0, |acked| {
+                                sent_seq.load(Ordering::Acquire).saturating_sub(acked)
+                            });
+                        METRICS.replication_lag_records.set(lag as i64);
+                    }
                     Err(crossbeam::channel::RecvTimeoutError::Disconnected) => break,
                 }
             }
@@ -118,10 +135,15 @@ pub fn start(
         })
 }
 
-fn read_acks(mut stream: UnixStream, acked_seq: Arc<AtomicU64>) {
+fn read_acks(mut stream: UnixStream, acked_seq: Arc<AtomicU64>, sent_seq: Arc<AtomicU64>) {
     let mut buf = [0u8; 8];
     while stream.read_exact(&mut buf).is_ok() {
-        acked_seq.store(u64::from_be_bytes(buf), Ordering::Release);
+        let acked = u64::from_be_bytes(buf);
+        acked_seq.store(acked, Ordering::Release);
+        let sent = sent_seq.load(Ordering::Acquire);
+        METRICS
+            .replication_lag_records
+            .set(sent.saturating_sub(acked) as i64);
     }
 }
 

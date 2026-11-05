@@ -124,6 +124,9 @@ fn route(path: &str, checker: &HealthChecker) -> (u16, &'static str, String) {
                 active_connections: GLOBAL_METRICS.active_connections(),
                 total_orders: counter_sum(&METRICS.orders_total),
                 total_trades: counter_sum(&METRICS.trades_total),
+                replication_lag_records: METRICS.replication_lag_records.get(),
+                replication_connected: METRICS.replication_connected.get(),
+                replication_dropped_batches: METRICS.replication_dropped_batches.get(),
             };
             let response = checker.check_health_detailed(details);
             let status = match response.status {

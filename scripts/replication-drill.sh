@@ -17,7 +17,7 @@ trap cleanup EXIT
 "$ROOT/target/release/matching-engine" \
   --engine-uds "$TMP/engine.sock" --data-dir "$TMP/primary" \
   --replica-listen "$TMP/repl.sock" --queue-capacity 100000 \
-  --snapshot-interval 0 --wal-sync false --metrics-port 0 --log-level error \
+  --snapshot-interval 0 --wal-sync false --metrics-port 19234 --log-level error \
   >"$TMP/primary.log" 2>&1 &
 PRIMARY=$!
 PIDS+=("$PRIMARY")
@@ -40,6 +40,22 @@ sleep 0.8
 
 SERVER_ADDR=127.0.0.1:18232 timeout 10 "$ROOT/target/release/examples/network_client" >"$TMP/client.log" 2>&1
 sleep 0.8
+
+# Promotion guard: standby must have acked all shipped records and nothing may
+# have been dropped because it was too slow.
+HEALTH=$(curl -sf http://127.0.0.1:19234/health)
+echo "$HEALTH" | grep -q '"replication_lag_records":0' || {
+  echo "replication lag is non-zero; promotion unsafe: $HEALTH" >&2
+  exit 1
+}
+echo "$HEALTH" | grep -q '"replication_dropped_batches":0' || {
+  echo "replication batches were dropped; promotion unsafe: $HEALTH" >&2
+  exit 1
+}
+echo "$HEALTH" | grep -q '"replication_connected":1' || {
+  echo "standby is not connected: $HEALTH" >&2
+  exit 1
+}
 
 # Simulate primary/gateway failure, then stop the standby and promote its data dir.
 kill -9 "$PRIMARY" "$GATEWAY" 2>/dev/null || true
