@@ -66,6 +66,16 @@ pub enum CoreEvent {
     },
 }
 
+/// Lifecycle status of an exchange order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrderStatus {
+    Accepted,
+    PartiallyFilled,
+    Filled,
+    Canceled,
+    Rejected,
+}
+
 /// Metadata for an order accepted into the book.
 ///
 /// The order book owns price/FIFO state; this table carries the business
@@ -77,6 +87,7 @@ pub struct OrderMeta {
     pub offset: Offset,
     pub hedge: Hedge,
     pub remaining: u64,
+    pub status: OrderStatus,
 }
 
 /// The deterministic core state machine for one contract.
@@ -167,14 +178,16 @@ impl ExchangeCore {
     pub fn cancel(&mut self, command: CancelCommand) -> CoreEvent {
         match self.book.cancel_order(command.order_id, command.user_id) {
             Ok(()) => {
-                if let Some(meta) = self.orders.remove(&command.order_id)
-                    && meta.offset != Offset::Open
-                {
-                    let key = CloseKey::new(
-                        PositionKey::new(meta.account_id, meta.side.opposite(), meta.hedge),
-                        meta.offset,
-                    );
-                    self.frozen_close.release(key, meta.remaining);
+                if let Some(meta) = self.orders.get_mut(&command.order_id) {
+                    if meta.offset != Offset::Open {
+                        let key = CloseKey::new(
+                            PositionKey::new(meta.account_id, meta.side.opposite(), meta.hedge),
+                            meta.offset,
+                        );
+                        self.frozen_close.release(key, meta.remaining);
+                    }
+                    meta.remaining = 0;
+                    meta.status = OrderStatus::Canceled;
                 }
                 CoreEvent::Canceled {
                     order_id: command.order_id,
@@ -283,6 +296,7 @@ impl ExchangeCore {
                     offset: command.offset,
                     hedge: command.hedge,
                     remaining: command.quantity,
+                    status: OrderStatus::Accepted,
                 },
             );
         }
@@ -345,9 +359,19 @@ impl ExchangeCore {
                 .release(CloseKey::new(key, meta.offset), quantity);
         }
         meta.remaining = meta.remaining.saturating_sub(quantity);
-        if meta.remaining > 0 {
-            self.orders.insert(order_id, meta);
-        }
+        meta.status = if meta.remaining == 0 {
+            OrderStatus::Filled
+        } else {
+            OrderStatus::PartiallyFilled
+        };
+        self.orders.insert(order_id, meta);
+    }
+
+    /// Returns the lifecycle status of an order accepted through the business
+    /// path, or `None` before it was accepted.
+    #[must_use]
+    pub fn order_status(&self, order_id: u64) -> Option<OrderStatus> {
+        self.orders.get(&order_id).map(|meta| meta.status)
     }
 
     /// Executes one fixed-size command-log record.
@@ -651,6 +675,62 @@ mod tests {
             core.frozen_close().available(close_key, core.positions()),
             5
         );
+    }
+
+    #[test]
+    fn order_status_tracks_accept_fill_and_cancel() {
+        use crate::exchange::plugins::AvailableClosePlugin;
+        use crate::exchange::protocol::Offset;
+
+        let mut core = core();
+        let mut buy = wire_command(Side::Buy, 50_000, 5);
+        buy.offset = Offset::Open;
+        let events = core.execute_with_plugins(buy, &AvailableClosePlugin);
+        let order_id = match events[0] {
+            CoreEvent::Accepted { order_id, .. } => order_id,
+            _ => panic!("expected accepted"),
+        };
+        assert_eq!(core.order_status(order_id), Some(OrderStatus::Accepted));
+
+        let mut sell = wire_command(Side::Sell, 50_000, 2);
+        sell.user_id = 2;
+        sell.offset = Offset::Open;
+        core.execute_with_plugins(sell, &AvailableClosePlugin);
+        assert_eq!(
+            core.order_status(order_id),
+            Some(OrderStatus::PartiallyFilled)
+        );
+
+        core.cancel(CancelCommand {
+            user_id: 1,
+            order_id,
+        });
+        assert_eq!(core.order_status(order_id), Some(OrderStatus::Canceled));
+    }
+
+    #[test]
+    fn fully_filled_order_is_marked_filled() {
+        use crate::exchange::plugins::AvailableClosePlugin;
+        use crate::exchange::protocol::Offset;
+
+        let mut core = core();
+        let mut buy = wire_command(Side::Buy, 50_000, 5);
+        buy.offset = Offset::Open;
+        core.execute_with_plugins(buy, &AvailableClosePlugin);
+        let mut sell = wire_command(Side::Sell, 50_000, 5);
+        sell.user_id = 2;
+        sell.offset = Offset::Open;
+        let events = core.execute_with_plugins(sell, &AvailableClosePlugin);
+        let incoming_id = match events
+            .iter()
+            .find(|event| matches!(event, CoreEvent::Trade { .. }))
+        {
+            Some(CoreEvent::Trade {
+                seller_order_id, ..
+            }) => *seller_order_id,
+            _ => panic!("expected trade"),
+        };
+        assert_eq!(core.order_status(incoming_id), Some(OrderStatus::Filled));
     }
 
     #[test]
