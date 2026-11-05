@@ -16,7 +16,9 @@ use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use crate::exchange::plugins::{PreTradePlugin, RiskOrder, ValidationContext};
 use crate::exchange::positions::{CloseKey, FrozenClose, PositionKey, Positions};
 use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
-use crate::exchange::protocol::{Command, CommandType, Hedge, Offset, PriceType, Side};
+use crate::exchange::protocol::{
+    Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, VolumeCondition,
+};
 use crate::shared::SymbolId;
 use crate::shared::protocol::{NewOrderRequest, OrderType};
 use std::collections::HashMap;
@@ -168,6 +170,22 @@ impl ExchangeCore {
         });
     }
 
+    fn reject_private(&mut self, command: &Command, reason: String) -> Vec<CoreEvent> {
+        self.push_private(
+            0,
+            command.client_order_id,
+            u64::from(command.user_id),
+            PrivateStatus::Rejected,
+            0,
+            0,
+            Some(reason.clone()),
+        );
+        vec![CoreEvent::Rejected {
+            client_order_id: command.client_order_id,
+            reason,
+        }]
+    }
+
     /// Submits one limit order and returns every event it produced.
     ///
     /// The order book owns order-id allocation and price/tick validation; this
@@ -268,10 +286,11 @@ impl ExchangeCore {
             return self.execute(command);
         }
         if command.price_ticks < 0 || command.quantity == 0 {
-            return vec![CoreEvent::Rejected {
-                client_order_id: command.client_order_id,
-                reason: "invalid price or quantity".to_string(),
-            }];
+            return self.reject_private(&command, "invalid price or quantity".to_string());
+        }
+        if command.volume_condition == VolumeCondition::All {
+            return self
+                .reject_private(&command, "FOK is not implemented in this slice".to_string());
         }
 
         let side = match command.side {
@@ -290,10 +309,7 @@ impl ExchangeCore {
             frozen_close: &self.frozen_close,
         };
         if let Err(reason) = plugin.check(&risk_order, &context) {
-            return vec![CoreEvent::Rejected {
-                client_order_id: command.client_order_id,
-                reason: reason.to_string(),
-            }];
+            return self.reject_private(&command, reason.to_string());
         }
 
         let close_key = if command.offset == Offset::Open {
@@ -311,10 +327,8 @@ impl ExchangeCore {
                 .frozen_close
                 .reserve(key, &self.positions, command.quantity)
             {
-                return vec![CoreEvent::Rejected {
-                    client_order_id: command.client_order_id,
-                    reason: format!("close reservation failed: {error:?}"),
-                }];
+                return self
+                    .reject_private(&command, format!("close reservation failed: {error:?}"));
             }
             Some(key)
         };
@@ -423,6 +437,20 @@ impl ExchangeCore {
                 .release(key, command.quantity.saturating_sub(filled));
         }
 
+        let mut events = events;
+        if command.time_condition == TimeCondition::Ioc
+            && let Some(order_id) = incoming_id
+            && self
+                .orders
+                .get(&order_id)
+                .is_some_and(|meta| meta.remaining > 0)
+        {
+            // FAK/IOC: the unmatched remainder is canceled immediately.
+            events.push(self.cancel(CancelCommand {
+                user_id: u64::from(command.user_id),
+                order_id,
+            }));
+        }
         events
     }
 
@@ -870,6 +898,72 @@ mod tests {
         assert!(private.iter().any(|event| {
             event.order_id == order_id && event.status == PrivateStatus::Canceled
         }));
+    }
+
+    #[test]
+    fn invalid_quantity_emits_private_reject() {
+        use crate::exchange::plugins::AvailableClosePlugin;
+        use crate::exchange::private_events::PrivateStatus;
+        use crate::exchange::protocol::Offset;
+
+        let mut core = core();
+        let mut command = wire_command(Side::Buy, 50_000, 0);
+        command.offset = Offset::Open;
+        let events = core.execute_with_plugins(command, &AvailableClosePlugin);
+        assert!(matches!(events.as_slice(), [CoreEvent::Rejected { .. }]));
+        let private = core.drain_private_events();
+        assert_eq!(private.len(), 1);
+        assert_eq!(private[0].status, PrivateStatus::Rejected);
+    }
+
+    #[test]
+    fn fak_cancels_unmatched_remainder() {
+        use crate::exchange::plugins::AvailableClosePlugin;
+        use crate::exchange::protocol::{Offset, TimeCondition, VolumeCondition};
+
+        let mut core = core();
+        let mut sell = wire_command(Side::Sell, 50_000, 5);
+        sell.user_id = 2;
+        sell.offset = Offset::Open;
+        core.execute_with_plugins(sell, &AvailableClosePlugin);
+
+        let mut buy = wire_command(Side::Buy, 50_000, 10);
+        buy.offset = Offset::Open;
+        buy.time_condition = TimeCondition::Ioc;
+        buy.volume_condition = VolumeCondition::Minimum;
+        let events = core.execute_with_plugins(buy, &AvailableClosePlugin);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, CoreEvent::Trade { quantity: 5, .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, CoreEvent::Canceled { .. }))
+        );
+        assert_eq!(core.best_bid(), None);
+        assert_eq!(core.best_ask(), None);
+    }
+
+    #[test]
+    fn fok_is_rejected_before_trading_in_this_slice() {
+        use crate::exchange::plugins::AvailableClosePlugin;
+        use crate::exchange::protocol::{Offset, TimeCondition, VolumeCondition};
+
+        let mut core = core();
+        let mut sell = wire_command(Side::Sell, 50_000, 5);
+        sell.user_id = 2;
+        sell.offset = Offset::Open;
+        core.execute_with_plugins(sell, &AvailableClosePlugin);
+
+        let mut buy = wire_command(Side::Buy, 50_000, 10);
+        buy.offset = Offset::Open;
+        buy.time_condition = TimeCondition::Ioc;
+        buy.volume_condition = VolumeCondition::All;
+        let events = core.execute_with_plugins(buy, &AvailableClosePlugin);
+        assert!(matches!(events.as_slice(), [CoreEvent::Rejected { .. }]));
+        assert_eq!(core.best_ask(), Some(50_000));
     }
 
     #[test]
