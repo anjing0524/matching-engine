@@ -88,23 +88,35 @@ struct Upstream {
     write_registered: bool,
 }
 
-fn connect_engine(path: &std::path::Path) -> io::Result<UnixStream> {
-    let mut last_error = None;
-    for _ in 0..100 {
+fn connect_engine_wait(
+    path: &std::path::Path,
+    shutdown: &AtomicBool,
+) -> io::Result<Option<UnixStream>> {
+    let mut logged = false;
+    loop {
+        if shutdown.load(Ordering::Acquire) {
+            return Ok(None);
+        }
         match UnixStream::connect(path) {
-            Ok(stream) => return Ok(stream),
+            Ok(stream) => {
+                tracing::info!("engine IPC reconnected");
+                return Ok(Some(stream));
+            }
             Err(error) => {
-                last_error = Some(error);
+                if !logged {
+                    tracing::warn!(%error, "engine IPC unavailable; retrying");
+                    logged = true;
+                }
                 thread::sleep(Duration::from_millis(100));
             }
         }
     }
-    Err(last_error.unwrap_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "engine IPC socket not available")
-    }))
 }
 
 fn main() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
     if let Err(error) = run() {
         eprintln!("gateway error: {error}");
         std::process::exit(1);
@@ -256,53 +268,83 @@ fn run_loop(
     shutdown: Arc<AtomicBool>,
     connections: Arc<AtomicUsize>,
 ) -> io::Result<()> {
-    let upstream_stream = connect_engine(&config.engine_uds)?;
-    let mut upstream = Upstream {
-        stream: upstream_stream,
-        read_buf: Vec::with_capacity(64 * 1024),
-        write_buf: Vec::with_capacity(64 * 1024),
-        write_registered: false,
-    };
-
     let mut poll = Poll::new()?;
     poll.registry()
         .register(&mut listener, LISTENER, Interest::READABLE)?;
-    poll.registry()
-        .register(&mut upstream.stream, UPSTREAM, Interest::READABLE)?;
-
     let mut events = Events::with_capacity(4096);
     let mut clients: HashMap<Token, Client> = HashMap::new();
     let mut next_token = FIRST_CLIENT;
     let timeout = Duration::from_millis(config.poll_timeout_ms.max(1));
 
-    while !shutdown.load(Ordering::Acquire) {
-        poll.poll(&mut events, Some(timeout))?;
-        for event in events.iter() {
-            match event.token() {
-                LISTENER => accept_clients(
-                    &mut listener,
-                    &mut poll,
-                    &mut clients,
-                    &mut next_token,
-                    &config,
-                    &connections,
-                )?,
-                UPSTREAM => {
-                    if !service_upstream(&mut upstream, &mut poll, &mut clients, &config)? {
-                        return Err(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "engine IPC closed",
-                        ));
+    loop {
+        let Some(upstream_stream) = connect_engine_wait(&config.engine_uds, &shutdown)? else {
+            break;
+        };
+        let mut upstream = Upstream {
+            stream: upstream_stream,
+            read_buf: Vec::with_capacity(64 * 1024),
+            write_buf: Vec::with_capacity(64 * 1024),
+            write_registered: false,
+        };
+        poll.registry()
+            .register(&mut upstream.stream, UPSTREAM, Interest::READABLE)?;
+
+        'session: while !shutdown.load(Ordering::Acquire) {
+            poll.poll(&mut events, Some(timeout))?;
+            for event in events.iter() {
+                match event.token() {
+                    LISTENER => accept_clients(
+                        &mut listener,
+                        &mut poll,
+                        &mut clients,
+                        &mut next_token,
+                        &config,
+                        &connections,
+                    )?,
+                    UPSTREAM => {
+                        let alive =
+                            match service_upstream(&mut upstream, &mut poll, &mut clients, &config)
+                            {
+                                Ok(alive) => alive,
+                                Err(error) => {
+                                    tracing::warn!(%error, "engine IPC error; reconnecting");
+                                    false
+                                }
+                            };
+                        if !alive {
+                            tracing::warn!("engine IPC closed; reconnecting");
+                            break 'session;
+                        }
                     }
-                }
-                token => {
-                    if !service_client(token, &mut poll, &mut clients, &mut upstream, &config)? {
-                        clients.remove(&token);
-                        connections.fetch_sub(1, Ordering::AcqRel);
+                    token => {
+                        if !service_client(token, &mut poll, &mut clients, &mut upstream, &config)?
+                        {
+                            clients.remove(&token);
+                            connections.fetch_sub(1, Ordering::AcqRel);
+                        }
                     }
                 }
             }
         }
+
+        if shutdown.load(Ordering::Acquire) {
+            break;
+        }
+        let removed = clients.len();
+        for (_, client) in clients.drain() {
+            let _ = client.stream.shutdown(std::net::Shutdown::Both);
+        }
+        if removed > 0 {
+            connections.fetch_sub(removed, Ordering::AcqRel);
+        }
+    }
+
+    let removed = clients.len();
+    for (_, client) in clients.drain() {
+        let _ = client.stream.shutdown(std::net::Shutdown::Both);
+    }
+    if removed > 0 {
+        connections.fetch_sub(removed, Ordering::AcqRel);
     }
     Ok(())
 }
