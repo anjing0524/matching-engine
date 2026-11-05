@@ -238,6 +238,8 @@ runtime。理由：
 
 交易所核心系统（gateway / middleware / core）的需求澄清与架构决策见
 [docs/exchange-core-architecture.md](docs/exchange-core-architecture.md)。
+协议字段、共享内存布局与序号规则见
+[docs/exchange-protocol.md](docs/exchange-protocol.md)。
 
 使用 Prometheus `histogram_quantile(0.99, ...)` / `0.999` / `0.9999` 查看尾部；
 `max` 应结合进程/SO 监控单独观察。`load_generator` 会直接抓取 `/metrics` 并打印
