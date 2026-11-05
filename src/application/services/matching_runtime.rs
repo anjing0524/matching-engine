@@ -748,6 +748,7 @@ fn run_journaler(
     control: Arc<RuntimeControl>,
     commit_latency: Histogram,
 ) {
+    const MAX_GROUP: usize = 64;
     let mut failed: Option<PersistenceError> = None;
     while let Ok(command) = receiver.recv() {
         match command {
@@ -765,11 +766,40 @@ fn run_journaler(
             }
             JournalerCommand::Batch(task) => {
                 let started = Instant::now();
+                let mut staged = Vec::new();
+                let mut barriers = Vec::new();
+                let mut records = task.records;
+                staged.extend(task.staged);
+                if let Some(barrier) = task.barrier {
+                    barriers.push(barrier);
+                }
+                let mut compact_after = None;
+                let mut group_count = 1usize;
+
+                // Group commit: drain already-queued batches and commit once.
+                while group_count < MAX_GROUP {
+                    match receiver.try_recv() {
+                        Ok(JournalerCommand::Batch(next)) => {
+                            records.extend(next.records);
+                            staged.extend(next.staged);
+                            if let Some(barrier) = next.barrier {
+                                barriers.push(barrier);
+                            }
+                            group_count += 1;
+                        }
+                        Ok(JournalerCommand::Compact { through_seq }) => {
+                            compact_after = Some(through_seq);
+                            break;
+                        }
+                        Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+                    }
+                }
+
                 let result = if let Some(error) = &failed {
                     Err(copy_persistence_error(error))
                 } else {
                     let mut result = Ok(());
-                    for record in &task.records {
+                    for record in &records {
                         if let Err(error) = journal.append_record(record) {
                             result = Err(error);
                             break;
@@ -789,11 +819,24 @@ fn run_journaler(
                     control.set_fatal(error.to_string());
                     failed = Some(copy_persistence_error(error));
                 }
-                for item in task.staged {
+                for item in staged {
                     send_staged_reply(item, &result);
                 }
-                if let Some(barrier) = task.barrier {
-                    let _ = barrier.send(result);
+                for barrier in barriers {
+                    let reply = match &result {
+                        Ok(()) => Ok(()),
+                        Err(error) => Err(copy_persistence_error(error)),
+                    };
+                    let _ = barrier.send(reply);
+                }
+                if result.is_ok()
+                    && let Some(through_seq) = compact_after
+                    && let Err(error) = journal
+                        .rotate()
+                        .and_then(|()| journal.prune_through(through_seq))
+                {
+                    control.set_fatal(error.to_string());
+                    failed = Some(copy_persistence_error(&error));
                 }
             }
         }

@@ -59,7 +59,10 @@ APFS 上同步 fsync 波动很大：
 | 配置 | 订单速率 | p50 request |
 |---|---:|---:|
 | 单进程 async fsync，16 clients | ~290/s | 100 ms |
-| split decoupled journaler fsync，16 clients | ~48/s | 100 ms |
+| split decoupled journaler fsync，16 clients（group commit 前） | ~48/s | 100 ms |
+| split decoupled journaler fsync，16 clients（group commit 后） | ~9.9k/s | ~10 ms |
+
+journaler 会把已排队的多个 batch 合并成一次 commit；Mac APFS 的 fsync 仍明显限制尾延迟。
 
 这组数字**不能**用于 Linux 生产磁盘结论；生产应使用独立 journaler + 批量 commit、
 fsync 队列、或复制/持久内存方案。
