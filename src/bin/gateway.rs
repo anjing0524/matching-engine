@@ -423,6 +423,7 @@ fn service_upstream(
             ));
         }
     }
+    let mut unpaused = Vec::new();
     while let Some((response, consumed)) = decode_response(&upstream.read_buf) {
         upstream.read_buf.drain(..consumed);
         let token = Token(response.client_id as usize);
@@ -447,11 +448,15 @@ fn service_upstream(
                         .register(&mut client.stream, token, interest)?;
                     client.registered = true;
                 }
+                unpaused.push(token);
             }
             let interest = client_interest(client);
             poll.registry()
                 .reregister(&mut client.stream, token, interest)?;
         }
+    }
+    for token in unpaused {
+        let _ = service_client(token, poll, clients, upstream, config)?;
     }
     Ok(true)
 }

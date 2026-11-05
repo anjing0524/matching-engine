@@ -14,7 +14,7 @@ use crate::shared::protocol::{
     PROTOCOL_VERSION, ServerMessage, ServerResponse,
 };
 use crate::shared::wire::{decode_frame_payload, encode_to_vec};
-use std::io::{self, Read, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -269,10 +269,11 @@ fn handle_connection(stream: UnixStream, handle: MatchingHandle, symbol: &str) {
         tracing::warn!(%error, "failed to make engine IPC stream blocking");
         return;
     }
-    let Ok(mut read_half) = stream.try_clone() else {
+    let Ok(read_half) = stream.try_clone() else {
         tracing::warn!("engine IPC stream clone failed");
         return;
     };
+    let mut read_half = BufReader::with_capacity(64 * 1024, read_half);
     let (sender, receiver) = crossbeam::channel::bounded::<Pending>(1024);
     let latency = METRICS.request_latency_ns.with_label_values(&[symbol]);
     let writer = thread::Builder::new()
