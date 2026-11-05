@@ -16,7 +16,7 @@ use crate::shared::protocol::{
 use crate::shared::spsc_ring::{PushError, SpscRing};
 use crate::shared::wire::{decode_frame_payload, encode_to_vec};
 use std::io::{self, BufReader, Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -464,6 +464,22 @@ pub fn ring_paths(dir: &Path, index: usize) -> (PathBuf, PathBuf) {
     }
 }
 
+/// Notification datagram paths for ring pair `index`.
+#[must_use]
+pub fn ring_notify_paths(dir: &Path, index: usize) -> (PathBuf, PathBuf) {
+    if index == 0 {
+        (
+            dir.join("request-notify.sock"),
+            dir.join("response-notify.sock"),
+        )
+    } else {
+        (
+            dir.join(format!("request-notify-{index}.sock")),
+            dir.join(format!("response-notify-{index}.sock")),
+        )
+    }
+}
+
 /// Configuration for the engine-side SPSC ring transport.
 #[derive(Debug, Clone)]
 pub struct RingIpcConfig {
@@ -531,6 +547,10 @@ fn start_ring_at(
     shutdown: Arc<AtomicBool>,
 ) -> io::Result<thread::JoinHandle<()>> {
     let (request_path, response_path) = ring_paths(&config.dir, index);
+    let (request_notify_path, response_notify_path) = ring_notify_paths(&config.dir, index);
+    let _ = std::fs::remove_file(&request_notify_path);
+    let request_notify = UnixDatagram::bind(&request_notify_path)?;
+    request_notify.set_read_timeout(Some(Duration::from_millis(50)))?;
     let request = SpscRing::create(&request_path, config.capacity, config.slot_size)?;
     let response_ring = SpscRing::create(&response_path, config.capacity, config.slot_size)?;
     let symbol = symbol.to_string();
@@ -541,9 +561,11 @@ fn start_ring_at(
             let (sender, receiver) = crossbeam::channel::bounded::<Pending>(1024);
             let latency = METRICS.request_latency_ns.with_label_values(&[&symbol]);
             let writer_shutdown = Arc::clone(&shutdown);
+            let response_notify_path = response_notify_path.clone();
             let writer = thread::Builder::new()
                 .name("engine-ring-writer".to_string())
                 .spawn(move || {
+                    let notify = UnixDatagram::unbound().ok();
                     while let Ok(pending) = receiver.recv() {
                         let (response, started) = build_pending(pending);
                         let encoded = encode_response(&response);
@@ -567,22 +589,29 @@ fn start_ring_at(
                                 return;
                             }
                         }
+                        if let Some(notify) = &notify {
+                            let _ = notify.send_to(&[1], &response_notify_path);
+                        }
                         latency.observe(started.elapsed().as_nanos() as f64);
                     }
                 });
             let mut request_buf = Vec::with_capacity(slot_size);
+            let mut notify_buf = [0u8; 1];
             while !shutdown.load(Ordering::Acquire) {
-                if !request.try_pop_into(&mut request_buf) {
-                    std::hint::spin_loop();
-                    continue;
-                }
-                if let Some((request, _)) = decode_request(&request_buf) {
-                    let pending = pending_for_request(request, &handle);
-                    if sender.send(pending).is_err() {
-                        break;
+                let mut processed = false;
+                while request.try_pop_into(&mut request_buf) {
+                    processed = true;
+                    if let Some((request, _)) = decode_request(&request_buf) {
+                        let pending = pending_for_request(request, &handle);
+                        if sender.send(pending).is_err() {
+                            return;
+                        }
+                    } else {
+                        tracing::warn!("ring request decode failed");
                     }
-                } else {
-                    tracing::warn!("ring request decode failed");
+                }
+                if !processed {
+                    let _ = request_notify.recv(&mut notify_buf);
                 }
             }
             drop(sender);
@@ -591,6 +620,7 @@ fn start_ring_at(
             }
             let _ = std::fs::remove_file(request_path);
             let _ = std::fs::remove_file(response_path);
+            let _ = std::fs::remove_file(request_notify_path);
         })
 }
 

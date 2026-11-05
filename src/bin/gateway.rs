@@ -7,10 +7,10 @@
 //! process is decoupled through IPC.
 use clap::Parser;
 use matching_engine::interfaces::engine_ipc::{
-    IpcRequest, MAX_IPC_PAYLOAD, decode_response, encode_request, ring_paths,
+    IpcRequest, MAX_IPC_PAYLOAD, decode_response, encode_request, ring_notify_paths, ring_paths,
 };
 use matching_engine::shared::spsc_ring::{PushError, SpscRing};
-use mio::net::{TcpListener, TcpStream, UnixStream};
+use mio::net::{TcpListener, TcpStream, UnixDatagram, UnixStream};
 use mio::{Events, Interest, Poll, Token};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 
 const LISTENER: Token = Token(0);
 const UPSTREAM: Token = Token(1);
+const RING_NOTIFY: Token = Token(1);
 const FIRST_CLIENT: u64 = 2;
 
 #[derive(Parser, Debug, Clone)]
@@ -308,11 +309,18 @@ fn run_loop(
 struct RingTransport {
     request: SpscRing,
     response: SpscRing,
+    response_notify: UnixDatagram,
+    request_notify: UnixDatagram,
+    request_notify_path: PathBuf,
     response_buf: Vec<u8>,
 }
 
 fn connect_rings(dir: &std::path::Path, index: usize) -> io::Result<RingTransport> {
     let (request_path, response_path) = ring_paths(dir, index);
+    let (request_notify_path, response_notify_path) = ring_notify_paths(dir, index);
+    let _ = std::fs::remove_file(&response_notify_path);
+    let response_notify = UnixDatagram::bind(&response_notify_path)?;
+    let request_notify = UnixDatagram::unbound()?;
     let mut last = None;
     for _ in 0..300 {
         if request_path.exists() && response_path.exists() {
@@ -324,6 +332,9 @@ fn connect_rings(dir: &std::path::Path, index: usize) -> io::Result<RingTranspor
                     return Ok(RingTransport {
                         request,
                         response,
+                        response_notify,
+                        request_notify,
+                        request_notify_path,
                         response_buf: Vec::with_capacity(16 * 1024),
                     });
                 }
@@ -351,13 +362,15 @@ fn run_ring_loop(
     let mut poll = Poll::new()?;
     poll.registry()
         .register(&mut listener, LISTENER, Interest::READABLE)?;
+    poll.registry()
+        .register(&mut ring.response_notify, RING_NOTIFY, Interest::READABLE)?;
     let mut events = Events::with_capacity(4096);
     let mut clients: HashMap<Token, Client> = HashMap::new();
     let mut next_token = FIRST_CLIENT;
+    let timeout = Duration::from_millis(config.poll_timeout_ms.max(1));
+    let mut request_notify_pending = false;
     while !shutdown.load(Ordering::Acquire) {
-        // Poll timeout zero keeps the response ring latency bounded by the
-        // event-loop iteration rather than a timer.
-        poll.poll(&mut events, Some(Duration::ZERO))?;
+        poll.poll(&mut events, Some(timeout))?;
         for event in events.iter() {
             match event.token() {
                 LISTENER => accept_clients(
@@ -368,6 +381,18 @@ fn run_ring_loop(
                     &config,
                     &connections,
                 )?,
+                RING_NOTIFY => {
+                    let mut buf = [0u8; 64];
+                    while ring.response_notify.recv(&mut buf).is_ok() {}
+                    drain_ring_responses(
+                        &mut ring,
+                        &mut poll,
+                        &mut clients,
+                        &config,
+                        &shutdown,
+                        &mut request_notify_pending,
+                    )?;
+                }
                 token => {
                     if !service_client_ring(
                         token,
@@ -376,6 +401,7 @@ fn run_ring_loop(
                         &ring,
                         &config,
                         &shutdown,
+                        &mut request_notify_pending,
                     )? {
                         clients.remove(&token);
                         connections.fetch_sub(1, Ordering::AcqRel);
@@ -383,8 +409,18 @@ fn run_ring_loop(
                 }
             }
         }
-        drain_ring_responses(&mut ring, &mut poll, &mut clients, &config, &shutdown)?;
-        std::hint::spin_loop();
+        if request_notify_pending {
+            let _ = ring.request_notify.send_to(&[1], &ring.request_notify_path);
+            request_notify_pending = false;
+        }
+        drain_ring_responses(
+            &mut ring,
+            &mut poll,
+            &mut clients,
+            &config,
+            &shutdown,
+            &mut request_notify_pending,
+        )?;
     }
     Ok(())
 }
@@ -396,6 +432,7 @@ fn service_client_ring(
     ring: &RingTransport,
     config: &Config,
     shutdown: &AtomicBool,
+    request_notify_pending: &mut bool,
 ) -> io::Result<bool> {
     let Some(client) = clients.get_mut(&token) else {
         return Ok(false);
@@ -472,6 +509,7 @@ fn service_client_ring(
                 }
             }
             client.in_flight += 1;
+            *request_notify_pending = true;
         }
     }
 
@@ -495,6 +533,7 @@ fn drain_ring_responses(
     clients: &mut HashMap<Token, Client>,
     config: &Config,
     shutdown: &AtomicBool,
+    request_notify_pending: &mut bool,
 ) -> io::Result<()> {
     let mut unpaused: Vec<Token> = Vec::new();
     loop {
@@ -536,7 +575,15 @@ fn drain_ring_responses(
             .reregister(&mut client.stream, token, interest)?;
     }
     for token in unpaused {
-        let _ = service_client_ring(token, poll, clients, ring, config, shutdown)?;
+        let _ = service_client_ring(
+            token,
+            poll,
+            clients,
+            ring,
+            config,
+            shutdown,
+            request_notify_pending,
+        )?;
     }
     Ok(())
 }

@@ -73,16 +73,16 @@ Mac M4 release，无 fsync：
 | 路径 | closed-loop 4 clients | 64 clients 吞吐 |
 |---|---:|---:|
 | gateway UDS，4 loops | 27.8k/s, p50 67.8 µs | ~62k/s |
-| gateway ring，1 loop | 21.4k/s, p50 87 µs | ~24k/s |
-| gateway ring，4 loops | 18.3k/s, p50 100 µs | ~9.5k/s |
+| gateway ring，1 loop，busy-poll | 21.4k/s, p50 87 µs | ~24k/s |
+| gateway ring，4 loops，busy-poll | 18.3k/s, p50 100 µs | ~9.5k/s |
+| gateway ring，4 loops，datagram notify | 26.6k/s, p50 74 µs | ~7.9k/s |
 
-原因不是 ring 本身（microbench 20ns/push+pop），而是**缺少阻塞/唤醒机制**：
-engine consumer 和 gateway event-loop 都在 busy-poll；4 对 ring 会占用约 8 个核，
-和 matching/journaler 抢 CPU。UDS 版本会阻塞在 poll/read，不会这样烧核。
+加 datagram 通知后，closed-loop 延迟已经接近 UDS，说明唤醒路径有效；但 64-client
+高并发吞吐仍然很差，说明响应通知/ring 调度/引擎 consumer 结构还有瓶颈，不能切换默认。
 
-所以当前 ring 仅作为实验路径，默认仍使用 UDS。下一步需要：
+当前 ring 仍只是实验路径，默认 UDS。下一步：
 
-1. request/response 通知（pipe/datagram/eventfd/kqueue user event），去掉 busy-poll；
-2. 每 loop 的 ring pair 生命周期、断开和 fencing；
-3. ring 满时显式背压而不是自旋；
-4. 重新做同口径 Mac 基准。
+1. 合并/批量 response 通知，减少 datagram 数量；
+2. engine ring consumer 批处理请求，减少每次唤醒的工作量；
+3. 多 ring 与 gateway loop 的负载均衡；
+4. 重新做同口径 Mac 基准，达到 UDS 水平后再考虑默认切换。
