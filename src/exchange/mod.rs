@@ -7,4 +7,5 @@
 pub mod core;
 pub mod plugins;
 pub mod positions;
+pub mod private_events;
 pub mod protocol;

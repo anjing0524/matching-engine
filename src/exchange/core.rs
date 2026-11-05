@@ -15,6 +15,7 @@
 use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use crate::exchange::plugins::{PreTradePlugin, RiskOrder, ValidationContext};
 use crate::exchange::positions::{CloseKey, FrozenClose, PositionKey, Positions};
+use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
 use crate::exchange::protocol::{Command, CommandType, Hedge, Offset, PriceType, Side};
 use crate::shared::SymbolId;
 use crate::shared::protocol::{NewOrderRequest, OrderType};
@@ -82,6 +83,7 @@ pub enum OrderStatus {
 /// attributes needed to update positions and release close reservations.
 #[derive(Clone, Copy, Debug)]
 pub struct OrderMeta {
+    pub client_order_id: u64,
     pub account_id: u64,
     pub side: Side,
     pub offset: Offset,
@@ -98,6 +100,8 @@ pub struct ExchangeCore {
     positions: Positions,
     frozen_close: FrozenClose,
     orders: HashMap<u64, OrderMeta>,
+    private_seq: u64,
+    private_events: Vec<PrivateEvent>,
 }
 
 impl ExchangeCore {
@@ -110,6 +114,8 @@ impl ExchangeCore {
             positions: Positions::new(),
             frozen_close: FrozenClose::new(),
             orders: HashMap::new(),
+            private_seq: 1,
+            private_events: Vec::new(),
         }
     }
 
@@ -125,6 +131,40 @@ impl ExchangeCore {
     #[must_use]
     pub fn frozen_close(&self) -> &FrozenClose {
         &self.frozen_close
+    }
+
+    /// Drains all private events produced since the last drain.
+    pub fn drain_private_events(&mut self) -> Vec<PrivateEvent> {
+        std::mem::take(&mut self.private_events)
+    }
+
+    #[must_use]
+    pub fn private_events(&self) -> &[PrivateEvent] {
+        &self.private_events
+    }
+
+    fn push_private(
+        &mut self,
+        order_id: u64,
+        client_order_id: u64,
+        account_id: u64,
+        status: PrivateStatus,
+        filled_delta: u64,
+        remaining: u64,
+        reason: Option<String>,
+    ) {
+        let seq = self.private_seq;
+        self.private_seq += 1;
+        self.private_events.push(PrivateEvent {
+            seq,
+            order_id,
+            client_order_id,
+            account_id,
+            status,
+            filled_delta,
+            remaining,
+            reason,
+        });
     }
 
     /// Submits one limit order and returns every event it produced.
@@ -186,8 +226,19 @@ impl ExchangeCore {
                         );
                         self.frozen_close.release(key, meta.remaining);
                     }
+                    let client_order_id = meta.client_order_id;
+                    let account_id = meta.account_id;
                     meta.remaining = 0;
                     meta.status = OrderStatus::Canceled;
+                    self.push_private(
+                        command.order_id,
+                        client_order_id,
+                        account_id,
+                        PrivateStatus::Canceled,
+                        0,
+                        0,
+                        None,
+                    );
                 }
                 CoreEvent::Canceled {
                     order_id: command.order_id,
@@ -291,6 +342,7 @@ impl ExchangeCore {
             self.orders.insert(
                 order_id,
                 OrderMeta {
+                    client_order_id: command.client_order_id,
                     account_id: u64::from(command.user_id),
                     side: command.side,
                     offset: command.offset,
@@ -298,6 +350,39 @@ impl ExchangeCore {
                     remaining: command.quantity,
                     status: OrderStatus::Accepted,
                 },
+            );
+        }
+
+        if let Some(CoreEvent::Rejected { reason, .. }) = events
+            .iter()
+            .find(|event| matches!(event, CoreEvent::Rejected { .. }))
+        {
+            self.push_private(
+                0,
+                command.client_order_id,
+                u64::from(command.user_id),
+                PrivateStatus::Rejected,
+                0,
+                0,
+                Some(reason.clone()),
+            );
+        }
+        if let Some(CoreEvent::Accepted {
+            order_id,
+            remaining_quantity,
+            ..
+        }) = events
+            .iter()
+            .find(|event| matches!(event, CoreEvent::Accepted { .. }))
+        {
+            self.push_private(
+                *order_id,
+                command.client_order_id,
+                u64::from(command.user_id),
+                PrivateStatus::Accepted,
+                0,
+                *remaining_quantity,
+                None,
             );
         }
 
@@ -364,6 +449,19 @@ impl ExchangeCore {
         } else {
             OrderStatus::PartiallyFilled
         };
+        self.push_private(
+            order_id,
+            meta.client_order_id,
+            meta.account_id,
+            if meta.remaining == 0 {
+                PrivateStatus::Filled
+            } else {
+                PrivateStatus::PartiallyFilled
+            },
+            quantity,
+            meta.remaining,
+            None,
+        );
         self.orders.insert(order_id, meta);
     }
 
@@ -731,6 +829,46 @@ mod tests {
             _ => panic!("expected trade"),
         };
         assert_eq!(core.order_status(incoming_id), Some(OrderStatus::Filled));
+    }
+
+    #[test]
+    fn private_events_follow_accept_partial_and_cancel() {
+        use crate::exchange::plugins::AvailableClosePlugin;
+        use crate::exchange::private_events::PrivateStatus;
+        use crate::exchange::protocol::Offset;
+
+        let mut core = core();
+        let mut buy = wire_command(Side::Buy, 50_000, 5);
+        buy.offset = Offset::Open;
+        let events = core.execute_with_plugins(buy, &AvailableClosePlugin);
+        let order_id = match events[0] {
+            CoreEvent::Accepted { order_id, .. } => order_id,
+            _ => panic!("expected accepted"),
+        };
+        let private = core.drain_private_events();
+        assert_eq!(private.len(), 1);
+        assert_eq!(private[0].status, PrivateStatus::Accepted);
+        assert_eq!(private[0].order_id, order_id);
+        assert_eq!(private[0].remaining, 5);
+
+        let mut sell = wire_command(Side::Sell, 50_000, 2);
+        sell.user_id = 2;
+        core.execute_with_plugins(sell, &AvailableClosePlugin);
+        let private = core.drain_private_events();
+        assert!(private.iter().any(|event| {
+            event.order_id == order_id
+                && event.status == PrivateStatus::PartiallyFilled
+                && event.remaining == 3
+        }));
+
+        core.cancel(CancelCommand {
+            user_id: 1,
+            order_id,
+        });
+        let private = core.drain_private_events();
+        assert!(private.iter().any(|event| {
+            event.order_id == order_id && event.status == PrivateStatus::Canceled
+        }));
     }
 
     #[test]
