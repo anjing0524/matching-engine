@@ -47,11 +47,28 @@ event loop、协议编解码、engine 排队和通知机制。
 
 ## 尚未集成
 
-当前只是 transport 原型，尚未替换 UDS：
+engine 侧已经集成：
 
-1. 每个 gateway event loop 需要一对 request/response ring；
-2. 需要 engine 侧 consumer 线程/event loop 和唤醒机制（busy-poll 或 eventfd/pipe）；
-3. 需要跨进程 ring 生命周期、异常断开、ring 满背压和进程崩溃后的 fencing；
-4. 需要把 ring 集成到 gateway/engine 配置和基准。
+```bash
+target/release/matching-engine --ipc-ring-dir ./data/ipc --data-dir ./data \
+  --snapshot-interval 0 --wal-sync false
+target/release/ring_probe --ring-dir ./data/ipc --seconds 10
+```
 
-在此之前，生产路径仍使用 Unix domain socket。
+`ring_probe` 直接作为单生产者/单消费者连接 engine 的 request/response ring，测的是
+engine IPC + 撮合路径，不经过 TCP/gateway。Mac M4 release 结果：
+
+```text
+ring samples=183910 throughput=18391/s
+p50=23625 ns p90=41458 ns p99=90500 ns p99.9=352167 ns
+```
+
+对比更早的 UDS closed-loop（4 clients 总量）需要等 gateway ring 集成后再做同口径比较。
+当前还缺：
+
+1. gateway event-loop 接入 ring（当前 gateway 仍走 UDS）；
+2. ring 满/引擎停止时的背压和唤醒策略；
+3. 跨进程生命周期、异常断开和 fencing；
+4. 多 gateway loop 的 ring 分配。
+
+在此之前，生产路径默认仍使用 Unix domain socket。

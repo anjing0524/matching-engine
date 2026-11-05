@@ -13,6 +13,7 @@ use crate::shared::protocol::{
     CancelOrderRequest, ClientMessage, ClientRequest, ErrorCode, OrderConfirmation,
     PROTOCOL_VERSION, ServerMessage, ServerResponse,
 };
+use crate::shared::spsc_ring::{PushError, SpscRing};
 use crate::shared::wire::{decode_frame_payload, encode_to_vec};
 use std::io::{self, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -301,51 +302,7 @@ fn handle_connection(stream: UnixStream, handle: MatchingHandle, symbol: &str) {
                 break;
             }
         };
-        let client_id = request.client_id;
-        let started = Instant::now();
-        let kind = match decode_frame_payload::<ClientRequest>(&request.payload) {
-            Ok(client) if client.version != PROTOCOL_VERSION => PendingKind::Immediate(rejection(
-                client.request_id,
-                ErrorCode::ProtocolVersion,
-                format!("unsupported protocol version {}", client.version),
-            )),
-            Ok(ClientRequest {
-                request_id,
-                message: ClientMessage::NewOrder(order),
-                ..
-            }) => match handle.submit_order_ticket(order) {
-                Ok(ticket) => PendingKind::Order { request_id, ticket },
-                Err(error) => PendingKind::Immediate(rejection(
-                    request_id,
-                    ErrorCode::Internal,
-                    error.to_string(),
-                )),
-            },
-            Ok(ClientRequest {
-                request_id,
-                message: ClientMessage::CancelOrder(cancel),
-                ..
-            }) => match handle.submit_cancel_ticket(cancel.clone()) {
-                Ok(ticket) => PendingKind::Cancel {
-                    request_id,
-                    cancel,
-                    ticket,
-                },
-                Err(error) => PendingKind::Immediate(rejection(
-                    request_id,
-                    ErrorCode::Internal,
-                    error.to_string(),
-                )),
-            },
-            Err(error) => {
-                PendingKind::Immediate(rejection(0, ErrorCode::Internal, error.to_string()))
-            }
-        };
-        let pending = Pending {
-            client_id,
-            started,
-            kind,
-        };
+        let pending = pending_for_request(request, &handle);
         if sender.send(pending).is_err() {
             break;
         }
@@ -354,6 +311,52 @@ fn handle_connection(stream: UnixStream, handle: MatchingHandle, symbol: &str) {
     drop(sender);
     if let Ok(writer) = writer {
         let _ = writer.join();
+    }
+}
+
+fn pending_for_request(request: IpcRequest, handle: &MatchingHandle) -> Pending {
+    let client_id = request.client_id;
+    let started = Instant::now();
+    let kind = match decode_frame_payload::<ClientRequest>(&request.payload) {
+        Ok(client) if client.version != PROTOCOL_VERSION => PendingKind::Immediate(rejection(
+            client.request_id,
+            ErrorCode::ProtocolVersion,
+            format!("unsupported protocol version {}", client.version),
+        )),
+        Ok(ClientRequest {
+            request_id,
+            message: ClientMessage::NewOrder(order),
+            ..
+        }) => match handle.submit_order_ticket(order) {
+            Ok(ticket) => PendingKind::Order { request_id, ticket },
+            Err(error) => PendingKind::Immediate(rejection(
+                request_id,
+                ErrorCode::Internal,
+                error.to_string(),
+            )),
+        },
+        Ok(ClientRequest {
+            request_id,
+            message: ClientMessage::CancelOrder(cancel),
+            ..
+        }) => match handle.submit_cancel_ticket(cancel.clone()) {
+            Ok(ticket) => PendingKind::Cancel {
+                request_id,
+                cancel,
+                ticket,
+            },
+            Err(error) => PendingKind::Immediate(rejection(
+                request_id,
+                ErrorCode::Internal,
+                error.to_string(),
+            )),
+        },
+        Err(error) => PendingKind::Immediate(rejection(0, ErrorCode::Internal, error.to_string())),
+    };
+    Pending {
+        client_id,
+        started,
+        kind,
     }
 }
 
@@ -442,6 +445,102 @@ fn cancel_frames(
 /// Removes the engine socket path.
 pub fn cleanup(path: &Path) {
     let _ = std::fs::remove_file(path);
+}
+
+/// Files used by the shared-memory transport.
+pub const RING_REQUEST_FILE: &str = "request.ring";
+pub const RING_RESPONSE_FILE: &str = "response.ring";
+
+/// Configuration for the engine-side SPSC ring transport.
+#[derive(Debug, Clone)]
+pub struct RingIpcConfig {
+    pub dir: PathBuf,
+    pub capacity: u64,
+    pub slot_size: usize,
+}
+
+impl Default for RingIpcConfig {
+    fn default() -> Self {
+        Self {
+            dir: PathBuf::from("./data/ipc"),
+            capacity: 8192,
+            slot_size: 16 * 1024,
+        }
+    }
+}
+
+/// Starts the engine-side SPSC consumer/producer pair.
+///
+/// # Errors
+/// Returns an error if the ring files cannot be created or the thread cannot be
+/// spawned.
+pub fn start_ring(
+    config: RingIpcConfig,
+    handle: MatchingHandle,
+    symbol: String,
+    shutdown: Arc<AtomicBool>,
+) -> io::Result<thread::JoinHandle<()>> {
+    std::fs::create_dir_all(&config.dir)?;
+    let request = SpscRing::create(
+        &config.dir.join(RING_REQUEST_FILE),
+        config.capacity,
+        config.slot_size,
+    )?;
+    let response_ring = SpscRing::create(
+        &config.dir.join(RING_RESPONSE_FILE),
+        config.capacity,
+        config.slot_size,
+    )?;
+    thread::Builder::new()
+        .name("engine-ipc-ring".to_string())
+        .spawn(move || {
+            let (sender, receiver) = crossbeam::channel::bounded::<Pending>(1024);
+            let latency = METRICS.request_latency_ns.with_label_values(&[&symbol]);
+            let writer_shutdown = Arc::clone(&shutdown);
+            let writer = thread::Builder::new()
+                .name("engine-ring-writer".to_string())
+                .spawn(move || {
+                    while let Ok(pending) = receiver.recv() {
+                        let (response, started) = build_pending(pending);
+                        let encoded = encode_response(&response);
+                        loop {
+                            match response_ring.try_push(&encoded) {
+                                Ok(()) => break,
+                                Err(PushError::Full) => std::hint::spin_loop(),
+                                Err(PushError::TooLarge) => {
+                                    tracing::error!("ring response exceeds slot size");
+                                    break;
+                                }
+                            }
+                            if writer_shutdown.load(Ordering::Acquire) {
+                                return;
+                            }
+                        }
+                        latency.observe(started.elapsed().as_nanos() as f64);
+                    }
+                });
+            let mut request_buf = Vec::with_capacity(config.slot_size);
+            while !shutdown.load(Ordering::Acquire) {
+                if !request.try_pop_into(&mut request_buf) {
+                    std::hint::spin_loop();
+                    continue;
+                }
+                if let Some((request, _)) = decode_request(&request_buf) {
+                    let pending = pending_for_request(request, &handle);
+                    if sender.send(pending).is_err() {
+                        break;
+                    }
+                } else {
+                    tracing::warn!("ring request decode failed");
+                }
+            }
+            drop(sender);
+            if let Ok(writer) = writer {
+                let _ = writer.join();
+            }
+            let _ = std::fs::remove_file(config.dir.join(RING_REQUEST_FILE));
+            let _ = std::fs::remove_file(config.dir.join(RING_RESPONSE_FILE));
+        })
 }
 
 #[cfg(test)]

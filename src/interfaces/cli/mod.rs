@@ -95,6 +95,10 @@ pub struct CliConfig {
     #[arg(long)]
     pub engine_uds: Option<PathBuf>,
 
+    /// Engine IPC shared-memory ring directory. Alternative to --engine-uds.
+    #[arg(long)]
+    pub ipc_ring_dir: Option<PathBuf>,
+
     /// Primary-only warm-standby replication socket path.
     #[arg(long)]
     pub replica_listen: Option<PathBuf>,
@@ -178,9 +182,17 @@ fn validate_config(config: &CliConfig) -> Result<(), CliError> {
             "price range covers {levels} levels, exceeding the limit of {MAX_PRICE_LEVELS}"
         )));
     }
-    if config.replica_listen.is_some() && config.engine_uds.is_none() {
+    if config.engine_uds.is_some() && config.ipc_ring_dir.is_some() {
         return Err(CliError::Config(
-            "replication requires --engine-uds (decoupled journaler)".into(),
+            "--engine-uds and --ipc-ring-dir are mutually exclusive".into(),
+        ));
+    }
+    if config.replica_listen.is_some()
+        && config.engine_uds.is_none()
+        && config.ipc_ring_dir.is_none()
+    {
+        return Err(CliError::Config(
+            "replication requires engine process mode".into(),
         ));
     }
     if config.async_fsync && !config.wal_sync {
@@ -282,6 +294,7 @@ fn run_server(config: CliConfig) -> Result<(), CliError> {
             (None, None, None)
         };
 
+    let engine_mode = config.engine_uds.is_some() || config.ipc_ring_dir.is_some();
     let runtime = MatchingRuntime::start(
         service,
         RuntimeConfig {
@@ -289,14 +302,14 @@ fn run_server(config: CliConfig) -> Result<(), CliError> {
             batch_size: config.commit_batch_size,
             matching_core: config.matching_core,
             busy_poll: config.busy_poll,
-            async_fsync: config.async_fsync && config.engine_uds.is_none(),
-            decouple_wal: config.engine_uds.is_some(),
+            async_fsync: config.async_fsync && !engine_mode,
+            decouple_wal: engine_mode,
             replication: replication_sender,
         },
     )?;
     let matching = runtime.handle();
 
-    if let Some(engine_uds) = config.engine_uds.clone() {
+    if engine_mode {
         if config.metrics_port > 0 {
             let server = ObservabilityServer::new(config.metrics_port);
             thread::Builder::new()
@@ -314,16 +327,32 @@ fn run_server(config: CliConfig) -> Result<(), CliError> {
         }
 
         let shutdown = Arc::new(AtomicBool::new(false));
-        let ipc = engine_ipc::start(
-            EngineIpcConfig {
-                path: engine_uds.clone(),
-                max_connections: config.max_connections,
-                symbol: config.symbol.clone(),
-            },
-            matching,
-            Arc::clone(&shutdown),
-        )?;
-        println!("🔌 Engine IPC: {}", engine_uds.display());
+        let (ipc, ring, engine_path) = if let Some(engine_uds) = config.engine_uds.clone() {
+            let ipc = engine_ipc::start(
+                EngineIpcConfig {
+                    path: engine_uds.clone(),
+                    max_connections: config.max_connections,
+                    symbol: config.symbol.clone(),
+                },
+                matching,
+                Arc::clone(&shutdown),
+            )?;
+            println!("🔌 Engine IPC: {}", engine_uds.display());
+            (Some(ipc), None, Some(engine_uds))
+        } else {
+            let ring_dir = config.ipc_ring_dir.clone().expect("ring dir");
+            let ring = engine_ipc::start_ring(
+                engine_ipc::RingIpcConfig {
+                    dir: ring_dir.clone(),
+                    ..Default::default()
+                },
+                matching,
+                config.symbol.clone(),
+                Arc::clone(&shutdown),
+            )?;
+            println!("🔌 Engine IPC ring: {}", ring_dir.display());
+            (None, Some(ring), None)
+        };
 
         let mut signals = Signals::new([SIGINT, SIGTERM])?;
         let (signal_tx, signal_rx) = std::sync::mpsc::channel();
@@ -336,8 +365,15 @@ fn run_server(config: CliConfig) -> Result<(), CliError> {
             })?;
         let _ = signal_rx.recv();
         shutdown.store(true, Ordering::Release);
-        let _ = ipc.join();
-        engine_ipc::cleanup(&engine_uds);
+        if let Some(ipc) = ipc {
+            let _ = ipc.join();
+        }
+        if let Some(ring) = ring {
+            let _ = ring.join();
+        }
+        if let Some(engine_uds) = engine_path {
+            engine_ipc::cleanup(&engine_uds);
+        }
         match runtime.shutdown() {
             Ok(()) => return Ok(()),
             Err(RuntimeError::Fatal(message)) => return Err(CliError::Fatal(message)),
