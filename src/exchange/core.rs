@@ -15,7 +15,7 @@
 use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use crate::exchange::plugins::{PreTradePlugin, RiskOrder, ValidationContext};
 use crate::exchange::positions::{CloseKey, FrozenClose, PositionKey, Positions};
-use crate::exchange::protocol::{Command, CommandType, Offset, PriceType, Side};
+use crate::exchange::protocol::{Command, CommandType, Hedge, Offset, PriceType, Side};
 use crate::shared::SymbolId;
 use crate::shared::protocol::{NewOrderRequest, OrderType};
 use std::collections::HashMap;
@@ -66,6 +66,19 @@ pub enum CoreEvent {
     },
 }
 
+/// Metadata for an order accepted into the book.
+///
+/// The order book owns price/FIFO state; this table carries the business
+/// attributes needed to update positions and release close reservations.
+#[derive(Clone, Copy, Debug)]
+pub struct OrderMeta {
+    pub account_id: u64,
+    pub side: Side,
+    pub offset: Offset,
+    pub hedge: Hedge,
+    pub remaining: u64,
+}
+
 /// The deterministic core state machine for one contract.
 pub struct ExchangeCore {
     book: TickBasedOrderBook,
@@ -73,7 +86,7 @@ pub struct ExchangeCore {
     next_trade_id: u64,
     positions: Positions,
     frozen_close: FrozenClose,
-    close_reservations: HashMap<u64, (CloseKey, u64)>,
+    orders: HashMap<u64, OrderMeta>,
 }
 
 impl ExchangeCore {
@@ -85,7 +98,7 @@ impl ExchangeCore {
             next_trade_id: 1,
             positions: Positions::new(),
             frozen_close: FrozenClose::new(),
-            close_reservations: HashMap::new(),
+            orders: HashMap::new(),
         }
     }
 
@@ -154,8 +167,14 @@ impl ExchangeCore {
     pub fn cancel(&mut self, command: CancelCommand) -> CoreEvent {
         match self.book.cancel_order(command.order_id, command.user_id) {
             Ok(()) => {
-                if let Some((key, quantity)) = self.close_reservations.remove(&command.order_id) {
-                    self.frozen_close.release(key, quantity);
+                if let Some(meta) = self.orders.remove(&command.order_id)
+                    && meta.offset != Offset::Open
+                {
+                    let key = CloseKey::new(
+                        PositionKey::new(meta.account_id, meta.side.opposite(), meta.hedge),
+                        meta.offset,
+                    );
+                    self.frozen_close.release(key, meta.remaining);
                 }
                 CoreEvent::Canceled {
                     order_id: command.order_id,
@@ -218,11 +237,7 @@ impl ExchangeCore {
             let key = CloseKey::new(
                 PositionKey::new(
                     u64::from(command.user_id),
-                    if command.offset == Offset::Open {
-                        command.side
-                    } else {
-                        command.side.opposite()
-                    },
+                    command.side.opposite(),
                     command.hedge,
                 ),
                 command.offset,
@@ -236,7 +251,7 @@ impl ExchangeCore {
                     reason: format!("close reservation failed: {error:?}"),
                 }];
             }
-            Some((key, command.quantity))
+            Some(key)
         };
 
         let events = self.submit_limit(LimitOrderCommand {
@@ -247,31 +262,92 @@ impl ExchangeCore {
             quantity: command.quantity,
         });
 
-        let Some((key, reserved)) = close_key else {
-            return events;
-        };
-        let remaining = events.iter().find_map(|event| match event {
-            CoreEvent::Accepted {
-                order_id,
-                remaining_quantity,
+        let incoming_id = events.iter().find_map(|event| match event {
+            CoreEvent::Accepted { order_id, .. } => Some(*order_id),
+            CoreEvent::Trade {
+                buyer_order_id,
+                seller_order_id,
                 ..
-            } => Some((*order_id, *remaining_quantity)),
+            } => Some(match command.side {
+                Side::Buy => *buyer_order_id,
+                Side::Sell => *seller_order_id,
+            }),
             _ => None,
         });
-        match remaining {
-            Some((order_id, remaining_quantity)) => {
-                // Filled part has left the book; keep only the resting part.
-                let filled = reserved.saturating_sub(remaining_quantity);
-                self.frozen_close.release(key, filled);
-                self.close_reservations
-                    .insert(order_id, (key, remaining_quantity));
-            }
-            None => {
-                // Filled or rejected: no resting close order remains.
-                self.frozen_close.release(key, reserved);
-            }
+        if let Some(order_id) = incoming_id {
+            self.orders.insert(
+                order_id,
+                OrderMeta {
+                    account_id: u64::from(command.user_id),
+                    side: command.side,
+                    offset: command.offset,
+                    hedge: command.hedge,
+                    remaining: command.quantity,
+                },
+            );
         }
+
+        let trades: Vec<(u64, u64, u64)> = events
+            .iter()
+            .filter_map(|event| match event {
+                CoreEvent::Trade {
+                    buyer_order_id,
+                    seller_order_id,
+                    quantity,
+                    ..
+                } => Some((*buyer_order_id, *seller_order_id, *quantity)),
+                _ => None,
+            })
+            .collect();
+        for (buyer_order_id, seller_order_id, quantity) in trades {
+            self.apply_fill(buyer_order_id, quantity);
+            self.apply_fill(seller_order_id, quantity);
+        }
+
+        let has_accepted = events
+            .iter()
+            .any(|event| matches!(event, CoreEvent::Accepted { .. }));
+        if let Some(key) = close_key
+            && !has_accepted
+        {
+            // No resting remainder: any unfilled quantity is released. Filled
+            // quantity was already released by apply_fill.
+            let filled = events
+                .iter()
+                .filter_map(|event| match event {
+                    CoreEvent::Trade { quantity, .. } => Some(*quantity),
+                    _ => None,
+                })
+                .sum::<u64>();
+            self.frozen_close
+                .release(key, command.quantity.saturating_sub(filled));
+        }
+
         events
+    }
+
+    /// Applies one fill to an order's position and remaining quantity.
+    fn apply_fill(&mut self, order_id: u64, quantity: u64) {
+        let Some(mut meta) = self.orders.remove(&order_id) else {
+            return;
+        };
+        let position_side = if meta.offset == Offset::Open {
+            meta.side
+        } else {
+            meta.side.opposite()
+        };
+        let key = PositionKey::new(meta.account_id, position_side, meta.hedge);
+        if meta.offset == Offset::Open {
+            let _ = self.positions.apply_open(key, quantity);
+        } else {
+            let _ = self.positions.apply_close(key, meta.offset, quantity);
+            self.frozen_close
+                .release(CloseKey::new(key, meta.offset), quantity);
+        }
+        meta.remaining = meta.remaining.saturating_sub(quantity);
+        if meta.remaining > 0 {
+            self.orders.insert(order_id, meta);
+        }
     }
 
     /// Executes one fixed-size command-log record.
@@ -522,6 +598,59 @@ mod tests {
         too_large.offset = Offset::CloseToday;
         let events = core.execute_with_plugins(too_large, &AvailableClosePlugin);
         assert!(matches!(events.as_slice(), [CoreEvent::Rejected { .. }]));
+    }
+
+    #[test]
+    fn fills_update_both_sides_positions() {
+        use crate::exchange::plugins::AvailableClosePlugin;
+        use crate::exchange::positions::PositionKey;
+        use crate::exchange::protocol::{Hedge, Offset};
+
+        let mut core = core();
+        let mut buy = wire_command(Side::Buy, 50_000, 5);
+        buy.offset = Offset::Open;
+        core.execute_with_plugins(buy, &AvailableClosePlugin);
+        let mut sell = wire_command(Side::Sell, 50_000, 5);
+        sell.user_id = 2;
+        sell.offset = Offset::Open;
+        core.execute_with_plugins(sell, &AvailableClosePlugin);
+
+        let long = core
+            .positions()
+            .get(PositionKey::new(1, Side::Buy, Hedge::Spec));
+        let short = core
+            .positions()
+            .get(PositionKey::new(2, Side::Sell, Hedge::Spec));
+        assert_eq!(long.today, 5);
+        assert_eq!(short.today, 5);
+    }
+
+    #[test]
+    fn close_fill_reduces_position_and_releases_freeze() {
+        use crate::exchange::plugins::AvailableClosePlugin;
+        use crate::exchange::positions::{CloseKey, PositionKey};
+        use crate::exchange::protocol::{Hedge, Offset};
+
+        let mut core = core();
+        core.positions_mut()
+            .apply_open(PositionKey::new(1, Side::Buy, Hedge::Spec), 10)
+            .unwrap();
+        // Resting buy from another account provides the close liquidity.
+        let mut buy = wire_command(Side::Buy, 50_000, 5);
+        buy.user_id = 2;
+        core.execute_with_plugins(buy, &AvailableClosePlugin);
+
+        let mut close = wire_command(Side::Sell, 50_000, 5);
+        close.offset = Offset::CloseToday;
+        core.execute_with_plugins(close, &AvailableClosePlugin);
+
+        let key = PositionKey::new(1, Side::Buy, Hedge::Spec);
+        assert_eq!(core.positions().get(key).today, 5);
+        let close_key = CloseKey::new(key, Offset::CloseToday);
+        assert_eq!(
+            core.frozen_close().available(close_key, core.positions()),
+            5
+        );
     }
 
     #[test]
