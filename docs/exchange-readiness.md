@@ -54,7 +54,8 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] In-memory core snapshot for continuous book and business state
 - [x] Versioned JSON snapshot with atomic file replacement
 - [x] CRC32 checksum over snapshot payload
-- [ ] Replay-from-snapshot runbook
+- [x] Replay-from-snapshot helper and deterministic test
+- [ ] Operational replay runbook
 - [ ] Disk-full / mmap failure behavior for shared-memory and result logs
 
 ## Observability

@@ -187,14 +187,27 @@ impl ExchangeCore {
     /// Call `snapshot` only when combo queues and auction staging are empty.
     #[must_use]
     pub fn snapshot(&self) -> CoreSnapshot {
+        let mut orders: Vec<_> = self.orders.iter().map(|(id, meta)| (*id, *meta)).collect();
+        orders.sort_by_key(|(id, _)| *id);
+        let mut positions = self.positions.snapshot();
+        positions.sort_by_key(|(key, _)| (key.account_id, key.side as u8, key.hedge as u8));
+        let mut frozen_close = self.frozen_close.snapshot();
+        frozen_close.sort_by_key(|(key, _)| {
+            (
+                key.position.account_id,
+                key.position.side as u8,
+                key.position.hedge as u8,
+                key.offset as u8,
+            )
+        });
         CoreSnapshot {
             spec: self.book.spec().clone(),
             symbol: self.symbol,
             resting_orders: self.book.snapshot_orders(),
             next_order_id: self.book.next_order_id(),
-            orders: self.orders.iter().map(|(id, meta)| (*id, *meta)).collect(),
-            positions: self.positions.snapshot(),
-            frozen_close: self.frozen_close.snapshot(),
+            orders,
+            positions,
+            frozen_close,
             phase: self.phase,
             trading_day: self.trading_day,
             next_trade_id: self.next_trade_id,
