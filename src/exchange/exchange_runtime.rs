@@ -7,6 +7,7 @@
 use crate::exchange::core::ExchangeCore;
 use crate::exchange::gateway_runtime::GatewayRuntime;
 use crate::exchange::gateway_server::GatewayServerHandle;
+use crate::exchange::market_data::MarketDataPublisher;
 use crate::exchange::plugins::PreTradePlugin;
 use crate::exchange::runner::CoreRunner;
 use std::time::{Duration, Instant};
@@ -18,6 +19,8 @@ pub struct ExchangeRuntime<P> {
     server: GatewayServerHandle,
     idle_timeout: Option<Duration>,
     last_expire: Instant,
+    market_data: Option<MarketDataPublisher>,
+    public_sent: u64,
 }
 
 impl<P: PreTradePlugin> ExchangeRuntime<P> {
@@ -29,7 +32,20 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             server,
             idle_timeout: None,
             last_expire: Instant::now(),
+            market_data: None,
+            public_sent: 0,
         }
+    }
+
+    #[must_use]
+    pub fn with_market_data(mut self, publisher: MarketDataPublisher) -> Self {
+        self.market_data = Some(publisher);
+        self
+    }
+
+    #[must_use]
+    pub fn public_sent(&self) -> u64 {
+        self.public_sent
     }
 
     #[must_use]
@@ -46,6 +62,14 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
         let commands = self.core.poll();
         let private = self.core.drain_private();
         let sent = self.gateway.dispatch_private(&self.server, private);
+        let public = self.core.drain_public();
+        if let Some(publisher) = &self.market_data {
+            for event in public {
+                if publisher.send(&event).is_ok() {
+                    self.public_sent += 1;
+                }
+            }
+        }
         if let Some(timeout) = self.idle_timeout
             && self.last_expire.elapsed() >= timeout / 2
         {
@@ -119,6 +143,60 @@ mod tests {
             trigger_type: TriggerType::None,
             cancel_order_id: 0,
         }
+    }
+
+    #[test]
+    fn core_public_events_reach_udp_subscriber() {
+        use crate::exchange::market_data::MarketDataSubscriber;
+
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-exchange-runtime-udp-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 16).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let gateway = GatewayRuntime::new(middleware, events);
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let runner = CoreRunner::new(core, consumer, NoPlugins);
+        let subscriber = MarketDataSubscriber::bind("127.0.0.1:0").unwrap();
+        let publisher =
+            MarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap()).unwrap();
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_market_data(publisher);
+
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        stream
+            .write_all(&GatewayFrame::Command(command()).encode())
+            .unwrap();
+        for _ in 0..100 {
+            runtime.tick();
+            if runtime.public_sent() > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let event = subscriber.recv().unwrap();
+        assert_eq!(
+            event.event_type,
+            crate::exchange::public_events::PublicEventType::OrderRested
+        );
+        assert_eq!(runtime.public_sent(), 1);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
