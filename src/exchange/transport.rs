@@ -48,6 +48,16 @@ pub fn create(path: &Path, capacity: u64) -> io::Result<(CommandProducer, Comman
     ))
 }
 
+/// Opens an existing command ring consumer.
+///
+/// # Errors
+/// Returns an I/O error if the ring file cannot be opened.
+pub fn open_command_consumer(path: &Path) -> io::Result<CommandConsumer> {
+    Ok(CommandConsumer {
+        ring: SpscRing::open(path)?,
+    })
+}
+
 impl CommandProducer {
     /// Appends one command. `Full` is an explicit backpressure signal.
     pub fn send(&self, command: &Command) -> Result<(), CommandTransportError> {
@@ -130,6 +140,26 @@ pub fn create_public_event_transport(
         PublicEventProducer { ring: producer },
         PublicEventConsumer { ring: consumer },
     ))
+}
+
+/// Opens an existing public-event ring producer.
+///
+/// # Errors
+/// Returns an I/O error if the ring file cannot be opened.
+pub fn open_public_event_producer(path: &Path) -> io::Result<PublicEventProducer> {
+    Ok(PublicEventProducer {
+        ring: SpscRing::open(path)?,
+    })
+}
+
+/// Opens an existing public-event ring consumer.
+///
+/// # Errors
+/// Returns an I/O error if the ring file cannot be opened.
+pub fn open_public_event_consumer(path: &Path) -> io::Result<PublicEventConsumer> {
+    Ok(PublicEventConsumer {
+        ring: SpscRing::open(path)?,
+    })
 }
 
 impl PublicEventProducer {
@@ -272,6 +302,26 @@ pub fn create_private_event_transport(
         PrivateEventProducer { ring: producer },
         PrivateEventConsumer { ring: consumer },
     ))
+}
+
+/// Opens an existing private-event ring producer.
+///
+/// # Errors
+/// Returns an I/O error if the ring file cannot be opened.
+pub fn open_private_event_producer(path: &Path) -> io::Result<PrivateEventProducer> {
+    Ok(PrivateEventProducer {
+        ring: SpscRing::open(path)?,
+    })
+}
+
+/// Opens an existing private-event ring consumer.
+///
+/// # Errors
+/// Returns an I/O error if the ring file cannot be opened.
+pub fn open_private_event_consumer(path: &Path) -> io::Result<PrivateEventConsumer> {
+    Ok(PrivateEventConsumer {
+        ring: SpscRing::open(path)?,
+    })
 }
 
 impl PrivateEventProducer {
@@ -479,6 +529,18 @@ mod tests {
         assert!(consumer.recv().is_none());
         drop(producer);
         drop(consumer);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn opened_command_consumer_reads_existing_ring() {
+        let path = temp_path("open-command");
+        let _ = std::fs::remove_file(&path);
+        let (producer, original_consumer) = create(&path, 8).unwrap();
+        drop(original_consumer);
+        let consumer = open_command_consumer(&path).unwrap();
+        producer.send(&command(7)).unwrap();
+        assert_eq!(consumer.recv().unwrap().unwrap().global_seq, 7);
         let _ = std::fs::remove_file(&path);
     }
 

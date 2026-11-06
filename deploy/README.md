@@ -4,9 +4,12 @@ These are **templates**, not a complete packaging story.
 
 - `exchange.service` runs the implemented single-process runtime:
   `/opt/exchange/bin/exchange run`.
-- `exchange-core.service`, `exchange-middleware.service`, and
-  `exchange-gateway.service` are for the future split-process deployment; the
-  repository does not yet provide those three binaries.
+- `exchange-middleware` and `exchange-core` are implemented split-process
+  binaries. They share command/public/private ring files created by middleware:
+  core opens the command consumer and event producers, middleware opens the
+  event consumers.
+- `exchange-gateway` remains a future binary; the current gateway TCP listener
+  runs inside `exchange-middleware`.
 - `deploy/Dockerfile` builds a single-process runtime image; the compose example
   exposes 8000/tcp (gateway) and 9100/tcp (metrics).
 

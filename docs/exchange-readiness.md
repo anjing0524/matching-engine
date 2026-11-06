@@ -27,6 +27,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Reconnect replays private events after ack
 - [ ] Gateway authentication, seat permissions, and rate limiting
 - [ ] Multiple active gateways and cross-gateway session takeover policy
+- [x] Split core/middleware binaries over shared-memory rings
 
 ## Middleware / transport
 
