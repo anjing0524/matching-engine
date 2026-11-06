@@ -20,6 +20,7 @@ use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
 use crate::exchange::protocol::{
     Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, VolumeCondition,
 };
+use crate::exchange::public_events::{PublicEvent, PublicEventType};
 use crate::shared::SymbolId;
 use crate::shared::protocol::{NewOrderRequest, OrderType};
 use std::collections::HashMap;
@@ -108,6 +109,8 @@ pub struct ExchangeCore {
     auction_orders: Vec<AuctionOrder>,
     auction_meta: HashMap<u64, (u64, Side, Offset, Hedge)>,
     auction_order_seq: u64,
+    public_seq: u64,
+    public_events: Vec<PublicEvent>,
 }
 
 impl ExchangeCore {
@@ -125,6 +128,8 @@ impl ExchangeCore {
             auction_orders: Vec::new(),
             auction_meta: HashMap::new(),
             auction_order_seq: 1,
+            public_seq: 1,
+            public_events: Vec::new(),
         }
     }
 
@@ -196,6 +201,29 @@ impl ExchangeCore {
             }
         }
         false
+    }
+
+    /// Drains public events produced since the last drain.
+    pub fn drain_public_events(&mut self) -> Vec<PublicEvent> {
+        std::mem::take(&mut self.public_events)
+    }
+
+    #[must_use]
+    pub fn public_events(&self) -> &[PublicEvent] {
+        &self.public_events
+    }
+
+    fn push_public(&mut self, event_type: PublicEventType, price_ticks: u64, volume: u64) {
+        let seq = self.public_seq;
+        self.public_seq += 1;
+        self.public_events.push(PublicEvent {
+            seq,
+            event_type,
+            exchange_ts_ns: 0,
+            phase: 0,
+            price_ticks,
+            volume,
+        });
     }
 
     fn reject_private(&mut self, command: &Command, reason: String) -> Vec<CoreEvent> {
@@ -311,6 +339,11 @@ impl ExchangeCore {
             }
         }
         self.auction_meta.clear();
+        self.push_public(
+            PublicEventType::AuctionResult,
+            result.price_ticks.unwrap_or(0),
+            result.volume,
+        );
         result
     }
 
@@ -1245,6 +1278,11 @@ mod tests {
                 .today,
             8
         );
+        let public = core.drain_public_events();
+        assert_eq!(public.len(), 1);
+        assert_eq!(public[0].event_type, PublicEventType::AuctionResult);
+        assert_eq!(public[0].price_ticks, 50_000);
+        assert_eq!(public[0].volume, 8);
     }
 
     #[test]
