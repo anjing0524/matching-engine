@@ -5,6 +5,7 @@
 //! deliberately separate later slices; see `docs/exchange-core-architecture.md`.
 
 pub mod auction;
+pub mod combo;
 pub mod core;
 pub mod plugins;
 pub mod positions;

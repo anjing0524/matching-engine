@@ -14,6 +14,7 @@
 
 use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use crate::exchange::auction::{self, AuctionOrder, AuctionResult};
+use crate::exchange::combo::ComboQueue;
 use crate::exchange::plugins::{PreTradePlugin, RiskOrder, ValidationContext};
 use crate::exchange::positions::{CloseKey, FrozenClose, PositionKey, Positions};
 use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
@@ -113,6 +114,7 @@ pub struct ExchangeCore {
     public_seq: u64,
     public_events: Vec<PublicEvent>,
     public_orders: HashSet<u64>,
+    combo_queues: HashMap<u32, ComboQueue>,
 }
 
 impl ExchangeCore {
@@ -133,6 +135,7 @@ impl ExchangeCore {
             public_seq: 1,
             public_events: Vec::new(),
             public_orders: HashSet::new(),
+            combo_queues: HashMap::new(),
         }
     }
 
@@ -254,6 +257,34 @@ impl ExchangeCore {
             client_order_id: command.client_order_id,
             reason,
         }]
+    }
+
+    /// Queues a combination order in the logical spread-price/FIFO queue.
+    pub fn submit_combo_order(
+        &mut self,
+        combo_id: u32,
+        user_id: u64,
+        side: Side,
+        spread_price_ticks: u64,
+        quantity: u64,
+    ) -> Option<u64> {
+        let order_id = self.book.reserve_order_id();
+        let queue = self.combo_queues.entry(combo_id).or_default();
+        queue
+            .push(order_id, user_id, side, spread_price_ticks, quantity)
+            .then_some(order_id)
+    }
+
+    /// Cancels a combination order by id.
+    pub fn cancel_combo_order(&mut self, combo_id: u32, order_id: u64) -> bool {
+        self.combo_queues
+            .get_mut(&combo_id)
+            .is_some_and(|queue| queue.cancel(order_id).is_some())
+    }
+
+    #[must_use]
+    pub fn combo_queue_len(&self, combo_id: u32) -> usize {
+        self.combo_queues.get(&combo_id).map_or(0, ComboQueue::len)
     }
 
     /// Clears the current auction collection.
@@ -1429,6 +1460,27 @@ mod tests {
         assert_eq!(public[0].event_type, PublicEventType::OrderCanceled);
         assert_eq!(public[0].order_id, order_id);
         assert_eq!(public[0].quantity, 5);
+    }
+
+    #[test]
+    fn combo_queue_orders_by_spread_price() {
+        let mut core = core();
+        let a = core.submit_combo_order(7, 1, Side::Buy, 100, 5).unwrap();
+        let b = core.submit_combo_order(7, 1, Side::Buy, 110, 5).unwrap();
+        assert_eq!(core.combo_queue_len(7), 2);
+        let queue = core.combo_queues.get_mut(&7).unwrap();
+        assert_eq!(queue.best_bid(), Some(110));
+        assert_eq!(queue.pop_best(Side::Buy).unwrap().order_id, b);
+        assert_eq!(queue.best_bid(), Some(100));
+        assert_eq!(queue.pop_best(Side::Buy).unwrap().order_id, a);
+    }
+
+    #[test]
+    fn combo_order_can_be_canceled() {
+        let mut core = core();
+        let order_id = core.submit_combo_order(7, 1, Side::Sell, 90, 5).unwrap();
+        assert!(core.cancel_combo_order(7, order_id));
+        assert_eq!(core.combo_queue_len(7), 0);
     }
 
     #[test]
