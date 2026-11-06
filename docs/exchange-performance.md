@@ -24,6 +24,7 @@ cargo test --release --test exchange_combo_soak
 | middleware submit 200k | ~11–28M cmd/s |
 | core consume 200k via shared ring | ~2.4–2.7M cmd/s |
 | end-to-end TCP fan-out, 4k orders / 8 clients | ~95k order/s |
+| end-to-end TCP fan-out, 64k orders / 32 clients | ~178k order/s |
 
 Key fixes that moved these numbers:
 

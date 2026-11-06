@@ -86,7 +86,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Duration-parameterized soak (`EXCHANGE_SOAK_SECS`)
 - [ ] Multi-hour soak on target hardware
 - [x] Performance baseline re-measured after optimizations
-- [ ] End-to-end TCP+multicast load test with many gateways
+- [x] End-to-end TCP fan-out with 32 concurrent clients / 64k orders
 
 ## Deployment
 

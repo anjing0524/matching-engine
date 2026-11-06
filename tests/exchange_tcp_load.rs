@@ -34,7 +34,7 @@ fn command(id: u64, user: u32) -> Command {
     command.side = Side::Buy;
     command.offset = Offset::Open;
     command.hedge = Hedge::Spec;
-    command.price_ticks = 50_000 + id as i64;
+    command.price_ticks = 50_000 + (id % 100) as i64;
     command.quantity = 1;
     command.trigger_type = TriggerType::None;
     command
@@ -46,7 +46,7 @@ fn multi_gateway_tcp_fanout() {
     let path =
         std::env::temp_dir().join(format!("matching-engine-tcp-load-{}", std::process::id()));
     let _ = std::fs::remove_file(&path);
-    let (producer, consumer) = create(&path, 1 << 14).unwrap();
+    let (producer, consumer) = create(&path, 1 << 17).unwrap();
     let middleware = MiddlewareSequencer::new(producer);
     let (server, events) = start("127.0.0.1:0").unwrap();
     let addr = server.addr();
@@ -57,8 +57,16 @@ fn multi_gateway_tcp_fanout() {
     let subscriber = MarketDataSubscriber::bind("127.0.0.1:0").unwrap();
     let publisher =
         MarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap()).unwrap();
+    let clients = std::env::var("EXCHANGE_LOAD_CLIENTS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(8);
+    let per_client = std::env::var("EXCHANGE_LOAD_ORDERS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(500);
+    let total_expected = clients * per_client;
     let (received_tx, received_rx) = std::sync::mpsc::channel();
-    let total_expected = 8u64 * 500u64;
     let drain_thread = std::thread::spawn(move || {
         let mut received = 0u64;
         while received < total_expected {
@@ -71,8 +79,6 @@ fn multi_gateway_tcp_fanout() {
     });
     let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_market_data(publisher);
 
-    let clients = 8u64;
-    let per_client = 500u64;
     let total = clients * per_client;
     let mut streams = Vec::new();
     for client in 0..clients {
