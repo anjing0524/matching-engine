@@ -169,7 +169,7 @@ impl PublicEventConsumer {
     }
 }
 
-fn encode_public_event(event: &PublicEvent) -> [u8; PUBLIC_EVENT_SLOT_SIZE] {
+pub(crate) fn encode_public_event(event: &PublicEvent) -> [u8; PUBLIC_EVENT_SLOT_SIZE] {
     let mut out = [0u8; PUBLIC_EVENT_SLOT_SIZE];
     out[0..4].copy_from_slice(&PUBLIC_EVENT_MAGIC.to_le_bytes());
     out[4..12].copy_from_slice(&event.seq.to_le_bytes());
@@ -199,7 +199,9 @@ fn encode_public_event(event: &PublicEvent) -> [u8; PUBLIC_EVENT_SLOT_SIZE] {
     out
 }
 
-fn decode_public_event(slot: &[u8; PUBLIC_EVENT_SLOT_SIZE]) -> Result<PublicEvent, ProtocolError> {
+pub(crate) fn decode_public_event(
+    slot: &[u8; PUBLIC_EVENT_SLOT_SIZE],
+) -> Result<PublicEvent, ProtocolError> {
     let magic = u32::from_le_bytes(slot[0..4].try_into().expect("4 bytes"));
     if magic != PUBLIC_EVENT_MAGIC {
         return Err(ProtocolError {
