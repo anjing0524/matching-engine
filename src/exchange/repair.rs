@@ -110,7 +110,7 @@ impl RepairServer {
     /// Returns an I/O error if binding fails.
     pub fn bind(local: &str, publisher: MarketDataPublisher, capacity: usize) -> io::Result<Self> {
         let socket = UdpSocket::bind(local)?;
-        socket.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+        socket.set_nonblocking(true)?;
         Ok(Self {
             socket,
             publisher,
@@ -133,7 +133,11 @@ impl RepairServer {
     /// Returns an I/O error for receive/decode/publish failures.
     pub fn poll_once(&self) -> io::Result<usize> {
         let mut packet = [0u8; 64];
-        let (len, _) = self.socket.recv_from(&mut packet)?;
+        let (len, _) = match self.socket.recv_from(&mut packet) {
+            Ok(result) => result,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(0),
+            Err(error) => return Err(error),
+        };
         let request = NackRequest::decode(&packet[..len])?;
         let events = self.buffer.repair(request);
         for event in &events {
@@ -197,7 +201,15 @@ mod tests {
                 server.local_addr().unwrap(),
             )
             .unwrap();
-        assert_eq!(server.poll_once().unwrap(), 2);
+        let mut repaired = 0;
+        for _ in 0..100 {
+            repaired = server.poll_once().unwrap();
+            if repaired == 2 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(repaired, 2);
         assert_eq!(subscriber.recv().unwrap().seq, 2);
         assert_eq!(subscriber.recv().unwrap().seq, 3);
     }

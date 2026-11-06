@@ -9,7 +9,7 @@ use crate::exchange::gateway_runtime::GatewayRuntime;
 use crate::exchange::gateway_server::GatewayServerHandle;
 use crate::exchange::market_data::MarketDataPublisher;
 use crate::exchange::plugins::PreTradePlugin;
-use crate::exchange::repair::{NackRequest, RepairBuffer};
+use crate::exchange::repair::{NackRequest, RepairBuffer, RepairServer};
 use crate::exchange::runner::CoreRunner;
 use std::time::{Duration, Instant};
 
@@ -22,7 +22,9 @@ pub struct ExchangeRuntime<P> {
     last_expire: Instant,
     market_data: Option<MarketDataPublisher>,
     repair_buffer: Option<RepairBuffer>,
+    repair_server: Option<RepairServer>,
     public_sent: u64,
+    repair_sent: u64,
 }
 
 impl<P: PreTradePlugin> ExchangeRuntime<P> {
@@ -36,8 +38,21 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             last_expire: Instant::now(),
             market_data: None,
             repair_buffer: None,
+            repair_server: None,
             public_sent: 0,
+            repair_sent: 0,
         }
+    }
+
+    #[must_use]
+    pub fn with_repair_server(mut self, server: RepairServer) -> Self {
+        self.repair_server = Some(server);
+        self
+    }
+
+    #[must_use]
+    pub fn repair_sent(&self) -> u64 {
+        self.repair_sent
     }
 
     #[must_use]
@@ -84,12 +99,20 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
                 buffer.push(*event);
             }
         }
+        if let Some(server) = &mut self.repair_server {
+            for event in &public {
+                server.push(*event);
+            }
+        }
         if let Some(publisher) = &self.market_data {
             for event in public {
                 if publisher.send(&event).is_ok() {
                     self.public_sent += 1;
                 }
             }
+        }
+        if let Some(server) = &self.repair_server {
+            self.repair_sent += server.poll_once().unwrap_or(0) as u64;
         }
         if let Some(timeout) = self.idle_timeout
             && self.last_expire.elapsed() >= timeout / 2
@@ -220,6 +243,79 @@ mod tests {
         });
         assert_eq!(repaired.len(), 1);
         assert_eq!(repaired[0].seq, 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn runtime_repair_server_serves_nack() {
+        use crate::exchange::market_data::{MarketDataPublisher, MarketDataSubscriber};
+        use crate::exchange::market_data_tracker::NackClient;
+        use crate::exchange::repair::{NackRequest, RepairServer};
+
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-exchange-runtime-repair-server-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 16).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let gateway = GatewayRuntime::new(middleware, events);
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let runner = CoreRunner::new(core, consumer, NoPlugins);
+        let subscriber = MarketDataSubscriber::bind("127.0.0.1:0").unwrap();
+        let publisher =
+            MarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap()).unwrap();
+        let repair = RepairServer::bind("127.0.0.1:0", publisher, 16).unwrap();
+        let repair_addr = repair.local_addr().unwrap();
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_repair_server(repair);
+
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        stream
+            .write_all(&GatewayFrame::Command(command()).encode())
+            .unwrap();
+        let mut saw_public = false;
+        for _ in 0..100 {
+            runtime.tick();
+            if runtime.public_sent() > 0 || runtime.repair_sent() > 0 {
+                saw_public = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        // Public events are pushed into the repair server even without a normal
+        // publisher, so use a NACK to pull the first event back.
+        assert!(!saw_public);
+        let client = NackClient::bind("127.0.0.1:0", repair_addr).unwrap();
+        client
+            .send(NackRequest {
+                from_seq: 1,
+                to_seq: 1,
+            })
+            .unwrap();
+        for _ in 0..100 {
+            runtime.tick();
+            if runtime.repair_sent() > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(runtime.repair_sent(), 1);
+        assert_eq!(subscriber.recv().unwrap().seq, 1);
         let _ = std::fs::remove_file(&path);
     }
 
