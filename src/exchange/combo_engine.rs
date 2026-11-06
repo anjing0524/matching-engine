@@ -81,6 +81,8 @@ pub struct ComboEngine {
     leg1_frozen: FrozenClose,
     leg2_frozen: FrozenClose,
     close_reservations: std::collections::HashMap<u64, (CloseKey, CloseKey, u64)>,
+    max_open_qty_per_user: Option<u64>,
+    open_qty_per_user: std::collections::HashMap<u64, u64>,
 }
 
 impl ComboEngine {
@@ -96,6 +98,8 @@ impl ComboEngine {
             leg1_frozen: FrozenClose::new(),
             leg2_frozen: FrozenClose::new(),
             close_reservations: std::collections::HashMap::new(),
+            max_open_qty_per_user: None,
+            open_qty_per_user: std::collections::HashMap::new(),
         }
     }
 
@@ -110,10 +114,17 @@ impl ComboEngine {
         offset: Offset,
         hedge: Hedge,
     ) -> bool {
+        if self.exceeds_limit(user_id, qty) {
+            return false;
+        }
         if offset == Offset::Open {
-            return self
+            let accepted = self
                 .queue
                 .push(order_id, user_id, side, spread, qty, offset, hedge);
+            if accepted {
+                self.add_open_qty(user_id, qty);
+            }
+            return accepted;
         }
         let (leg1_position, leg2_position) = match side {
             Side::Buy => (Side::Sell, Side::Buy),
@@ -146,22 +157,24 @@ impl ComboEngine {
         }
         self.close_reservations
             .insert(order_id, (leg1_key, leg2_key, qty));
+        self.add_open_qty(user_id, qty);
         true
     }
 
     /// Cancels a queued combo order and releases any close reservation.
     pub fn cancel(&mut self, order_id: u64) -> bool {
         let reservation = self.close_reservations.remove(&order_id);
-        if self.queue.cancel(order_id).is_none() {
+        let Some(cancelled) = self.queue.cancel(order_id) else {
             if let Some(reservation) = reservation {
                 self.close_reservations.insert(order_id, reservation);
             }
             return false;
-        }
+        };
         if let Some((leg1, leg2, qty)) = reservation {
             self.leg1_frozen.release(leg1, qty);
             self.leg2_frozen.release(leg2, qty);
         }
+        self.remove_open_qty(cancelled.user_id, cancelled.quantity);
         true
     }
 
@@ -189,6 +202,7 @@ impl ComboEngine {
         match result {
             Ok(fill) => {
                 self.queue.cancel(order.order_id);
+                self.remove_open_qty(order.user_id, order.quantity);
                 let seq = self.next_event_seq;
                 self.next_event_seq += 1;
                 self.events.push(ComboFillEvent {
@@ -282,6 +296,38 @@ impl ComboEngine {
 
     pub fn leg2_positions_mut(&mut self) -> &mut Positions {
         &mut self.leg2_positions
+    }
+
+    #[must_use]
+    pub fn with_max_open_qty_per_user(mut self, max_qty: u64) -> Self {
+        self.max_open_qty_per_user = Some(max_qty);
+        self
+    }
+
+    fn exceeds_limit(&self, user_id: u64, qty: u64) -> bool {
+        self.max_open_qty_per_user.is_some_and(|max_qty| {
+            self.open_qty_per_user
+                .get(&user_id)
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(qty)
+                > max_qty
+        })
+    }
+
+    fn add_open_qty(&mut self, user_id: u64, qty: u64) {
+        *self.open_qty_per_user.entry(user_id).or_insert(0) += qty;
+    }
+
+    fn remove_open_qty(&mut self, user_id: u64, qty: u64) {
+        if let Some(open) = self.open_qty_per_user.get_mut(&user_id) {
+            *open = open.saturating_sub(qty);
+        }
+    }
+
+    #[must_use]
+    pub fn open_qty(&self, user_id: u64) -> u64 {
+        self.open_qty_per_user.get(&user_id).copied().unwrap_or(0)
     }
 
     #[must_use]
@@ -393,6 +439,23 @@ mod tests {
         assert_eq!(fill.quantity, 5);
         assert_eq!(engine.leg1_positions().get(leg1_key).total(), 0);
         assert_eq!(engine.leg2_positions().get(leg2_key).total(), 0);
+    }
+
+    #[test]
+    fn combo_limit_rejects_excess_open_quantity() {
+        use crate::exchange::protocol::{Hedge, Offset};
+
+        let mut engine = ComboEngine::new(
+            ContractSpec::new("LEG1", 1, 1_000, 100_000),
+            ContractSpec::new("LEG2", 1, 1, 100_000),
+        )
+        .with_max_open_qty_per_user(10);
+        assert!(engine.queue(10, 1, Side::Buy, 49_900, 6, Offset::Open, Hedge::Spec));
+        assert!(!engine.queue(11, 1, Side::Buy, 49_900, 5, Offset::Open, Hedge::Spec));
+        assert_eq!(engine.open_qty(1), 6);
+        assert!(engine.cancel(10));
+        assert_eq!(engine.open_qty(1), 0);
+        assert!(engine.queue(12, 1, Side::Buy, 49_900, 5, Offset::Open, Hedge::Spec));
     }
 
     #[test]
