@@ -27,11 +27,20 @@ pub struct GatewayRuntime {
 impl GatewayRuntime {
     #[must_use]
     pub fn new(middleware: MiddlewareSequencer, events: Receiver<GatewayEvent>) -> Self {
+        Self::with_replay_capacity(middleware, events, 1024)
+    }
+
+    #[must_use]
+    pub fn with_replay_capacity(
+        middleware: MiddlewareSequencer,
+        events: Receiver<GatewayEvent>,
+        replay_capacity: usize,
+    ) -> Self {
         Self {
             middleware,
             events,
             last_seen: HashMap::new(),
-            private_replay: PrivateReplayBuffer::new(1024),
+            private_replay: PrivateReplayBuffer::new(replay_capacity),
             pending_replay: HashMap::new(),
             errors: 0,
         }
@@ -292,6 +301,28 @@ mod tests {
         );
         server.stop();
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn replay_capacity_evicts_oldest() {
+        // Capacity is exercised through the replay buffer directly; the gateway
+        // only wires the value through.
+        let mut buffer = crate::exchange::private_replay::PrivateReplayBuffer::new(1);
+        let event = |seq| PrivateEvent {
+            seq,
+            order_id: seq,
+            client_order_id: seq,
+            account_id: 2,
+            status: crate::exchange::private_events::PrivateStatus::Accepted,
+            filled_delta: 0,
+            remaining: 1,
+            reason: None,
+        };
+        buffer.push(2, event(1));
+        buffer.push(2, event(2));
+        let replay = buffer.replay(2, 0);
+        assert_eq!(replay.len(), 1);
+        assert_eq!(replay[0].seq, 2);
     }
 
     #[test]
