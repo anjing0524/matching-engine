@@ -36,8 +36,19 @@ impl MarketDataPublisher {
         let group: std::net::Ipv4Addr = group
             .parse()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-        let socket = UdpSocket::bind(local)?;
+        let local: SocketAddr = local
+            .parse()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let socket = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        )?;
+        socket.set_reuse_address(true)?;
+        socket.bind(&local.into())?;
         socket.set_multicast_loop_v4(true)?;
+        socket.set_multicast_if_v4(&std::net::Ipv4Addr::LOCALHOST)?;
+        let socket: UdpSocket = socket.into();
         Ok(Self {
             socket,
             target: SocketAddr::from((group, port)),
@@ -93,13 +104,20 @@ impl MarketDataSubscriber {
     /// # Errors
     /// Returns an I/O error if bind/join fails.
     pub fn bind_multicast(port: u16, group: &str) -> io::Result<Self> {
-        let socket = UdpSocket::bind(("0.0.0.0", port))?;
-        socket.set_read_timeout(Some(Duration::from_secs(2)))?;
-        socket.set_multicast_loop_v4(true)?;
         let group: std::net::Ipv4Addr = group
             .parse()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-        socket.join_multicast_v4(&group, &std::net::Ipv4Addr::UNSPECIFIED)?;
+        let socket = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        )?;
+        socket.set_reuse_address(true)?;
+        socket.bind(&SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, port)).into())?;
+        socket.set_multicast_loop_v4(true)?;
+        socket.join_multicast_v4(&group, &std::net::Ipv4Addr::LOCALHOST)?;
+        let socket: UdpSocket = socket.into();
+        socket.set_read_timeout(Some(Duration::from_secs(2)))?;
         Ok(Self { socket })
     }
 
@@ -150,7 +168,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a multicast-capable interface"]
     fn multicast_publisher_and_subscriber() {
         let group = "239.255.42.99";
         let subscriber = MarketDataSubscriber::bind_multicast(0, group).unwrap();
