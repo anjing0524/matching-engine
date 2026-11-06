@@ -213,15 +213,24 @@ impl ExchangeCore {
         &self.public_events
     }
 
-    fn push_public(&mut self, event_type: PublicEventType, price_ticks: u64, volume: u64) {
-        let seq = self.public_seq;
+    fn push_public_event(&mut self, mut event: PublicEvent) {
+        event.seq = self.public_seq;
         self.public_seq += 1;
-        self.public_events.push(PublicEvent {
-            seq,
+        self.public_events.push(event);
+    }
+
+    fn push_public(&mut self, event_type: PublicEventType, price_ticks: u64, volume: u64) {
+        self.push_public_event(PublicEvent {
+            seq: 0,
             event_type,
             exchange_ts_ns: 0,
             phase: 0,
+            instrument_id: 0,
+            order_id: 0,
+            trade_id: 0,
+            side: None,
             price_ticks,
+            quantity: 0,
             volume,
         });
     }
@@ -623,6 +632,55 @@ impl ExchangeCore {
         }
 
         let mut events = events;
+        let accepted_order = events.iter().find_map(|event| match event {
+            CoreEvent::Accepted {
+                order_id,
+                remaining_quantity,
+                ..
+            } => Some((*order_id, *remaining_quantity)),
+            _ => None,
+        });
+        if let Some((order_id, remaining_quantity)) = accepted_order
+            && command.price_type == PriceType::Limit
+            && command.time_condition != TimeCondition::Ioc
+        {
+            self.push_public_event(PublicEvent {
+                seq: 0,
+                event_type: PublicEventType::OrderRested,
+                exchange_ts_ns: command.exchange_ts_ns,
+                phase: 0,
+                instrument_id: command.instrument_id,
+                order_id,
+                trade_id: 0,
+                side: Some(command.side),
+                price_ticks: command.price_ticks as u64,
+                quantity: remaining_quantity,
+                volume: 0,
+            });
+        }
+        for event in &events {
+            if let CoreEvent::Trade {
+                price_ticks,
+                quantity,
+                trade_id,
+                ..
+            } = event
+            {
+                self.push_public_event(PublicEvent {
+                    seq: 0,
+                    event_type: PublicEventType::Trade,
+                    exchange_ts_ns: command.exchange_ts_ns,
+                    phase: 0,
+                    instrument_id: command.instrument_id,
+                    order_id: 0,
+                    trade_id: *trade_id,
+                    side: Some(command.side),
+                    price_ticks: *price_ticks,
+                    quantity: *quantity,
+                    volume: 0,
+                });
+            }
+        }
         if (command.price_type == PriceType::Market || command.time_condition == TimeCondition::Ioc)
             && let Some(order_id) = incoming_id
             && self
@@ -1283,6 +1341,31 @@ mod tests {
         assert_eq!(public[0].event_type, PublicEventType::AuctionResult);
         assert_eq!(public[0].price_ticks, 50_000);
         assert_eq!(public[0].volume, 8);
+    }
+
+    #[test]
+    fn public_events_include_rested_order_and_trade() {
+        use crate::exchange::plugins::AvailableClosePlugin;
+        use crate::exchange::protocol::Offset;
+
+        let mut core = core();
+        let mut buy = wire_command(Side::Buy, 50_000, 5);
+        buy.offset = Offset::Open;
+        core.execute_with_plugins(buy, &AvailableClosePlugin);
+        let public = core.drain_public_events();
+        assert_eq!(public.len(), 1);
+        assert_eq!(public[0].event_type, PublicEventType::OrderRested);
+        assert_eq!(public[0].quantity, 5);
+
+        let mut sell = wire_command(Side::Sell, 50_000, 5);
+        sell.user_id = 2;
+        sell.offset = Offset::Open;
+        core.execute_with_plugins(sell, &AvailableClosePlugin);
+        let public = core.drain_public_events();
+        assert_eq!(public.len(), 1);
+        assert_eq!(public[0].event_type, PublicEventType::Trade);
+        assert_eq!(public[0].quantity, 5);
+        assert_eq!(public[0].price_ticks, 50_000);
     }
 
     #[test]
