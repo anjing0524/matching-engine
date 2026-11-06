@@ -49,7 +49,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Size-based command-log rotation with bounded retention
 - [x] Append-only public/private result logs with slot/version checks
 - [x] Size-based result-log rotation with bounded retention
-- [ ] NACK rate limiting and anti-amplification policy
+- [x] Per-server NACK rate limiting
 - [ ] Multicast interface failover
 
 ## Failure semantics
@@ -94,5 +94,5 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Production configuration notes
 - [x] systemd unit templates and environment example
 - [x] Multi-stage Alpine Dockerfile; image built and smoke-run locally
-- [ ] Core state snapshot/restore procedure
+- [x] Core state snapshot/restore procedure and replay runbook
 - [ ] Rolling upgrade and compatibility policy

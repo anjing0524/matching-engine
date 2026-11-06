@@ -101,6 +101,9 @@ pub struct RepairServer {
     socket: UdpSocket,
     publisher: MarketDataPublisher,
     buffer: RepairBuffer,
+    nack_limit_per_sec: Option<f64>,
+    nack_tokens: f64,
+    last_refill: std::time::Instant,
 }
 
 impl RepairServer {
@@ -115,7 +118,35 @@ impl RepairServer {
             socket,
             publisher,
             buffer: RepairBuffer::new(capacity),
+            nack_limit_per_sec: None,
+            nack_tokens: 0.0,
+            last_refill: std::time::Instant::now(),
         })
+    }
+
+    #[must_use]
+    pub fn with_nack_rate_limit(mut self, nacks_per_sec: f64) -> Self {
+        self.nack_limit_per_sec = Some(nacks_per_sec);
+        self.nack_tokens = nacks_per_sec.max(1.0);
+        self.last_refill = std::time::Instant::now();
+        self
+    }
+
+    fn allow_nack(&mut self) -> bool {
+        let Some(limit) = self.nack_limit_per_sec else {
+            return true;
+        };
+        let now = std::time::Instant::now();
+        self.nack_tokens = (self.nack_tokens
+            + now.duration_since(self.last_refill).as_secs_f64() * limit)
+            .min(limit);
+        self.last_refill = now;
+        if self.nack_tokens >= 1.0 {
+            self.nack_tokens -= 1.0;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn push(&mut self, event: PublicEvent) {
@@ -131,13 +162,16 @@ impl RepairServer {
     ///
     /// # Errors
     /// Returns an I/O error for receive/decode/publish failures.
-    pub fn poll_once(&self) -> io::Result<usize> {
+    pub fn poll_once(&mut self) -> io::Result<usize> {
         let mut packet = [0u8; 64];
         let (len, _) = match self.socket.recv_from(&mut packet) {
             Ok(result) => result,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(0),
             Err(error) => return Err(error),
         };
+        if !self.allow_nack() {
+            return Ok(0);
+        }
         let request = NackRequest::decode(&packet[..len])?;
         let events = self.buffer.repair(request);
         for event in &events {
@@ -169,6 +203,40 @@ mod tests {
             quantity: 1,
             volume: 0,
         }
+    }
+
+    #[test]
+    fn nack_rate_limit_drops_excess_requests() {
+        let subscriber = MarketDataSubscriber::bind("127.0.0.1:0").unwrap();
+        let publisher =
+            MarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap()).unwrap();
+        let mut server = RepairServer::bind("127.0.0.1:0", publisher, 8)
+            .unwrap()
+            .with_nack_rate_limit(1.0);
+        server.push(event(2));
+        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        for _ in 0..2 {
+            client
+                .send_to(
+                    &NackRequest {
+                        from_seq: 2,
+                        to_seq: 2,
+                    }
+                    .encode(),
+                    server.local_addr().unwrap(),
+                )
+                .unwrap();
+        }
+        let mut repaired = 0;
+        for _ in 0..100 {
+            repaired = server.poll_once().unwrap();
+            if repaired == 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(repaired, 1);
+        assert_eq!(server.poll_once().unwrap(), 0);
     }
 
     #[test]

@@ -203,7 +203,7 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             self.metrics.public_events_sent += combo_public as u64;
             self.metrics.private_events_sent += combo_private as u64;
         }
-        if let Some(server) = &self.repair_server {
+        if let Some(server) = &mut self.repair_server {
             let repaired = server.poll_once().unwrap_or(0) as u64;
             self.repair_sent += repaired;
             self.metrics.repair_events_sent += repaired;
