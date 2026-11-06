@@ -72,6 +72,10 @@ harness = false
 name = "exchange_core_benchmark"
 harness = false
 
+[[bench]]
+name = "exchange_middleware_benchmark"
+harness = false
+
 # Performance profile
 [profile.release]
 opt-level = 3           # maximum performance
