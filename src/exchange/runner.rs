@@ -112,8 +112,8 @@ impl<P: PreTradePlugin> CoreRunner<P> {
         while let Some(result) = self.consumer.recv() {
             match result {
                 Ok(command) => {
-                    let mut produced = self.core.execute_with_plugins(command, &self.plugin);
-                    self.events.append(&mut produced);
+                    self.core
+                        .execute_with_plugins_into(command, &self.plugin, &mut self.events);
                     executed += 1;
                 }
                 Err(error) => {
