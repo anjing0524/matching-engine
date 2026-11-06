@@ -45,7 +45,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] NACK-driven repair replay buffer
 - [x] Public UDP unicast/multicast publisher and subscriber
 - [x] Append-only command-log segments with header/version checks
-- [ ] Automated segment rotation/retention
+- [x] Size-based command-log rotation with bounded retention
 - [ ] Persistent full-day public/private result log
 - [ ] NACK rate limiting and anti-amplification policy
 - [ ] Multicast interface failover

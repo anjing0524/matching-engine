@@ -5,7 +5,7 @@
 //! assign `global_seq`, append the fixed 256-byte command to the shared ring,
 //! and let the core runner consume it.
 
-use crate::exchange::command_log::CommandLogWriter;
+use crate::exchange::command_log::{CommandLogWriter, RotatingCommandLog};
 use crate::exchange::protocol::{Command, CommandType};
 use crate::exchange::schedule::{ScheduleDriver, TradingSchedule};
 use crate::exchange::session::{SessionInfo, SessionRegistry};
@@ -17,6 +17,7 @@ pub struct MiddlewareSequencer {
     combo_producer: Option<CommandProducer>,
     next_global_seq: u64,
     command_log: Option<CommandLogWriter>,
+    rotating_log: Option<RotatingCommandLog>,
     schedule: Option<ScheduleDriver>,
     sessions: SessionRegistry,
 }
@@ -29,6 +30,7 @@ impl MiddlewareSequencer {
             combo_producer: None,
             next_global_seq: 1,
             command_log: None,
+            rotating_log: None,
             schedule: None,
             sessions: SessionRegistry::new(),
         }
@@ -89,6 +91,26 @@ impl MiddlewareSequencer {
         Ok(self)
     }
 
+    /// Appends accepted commands to rotating segments.
+    ///
+    /// # Errors
+    /// Returns an I/O error if the directory cannot be created.
+    pub fn with_rotating_command_log(
+        mut self,
+        directory: &std::path::Path,
+        prefix: &str,
+        max_segment_bytes: u64,
+        retain_segments: usize,
+    ) -> std::io::Result<Self> {
+        self.rotating_log = Some(RotatingCommandLog::open(
+            directory,
+            prefix,
+            max_segment_bytes,
+            retain_segments,
+        )?);
+        Ok(self)
+    }
+
     /// Routes commands with `combo_id != 0` to a separate combo command ring.
     #[must_use]
     pub fn with_combo_transport(mut self, producer: CommandProducer) -> Self {
@@ -120,6 +142,9 @@ impl MiddlewareSequencer {
         if let Some(log) = &mut self.command_log {
             log.append(&command).map_err(CommandTransportError::Io)?;
             let _ = log.sync();
+        }
+        if let Some(log) = &mut self.rotating_log {
+            log.append(&command).map_err(CommandTransportError::Io)?;
         }
         self.next_global_seq += 1;
         Ok(global_seq)

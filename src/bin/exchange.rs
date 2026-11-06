@@ -63,6 +63,13 @@ struct RunArgs {
     /// Append accepted commands to this replay log segment.
     #[arg(long)]
     command_log: Option<String>,
+    /// Rotate accepted commands into this directory.
+    #[arg(long)]
+    command_log_dir: Option<String>,
+    #[arg(long, default_value_t = 64 * 1024 * 1024)]
+    command_log_max_bytes: u64,
+    #[arg(long, default_value_t = 4)]
+    command_log_retain: usize,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

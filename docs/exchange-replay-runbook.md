@@ -14,7 +14,8 @@ The snapshot includes a CRC32 checksum; do not bypass validation.
 
 1. Stop the middleware from admitting new commands.
 2. Place the snapshot and replay log on the core host. Middleware writes
-   accepted commands to `--command-log` segments in fixed 256-byte slots.
+   accepted commands to fixed 256-byte slots, either one segment via
+   `--command-log` or size-bounded rotated segments via `--command-log-dir`.
 3. Start the core with the snapshot:
 
 ```text

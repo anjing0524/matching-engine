@@ -38,6 +38,13 @@ struct Args {
     /// Append accepted commands to this replay log segment.
     #[arg(long)]
     command_log: Option<String>,
+    /// Rotate accepted commands into this directory.
+    #[arg(long)]
+    command_log_dir: Option<String>,
+    #[arg(long, default_value_t = 64 * 1024 * 1024)]
+    command_log_max_bytes: u64,
+    #[arg(long, default_value_t = 4)]
+    command_log_retain: usize,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -55,6 +62,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut middleware = MiddlewareSequencer::new(command_producer);
     if let Some(path) = &args.command_log {
         middleware = middleware.with_command_log(Path::new(path))?;
+    }
+    if let Some(directory) = &args.command_log_dir {
+        middleware = middleware.with_rotating_command_log(
+            Path::new(directory),
+            "commands",
+            args.command_log_max_bytes,
+            args.command_log_retain,
+        )?;
     }
     let (server, events) = start_gateway(&args.listen)?;
     let mut gateway = GatewayRuntime::with_replay_capacity(middleware, events, 4096);
