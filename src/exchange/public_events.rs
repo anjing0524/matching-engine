@@ -52,7 +52,7 @@ impl ExchangePhase {
 }
 
 /// One public event in market-data sequence order.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PublicEvent {
     pub seq: u64,
     pub event_type: PublicEventType,

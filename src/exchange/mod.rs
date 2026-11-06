@@ -20,6 +20,7 @@ pub mod positions;
 pub mod private_events;
 pub mod protocol;
 pub mod public_events;
+pub mod repair;
 pub mod runner;
 pub mod schedule;
 pub mod session;
