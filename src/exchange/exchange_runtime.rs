@@ -13,6 +13,7 @@ use crate::exchange::market_data::MarketDataPublisher;
 use crate::exchange::metrics::ExchangeMetrics;
 use crate::exchange::plugins::PreTradePlugin;
 use crate::exchange::repair::{NackRequest, RepairBuffer, RepairServer};
+use crate::exchange::result_log::{PrivateResultLog, PublicResultLog};
 use crate::exchange::runner::CoreRunner;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -28,6 +29,8 @@ pub struct ExchangeRuntime<P> {
     combo: Option<ComboRuntime>,
     repair_buffer: Option<RepairBuffer>,
     repair_server: Option<RepairServer>,
+    public_log: Option<PublicResultLog>,
+    private_log: Option<PrivateResultLog>,
     public_sent: u64,
     repair_sent: u64,
     metrics: ExchangeMetrics,
@@ -47,11 +50,32 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             combo: None,
             repair_buffer: None,
             repair_server: None,
+            public_log: None,
+            private_log: None,
             public_sent: 0,
             repair_sent: 0,
             metrics: ExchangeMetrics::new(),
             metrics_sink: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_result_logs(mut self, public: PublicResultLog, private: PrivateResultLog) -> Self {
+        self.public_log = Some(public);
+        self.private_log = Some(private);
+        self
+    }
+
+    #[must_use]
+    pub fn with_public_result_log(mut self, public: PublicResultLog) -> Self {
+        self.public_log = Some(public);
+        self
+    }
+
+    #[must_use]
+    pub fn with_private_result_log(mut self, private: PrivateResultLog) -> Self {
+        self.private_log = Some(private);
+        self
     }
 
     #[must_use]
@@ -135,9 +159,21 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
         let commands = self.core.poll();
         self.metrics.commands_executed += commands as u64;
         let private = self.core.drain_private();
+        if let Some(log) = &mut self.private_log {
+            for event in &private {
+                let _ = log.append(event);
+            }
+            let _ = log.sync();
+        }
         let sent = self.gateway.dispatch_private(&self.server, private);
         self.metrics.private_events_sent += sent as u64;
         let public = self.core.drain_public();
+        if let Some(log) = &mut self.public_log {
+            for event in &public {
+                let _ = log.append(event);
+            }
+            let _ = log.sync();
+        }
         if let Some(buffer) = &mut self.repair_buffer {
             for event in &public {
                 buffer.push(*event);

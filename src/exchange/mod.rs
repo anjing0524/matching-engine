@@ -34,6 +34,7 @@ pub mod public_events;
 pub mod rate_limit;
 pub mod repair;
 pub mod replay;
+pub mod result_log;
 pub mod runner;
 pub mod schedule;
 pub mod session;

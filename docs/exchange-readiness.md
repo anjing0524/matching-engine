@@ -46,7 +46,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Public UDP unicast/multicast publisher and subscriber
 - [x] Append-only command-log segments with header/version checks
 - [x] Size-based command-log rotation with bounded retention
-- [ ] Persistent full-day public/private result log
+- [x] Append-only public/private result logs with slot/version checks
 - [ ] NACK rate limiting and anti-amplification policy
 - [ ] Multicast interface failover
 

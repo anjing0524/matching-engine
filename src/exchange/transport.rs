@@ -353,7 +353,7 @@ impl PrivateEventConsumer {
     }
 }
 
-fn encode_private_event(event: &PrivateEvent) -> [u8; PRIVATE_EVENT_SLOT_SIZE] {
+pub(crate) fn encode_private_event(event: &PrivateEvent) -> [u8; PRIVATE_EVENT_SLOT_SIZE] {
     let mut out = [0u8; PRIVATE_EVENT_SLOT_SIZE];
     out[0..4].copy_from_slice(&PRIVATE_EVENT_MAGIC.to_le_bytes());
     out[4..12].copy_from_slice(&event.seq.to_le_bytes());
@@ -378,7 +378,7 @@ fn encode_private_event(event: &PrivateEvent) -> [u8; PRIVATE_EVENT_SLOT_SIZE] {
     out
 }
 
-fn decode_private_event(
+pub(crate) fn decode_private_event(
     slot: &[u8; PRIVATE_EVENT_SLOT_SIZE],
 ) -> Result<PrivateEvent, ProtocolError> {
     let magic = u32::from_le_bytes(slot[0..4].try_into().expect("4 bytes"));

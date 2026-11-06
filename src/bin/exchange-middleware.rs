@@ -33,6 +33,12 @@ struct Args {
     iterations: u64,
     #[arg(long, default_value_t = 30)]
     idle_timeout_secs: u64,
+    /// Persist public events to this result log.
+    #[arg(long)]
+    public_log: Option<String>,
+    /// Persist private events to this result log.
+    #[arg(long)]
+    private_log: Option<String>,
     #[arg(long)]
     auth_token: Option<u64>,
     /// Append accepted commands to this replay log segment.
@@ -58,6 +64,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The core process opens the producer ends; middleware opens consumers.
     let public_consumer = open_public_event_consumer(Path::new(&args.public_ring))?;
     let private_consumer = open_private_event_consumer(Path::new(&args.private_ring))?;
+    let mut public_log = args
+        .public_log
+        .as_deref()
+        .map(|path| matching_engine::exchange::result_log::PublicResultLog::create(Path::new(path)))
+        .transpose()?;
+    let mut private_log = args
+        .private_log
+        .as_deref()
+        .map(|path| {
+            matching_engine::exchange::result_log::PrivateResultLog::create(Path::new(path))
+        })
+        .transpose()?;
 
     let mut middleware = MiddlewareSequencer::new(command_producer);
     if let Some(path) = &args.command_log {
@@ -97,11 +115,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let private: Vec<_> = std::iter::from_fn(|| private_consumer.recv())
             .filter_map(Result::ok)
             .collect();
+        if let Some(log) = &mut private_log {
+            for event in &private {
+                log.append(event)?;
+            }
+            log.sync()?;
+        }
         let _ = gateway.dispatch_private(&server, private);
-        if let Some(publisher) = &publisher {
-            while let Some(Ok(event)) = public_consumer.recv() {
+        while let Some(Ok(event)) = public_consumer.recv() {
+            if let Some(log) = &mut public_log {
+                log.append(&event)?;
+            }
+            if let Some(publisher) = &publisher {
                 let _ = publisher.send(&event);
             }
+        }
+        if let Some(log) = &mut public_log {
+            log.sync()?;
         }
         if args.idle_timeout_secs > 0 {
             for connection_id in gateway.expire_idle(Duration::from_secs(args.idle_timeout_secs)) {

@@ -63,6 +63,12 @@ struct RunArgs {
     /// Append accepted commands to this replay log segment.
     #[arg(long)]
     command_log: Option<String>,
+    /// Persist public events to this result log.
+    #[arg(long)]
+    public_log: Option<String>,
+    /// Persist private events to this result log.
+    #[arg(long)]
+    private_log: Option<String>,
     /// Rotate accepted commands into this directory.
     #[arg(long)]
     command_log_dir: Option<String>,
@@ -107,6 +113,18 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
         .with_metrics_sink(Arc::clone(&metrics));
     if args.idle_timeout_secs > 0 {
         runtime = runtime.with_idle_timeout(Duration::from_secs(args.idle_timeout_secs));
+    }
+    if let Some(path) = &args.public_log {
+        let log = matching_engine::exchange::result_log::PublicResultLog::create(
+            std::path::Path::new(path),
+        )?;
+        runtime = runtime.with_public_result_log(log);
+    }
+    if let Some(path) = &args.private_log {
+        let log = matching_engine::exchange::result_log::PrivateResultLog::create(
+            std::path::Path::new(path),
+        )?;
+        runtime = runtime.with_private_result_log(log);
     }
     if let (Some(group), Some(port)) = (&args.multicast_group, args.multicast_port) {
         let publisher = MarketDataPublisher::bind_multicast_on(
