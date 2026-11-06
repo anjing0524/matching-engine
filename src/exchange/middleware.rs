@@ -5,6 +5,7 @@
 //! assign `global_seq`, append the fixed 256-byte command to the shared ring,
 //! and let the core runner consume it.
 
+use crate::exchange::command_log::CommandLogWriter;
 use crate::exchange::protocol::{Command, CommandType};
 use crate::exchange::schedule::{ScheduleDriver, TradingSchedule};
 use crate::exchange::session::{SessionInfo, SessionRegistry};
@@ -15,6 +16,7 @@ pub struct MiddlewareSequencer {
     producer: CommandProducer,
     combo_producer: Option<CommandProducer>,
     next_global_seq: u64,
+    command_log: Option<CommandLogWriter>,
     schedule: Option<ScheduleDriver>,
     sessions: SessionRegistry,
 }
@@ -26,6 +28,7 @@ impl MiddlewareSequencer {
             producer,
             combo_producer: None,
             next_global_seq: 1,
+            command_log: None,
             schedule: None,
             sessions: SessionRegistry::new(),
         }
@@ -77,6 +80,15 @@ impl MiddlewareSequencer {
         self.submit(command)
     }
 
+    /// Appends every accepted command to a replay log segment.
+    ///
+    /// # Errors
+    /// Returns an I/O error if the log cannot be created.
+    pub fn with_command_log(mut self, path: &std::path::Path) -> std::io::Result<Self> {
+        self.command_log = Some(CommandLogWriter::create(path)?);
+        Ok(self)
+    }
+
     /// Routes commands with `combo_id != 0` to a separate combo command ring.
     #[must_use]
     pub fn with_combo_transport(mut self, producer: CommandProducer) -> Self {
@@ -105,6 +117,10 @@ impl MiddlewareSequencer {
             &self.producer
         };
         producer.send(&command)?;
+        if let Some(log) = &mut self.command_log {
+            log.append(&command).map_err(CommandTransportError::Io)?;
+            let _ = log.sync();
+        }
         self.next_global_seq += 1;
         Ok(global_seq)
     }
@@ -268,6 +284,30 @@ mod tests {
         assert_eq!(runner.core().phase(), ExchangePhase::Continuous);
         assert_eq!(runner.core().trading_day(), 7);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn accepted_commands_are_logged() {
+        use crate::exchange::command_log::read_segment;
+
+        let ring_path = temp_path("log-ring");
+        let log_path = temp_path("command-log");
+        let _ = std::fs::remove_file(&ring_path);
+        let _ = std::fs::remove_file(&log_path);
+        let (producer, _consumer) = create(&ring_path, 8).unwrap();
+        let mut middleware = MiddlewareSequencer::new(producer)
+            .with_command_log(&log_path)
+            .unwrap();
+        middleware.submit(command(1, Side::Buy, 50_000, 1)).unwrap();
+        middleware
+            .submit(command(2, Side::Sell, 50_000, 1))
+            .unwrap();
+        let logged = read_segment(&log_path).unwrap();
+        assert_eq!(logged.len(), 2);
+        assert_eq!(logged[0].global_seq, 1);
+        assert_eq!(logged[1].global_seq, 2);
+        let _ = std::fs::remove_file(&ring_path);
+        let _ = std::fs::remove_file(&log_path);
     }
 
     #[test]

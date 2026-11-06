@@ -44,7 +44,9 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Public seq gap detection and NACK request from gateway
 - [x] NACK-driven repair replay buffer
 - [x] Public UDP unicast/multicast publisher and subscriber
-- [ ] Persistent full-day result log (currently bounded in-memory replay)
+- [x] Append-only command-log segments with header/version checks
+- [ ] Automated segment rotation/retention
+- [ ] Persistent full-day public/private result log
 - [ ] NACK rate limiting and anti-amplification policy
 - [ ] Multicast interface failover
 

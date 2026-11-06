@@ -11,6 +11,7 @@ pub mod combo_engine;
 pub mod combo_exec;
 pub mod combo_market_data;
 pub mod combo_runtime;
+pub mod command_log;
 pub mod config;
 pub mod core;
 pub mod exchange_runtime;

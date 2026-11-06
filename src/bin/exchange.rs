@@ -60,6 +60,9 @@ struct RunArgs {
     /// Optional shared login token.
     #[arg(long)]
     auth_token: Option<u64>,
+    /// Append accepted commands to this replay log segment.
+    #[arg(long)]
+    command_log: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

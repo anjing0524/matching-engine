@@ -13,7 +13,8 @@ The snapshot includes a CRC32 checksum; do not bypass validation.
 ## Restore sequence
 
 1. Stop the middleware from admitting new commands.
-2. Place the snapshot and replay log on the core host.
+2. Place the snapshot and replay log on the core host. Middleware writes
+   accepted commands to `--command-log` segments in fixed 256-byte slots.
 3. Start the core with the snapshot:
 
 ```text

@@ -35,6 +35,9 @@ struct Args {
     idle_timeout_secs: u64,
     #[arg(long)]
     auth_token: Option<u64>,
+    /// Append accepted commands to this replay log segment.
+    #[arg(long)]
+    command_log: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -49,7 +52,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let public_consumer = open_public_event_consumer(Path::new(&args.public_ring))?;
     let private_consumer = open_private_event_consumer(Path::new(&args.private_ring))?;
 
-    let middleware = MiddlewareSequencer::new(command_producer);
+    let mut middleware = MiddlewareSequencer::new(command_producer);
+    if let Some(path) = &args.command_log {
+        middleware = middleware.with_command_log(Path::new(path))?;
+    }
     let (server, events) = start_gateway(&args.listen)?;
     let mut gateway = GatewayRuntime::with_replay_capacity(middleware, events, 4096);
     if let Some(token) = args.auth_token {
