@@ -7,6 +7,7 @@
 use crate::domain::orderbook::ContractSpec;
 use crate::exchange::combo::ComboQueue;
 use crate::exchange::combo_exec::{ComboExecError, ComboExecutor, ComboFill};
+use crate::exchange::margin::ComboMarginConfig;
 use crate::exchange::positions::{CloseKey, FrozenClose, PositionKey, Positions};
 use crate::exchange::protocol::{Hedge, Offset, Side};
 
@@ -83,6 +84,9 @@ pub struct ComboEngine {
     close_reservations: std::collections::HashMap<u64, (CloseKey, CloseKey, u64)>,
     max_open_qty_per_user: Option<u64>,
     open_qty_per_user: std::collections::HashMap<u64, u64>,
+    margin_config: Option<ComboMarginConfig>,
+    margin_balance: std::collections::HashMap<u64, u128>,
+    margin_reservations: std::collections::HashMap<u64, u128>,
 }
 
 impl ComboEngine {
@@ -100,7 +104,48 @@ impl ComboEngine {
             close_reservations: std::collections::HashMap::new(),
             max_open_qty_per_user: None,
             open_qty_per_user: std::collections::HashMap::new(),
+            margin_config: None,
+            margin_balance: std::collections::HashMap::new(),
+            margin_reservations: std::collections::HashMap::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_margin_config(mut self, config: ComboMarginConfig) -> Self {
+        self.margin_config = Some(config);
+        self
+    }
+
+    pub fn set_margin_balance(&mut self, user_id: u64, amount: u128) {
+        self.margin_balance.insert(user_id, amount);
+    }
+
+    #[must_use]
+    pub fn available_margin(&self, user_id: u64) -> u128 {
+        let balance = self.margin_balance.get(&user_id).copied().unwrap_or(0);
+        let reserved = self.margin_reservations.values().sum::<u128>();
+        balance.saturating_sub(reserved)
+    }
+
+    #[must_use]
+    pub fn reserved_margin(&self) -> u128 {
+        self.margin_reservations.values().sum()
+    }
+
+    fn reserve_margin(&mut self, order_id: u64, user_id: u64, spread: u64, qty: u64) -> bool {
+        let Some(config) = self.margin_config else {
+            return true;
+        };
+        let required = config.required(spread, qty);
+        if required > self.available_margin(user_id) {
+            return false;
+        }
+        self.margin_reservations.insert(order_id, required);
+        true
+    }
+
+    fn release_margin(&mut self, order_id: u64) {
+        self.margin_reservations.remove(&order_id);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -117,12 +162,17 @@ impl ComboEngine {
         if self.exceeds_limit(user_id, qty) {
             return false;
         }
+        if !self.reserve_margin(order_id, user_id, spread, qty) {
+            return false;
+        }
         if offset == Offset::Open {
             let accepted = self
                 .queue
                 .push(order_id, user_id, side, spread, qty, offset, hedge);
             if accepted {
                 self.add_open_qty(user_id, qty);
+            } else {
+                self.release_margin(order_id);
             }
             return accepted;
         }
@@ -137,6 +187,7 @@ impl ComboEngine {
             .reserve(leg1_key, &self.leg1_positions, qty)
             .is_err()
         {
+            self.release_margin(order_id);
             return false;
         }
         if self
@@ -145,6 +196,7 @@ impl ComboEngine {
             .is_err()
         {
             self.leg1_frozen.release(leg1_key, qty);
+            self.release_margin(order_id);
             return false;
         }
         if !self
@@ -153,6 +205,7 @@ impl ComboEngine {
         {
             self.leg1_frozen.release(leg1_key, qty);
             self.leg2_frozen.release(leg2_key, qty);
+            self.release_margin(order_id);
             return false;
         }
         self.close_reservations
@@ -175,6 +228,7 @@ impl ComboEngine {
             self.leg2_frozen.release(leg2, qty);
         }
         self.remove_open_qty(cancelled.user_id, cancelled.quantity);
+        self.release_margin(order_id);
         true
     }
 
@@ -203,6 +257,7 @@ impl ComboEngine {
             Ok(fill) => {
                 self.queue.cancel(order.order_id);
                 self.remove_open_qty(order.user_id, order.quantity);
+                self.release_margin(order.order_id);
                 let seq = self.next_event_seq;
                 self.next_event_seq += 1;
                 self.events.push(ComboFillEvent {
@@ -439,6 +494,26 @@ mod tests {
         assert_eq!(fill.quantity, 5);
         assert_eq!(engine.leg1_positions().get(leg1_key).total(), 0);
         assert_eq!(engine.leg2_positions().get(leg2_key).total(), 0);
+    }
+
+    #[test]
+    fn margin_check_rejects_and_releases() {
+        use crate::exchange::margin::ComboMarginConfig;
+        use crate::exchange::protocol::{Hedge, Offset};
+
+        let mut engine = ComboEngine::new(
+            ContractSpec::new("LEG1", 1, 1_000, 100_000),
+            ContractSpec::new("LEG2", 1, 1, 100_000),
+        )
+        .with_margin_config(ComboMarginConfig::new(10, 1_000));
+        engine.set_margin_balance(1, 4_999);
+        assert!(!engine.queue(10, 1, Side::Buy, 1_000, 5, Offset::Open, Hedge::Spec));
+        engine.set_margin_balance(1, 5_000);
+        assert!(engine.queue(10, 1, Side::Buy, 1_000, 5, Offset::Open, Hedge::Spec));
+        assert_eq!(engine.reserved_margin(), 5_000);
+        assert!(engine.cancel(10));
+        assert_eq!(engine.reserved_margin(), 0);
+        assert_eq!(engine.available_margin(1), 5_000);
     }
 
     #[test]
