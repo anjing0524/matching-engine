@@ -122,6 +122,7 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
     ///
     /// Returns `(gateway_events, commands_executed, private_events_sent)`.
     pub fn tick(&mut self) -> (usize, usize, usize) {
+        let tick_start = Instant::now();
         let gateway_events = self.gateway.poll();
         self.metrics.gateway_events += gateway_events as u64;
         for (connection_id, replay) in self.gateway.take_all_replays() {
@@ -176,6 +177,8 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             }
             self.last_expire = Instant::now();
         }
+        let elapsed_ns = u64::try_from(tick_start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.metrics.tick_latency.observe(elapsed_ns);
         if let Some(sink) = &self.metrics_sink
             && let Ok(mut snapshot) = sink.lock()
         {
@@ -816,6 +819,7 @@ mod tests {
         assert!(metrics.gateway_events > 0);
         assert_eq!(metrics.commands_executed, 1);
         assert_eq!(metrics.private_events_sent, 1);
+        assert!(metrics.tick_latency.count() > 0);
         let shared = *metrics_sink.lock().unwrap();
         assert_eq!(shared.commands_executed, 1);
         let _ = std::fs::remove_file(&path);

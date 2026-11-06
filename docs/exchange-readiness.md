@@ -56,7 +56,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
       repair, replay, and idle expiry
 - [x] Prometheus text rendering for those counters
 - [x] HTTP `/metrics` scrape endpoint
-- [ ] Latency histograms
+- [x] Tick latency histogram in Prometheus format
 - [ ] Structured audit log retention policy
 
 ## Performance
