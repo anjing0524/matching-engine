@@ -26,7 +26,8 @@ pub struct ComboFillEvent {
 pub enum ComboRejectReason {
     UserQuantityLimit,
     MarginInsufficient,
-    ClosePositionUnavailable,
+    Leg1CloseUnavailable,
+    Leg2CloseUnavailable,
     InvalidOrder,
 }
 
@@ -36,7 +37,8 @@ impl ComboRejectReason {
         match self {
             Self::UserQuantityLimit => "combo open quantity limit exceeded",
             Self::MarginInsufficient => "insufficient combo margin",
-            Self::ClosePositionUnavailable => "insufficient closeable leg position",
+            Self::Leg1CloseUnavailable => "insufficient closeable leg1 position",
+            Self::Leg2CloseUnavailable => "insufficient closeable leg2 position",
             Self::InvalidOrder => "invalid or duplicate combo order",
         }
     }
@@ -219,13 +221,22 @@ impl ComboEngine {
         };
         let leg1_key = CloseKey::new(PositionKey::new(user_id, leg1_position, hedge), offset);
         let leg2_key = CloseKey::new(PositionKey::new(user_id, leg2_position, hedge), offset);
+        if self.leg1_frozen.available(leg1_key, &self.leg1_positions) < qty {
+            self.release_margin(order_id);
+            return Err(ComboRejectReason::Leg1CloseUnavailable);
+        }
         if self
             .leg1_frozen
             .reserve(leg1_key, &self.leg1_positions, qty)
             .is_err()
         {
             self.release_margin(order_id);
-            return Err(ComboRejectReason::ClosePositionUnavailable);
+            return Err(ComboRejectReason::Leg1CloseUnavailable);
+        }
+        if self.leg2_frozen.available(leg2_key, &self.leg2_positions) < qty {
+            self.leg1_frozen.release(leg1_key, qty);
+            self.release_margin(order_id);
+            return Err(ComboRejectReason::Leg2CloseUnavailable);
         }
         if self
             .leg2_frozen
@@ -234,7 +245,7 @@ impl ComboEngine {
         {
             self.leg1_frozen.release(leg1_key, qty);
             self.release_margin(order_id);
-            return Err(ComboRejectReason::ClosePositionUnavailable);
+            return Err(ComboRejectReason::Leg2CloseUnavailable);
         }
         if !self
             .queue
@@ -551,7 +562,7 @@ mod tests {
         );
         assert_eq!(
             engine.queue_checked(1, 1, Side::Buy, 1_000, 1, Offset::CloseToday, Hedge::Spec),
-            Err(ComboRejectReason::ClosePositionUnavailable)
+            Err(ComboRejectReason::Leg1CloseUnavailable)
         );
     }
 

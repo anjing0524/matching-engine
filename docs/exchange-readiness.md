@@ -63,7 +63,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Replay-from-snapshot helper and deterministic test
 - [x] Replay runbook and `exchange-core --snapshot` restore entry point
 - [ ] Automated command-log segment management
-- [ ] Disk-full / mmap failure behavior for shared-memory and result logs
+- [x] Disk-full / mmap failure behavior documented; append errors fail fast
 
 ## Observability
 
@@ -73,7 +73,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Prometheus text rendering for those counters
 - [x] HTTP `/metrics` scrape endpoint
 - [x] Tick latency histogram in Prometheus format
-- [ ] Structured audit log retention policy
+- [x] Structured audit/result log retention policy documented
 
 ## Performance
 
@@ -95,4 +95,4 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] systemd unit templates and environment example
 - [x] Multi-stage Alpine Dockerfile; image built and smoke-run locally
 - [x] Core state snapshot/restore procedure and replay runbook
-- [ ] Rolling upgrade and compatibility policy
+- [x] Rolling restart policy documented (no mixed binary versions)
