@@ -113,7 +113,7 @@ impl GatewayRuntime {
                 auth_token,
             } => {
                 let token_ok = if let Some(credentials) = &self.credentials {
-                    credentials.verify(member_id, auth_token)
+                    credentials.verify_login(member_id, auth_token, seat_id)
                 } else {
                     self.auth_token
                         .is_none_or(|expected| expected == auth_token)
