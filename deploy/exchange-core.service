@@ -1,0 +1,26 @@
+[Unit]
+Description=Exchange core matching process
+After=network.target
+Wants=exchange-middleware.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=exchange
+Group=exchange
+EnvironmentFile=/etc/exchange/core.env
+ExecStart=/opt/exchange/bin/exchange-core
+Restart=on-failure
+RestartSec=2s
+LimitNOFILE=1048576
+LimitMEMLOCK=infinity
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/run/exchange /var/lib/exchange
+KillSignal=SIGTERM
+TimeoutStopSec=20s
+
+[Install]
+WantedBy=multi-user.target

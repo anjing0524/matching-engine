@@ -72,6 +72,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 
 - [x] Validated `ExchangeConfig` and multicast publisher example
 - [x] Production configuration notes
-- [ ] Service unit files / container images
+- [x] systemd unit templates and environment example
+- [ ] Container images
 - [ ] Core state snapshot/restore procedure
 - [ ] Rolling upgrade and compatibility policy
