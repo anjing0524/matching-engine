@@ -249,11 +249,15 @@ pub struct TickBasedOrderBook {
     best_bid_idx: Option<usize>,
     /// Lowest populated bid index, used to bound downward searches.
     bid_min_idx: Option<usize>,
+    /// Total resting bid quantity across all levels.
+    bid_quantity: u64,
 
     /// 最优卖价索引（缓存）
     best_ask_idx: Option<usize>,
     /// Highest populated ask index, used to bound upward searches.
     ask_max_idx: Option<usize>,
+    /// Total resting ask quantity across all levels.
+    ask_quantity: u64,
 
     /// 下一个订单ID
     next_order_id: u64,
@@ -285,8 +289,10 @@ impl TickBasedOrderBook {
             ask_bitmap: FastBitmap::new(num_levels),
             best_bid_idx: None,
             bid_min_idx: None,
+            bid_quantity: 0,
             best_ask_idx: None,
             ask_max_idx: None,
+            ask_quantity: 0,
             next_order_id: 1,
             spec,
             order_locations: OrderLocationMap::default(),
@@ -361,6 +367,7 @@ impl TickBasedOrderBook {
                 });
 
                 order.remaining_quantity -= trade_qty;
+                self.ask_quantity = self.ask_quantity.saturating_sub(trade_qty);
                 self.nodes[node_idx].quantity = counter_quantity - trade_qty;
                 if counter_quantity == trade_qty {
                     self.unlink_order(BookSide::Ask, idx, head);
@@ -428,6 +435,7 @@ impl TickBasedOrderBook {
                 });
 
                 order.remaining_quantity -= trade_qty;
+                self.bid_quantity = self.bid_quantity.saturating_sub(trade_qty);
                 self.nodes[node_idx].quantity = counter_quantity - trade_qty;
                 if counter_quantity == trade_qty {
                     self.unlink_order(BookSide::Bid, idx, head);
@@ -573,6 +581,10 @@ impl TickBasedOrderBook {
                 node_idx,
             },
         );
+        match side {
+            BookSide::Bid => self.bid_quantity = self.bid_quantity.saturating_add(quantity),
+            BookSide::Ask => self.ask_quantity = self.ask_quantity.saturating_add(quantity),
+        }
         self.mark_level(side, idx);
         true
     }
@@ -753,6 +765,11 @@ impl TickBasedOrderBook {
             ));
         }
 
+        let quantity = self.nodes[location.node_idx as usize].quantity;
+        match location.side {
+            BookSide::Bid => self.bid_quantity = self.bid_quantity.saturating_sub(quantity),
+            BookSide::Ask => self.ask_quantity = self.ask_quantity.saturating_sub(quantity),
+        }
         self.unlink_order(location.side, location.price_idx, location.node_idx);
         Ok(())
     }
@@ -817,6 +834,15 @@ impl TickBasedOrderBook {
     #[must_use]
     pub fn spec(&self) -> &ContractSpec {
         &self.spec
+    }
+
+    /// Total resting quantity on one side.
+    #[must_use]
+    pub fn side_quantity(&self, side: OrderType) -> u64 {
+        match side {
+            OrderType::Buy => self.bid_quantity,
+            OrderType::Sell => self.ask_quantity,
+        }
     }
 
     /// Exports all resting orders in level/FIFO order for a snapshot.
@@ -926,6 +952,14 @@ impl TickBasedOrderBook {
                 }
                 level.tail = node_idx;
                 level.len += 1;
+            }
+            match side {
+                BookSide::Bid => {
+                    book.bid_quantity = book.bid_quantity.saturating_add(order.quantity);
+                }
+                BookSide::Ask => {
+                    book.ask_quantity = book.ask_quantity.saturating_add(order.quantity);
+                }
             }
             book.order_locations.insert(
                 order.order_id,
@@ -1990,5 +2024,30 @@ mod tests {
         assert_eq!(book.best_ask(), Some(2_600));
         book.cancel_order(5, 1).unwrap();
         assert_eq!(book.best_ask(), None);
+    }
+    #[test]
+    fn side_quantity_tracks_resting_and_fills() {
+        let spec = ContractSpec::new("BTCUSDT", 1, 1_000, 10_000);
+        let mut book = TickBasedOrderBook::new(spec);
+        book.insert_resting_order(1, OrderType::Buy, 2_000, 5, 5, 1)
+            .unwrap();
+        book.insert_resting_order(2, OrderType::Sell, 2_500, 7, 7, 2)
+            .unwrap();
+        assert_eq!(book.side_quantity(OrderType::Buy), 5);
+        assert_eq!(book.side_quantity(OrderType::Sell), 7);
+
+        book.cancel_order(2, 2).unwrap();
+        assert_eq!(book.side_quantity(OrderType::Sell), 0);
+
+        let request = NewOrderRequest {
+            user_id: 3,
+            client_order_id: 9,
+            symbol: SymbolId::intern("BTCUSDT"),
+            order_type: OrderType::Sell,
+            price: 2_000,
+            quantity: 3,
+        };
+        let _ = book.match_order(request);
+        assert_eq!(book.side_quantity(OrderType::Buy), 2);
     }
 }

@@ -75,8 +75,9 @@ impl ComboExecutor {
             return Err(ComboExecError::SpreadNotSatisfied);
         }
         let available = self
-            .available_all(&self.leg1, OrderType::Sell)
-            .min(self.available_all(&self.leg2, OrderType::Buy));
+            .leg1
+            .side_quantity(OrderType::Sell)
+            .min(self.leg2.side_quantity(OrderType::Buy));
         if available < quantity {
             return Err(ComboExecError::MissingLiquidity);
         }
@@ -157,8 +158,9 @@ impl ComboExecutor {
             return Err(ComboExecError::SpreadNotSatisfied);
         }
         let available = self
-            .available_all(&self.leg1, OrderType::Buy)
-            .min(self.available_all(&self.leg2, OrderType::Sell));
+            .leg1
+            .side_quantity(OrderType::Buy)
+            .min(self.leg2.side_quantity(OrderType::Sell));
         if available < quantity {
             return Err(ComboExecError::MissingLiquidity);
         }
@@ -210,14 +212,6 @@ impl ComboExecutor {
             leg2_price: ask2,
             spread_ticks: spread,
         })
-    }
-
-    fn available_all(&self, book: &TickBasedOrderBook, side: OrderType) -> u64 {
-        book.snapshot_orders()
-            .into_iter()
-            .filter(|order| order.side == side)
-            .map(|order| order.quantity)
-            .sum()
     }
 
     fn restore(&mut self, leg1: LegSnapshot, leg2: LegSnapshot) {
