@@ -13,6 +13,7 @@ use crate::exchange::transport::{CommandProducer, CommandTransportError};
 /// Single-writer middleware command sequencer.
 pub struct MiddlewareSequencer {
     producer: CommandProducer,
+    combo_producer: Option<CommandProducer>,
     next_global_seq: u64,
     schedule: Option<ScheduleDriver>,
     sessions: SessionRegistry,
@@ -23,6 +24,7 @@ impl MiddlewareSequencer {
     pub fn new(producer: CommandProducer) -> Self {
         Self {
             producer,
+            combo_producer: None,
             next_global_seq: 1,
             schedule: None,
             sessions: SessionRegistry::new(),
@@ -64,6 +66,13 @@ impl MiddlewareSequencer {
         self.submit(command)
     }
 
+    /// Routes commands with `combo_id != 0` to a separate combo command ring.
+    #[must_use]
+    pub fn with_combo_transport(mut self, producer: CommandProducer) -> Self {
+        self.combo_producer = Some(producer);
+        self
+    }
+
     /// Attaches the trading schedule used to emit SessionControl commands.
     #[must_use]
     pub fn with_schedule(mut self, schedule: TradingSchedule) -> Self {
@@ -79,7 +88,12 @@ impl MiddlewareSequencer {
     pub fn submit(&mut self, mut command: Command) -> Result<u64, CommandTransportError> {
         let global_seq = self.next_global_seq;
         command.global_seq = global_seq;
-        self.producer.send(&command)?;
+        let producer = if command.combo_id != 0 {
+            self.combo_producer.as_ref().unwrap_or(&self.producer)
+        } else {
+            &self.producer
+        };
+        producer.send(&command)?;
         self.next_global_seq += 1;
         Ok(global_seq)
     }
@@ -243,6 +257,35 @@ mod tests {
         assert_eq!(runner.core().phase(), ExchangePhase::Continuous);
         assert_eq!(runner.core().trading_day(), 7);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn combo_commands_use_separate_ring() {
+        let core_path = temp_path("route-core");
+        let combo_path = temp_path("route-combo");
+        for path in [&core_path, &combo_path] {
+            let _ = std::fs::remove_file(path);
+        }
+        let (core_producer, core_consumer) = create(&core_path, 8).unwrap();
+        let (combo_producer, combo_consumer) = create(&combo_path, 8).unwrap();
+        let mut middleware =
+            MiddlewareSequencer::new(core_producer).with_combo_transport(combo_producer);
+
+        let mut normal = command(1, Side::Buy, 50_000, 1);
+        normal.session_id = 1;
+        middleware.submit(normal).unwrap();
+        let mut combo = command(2, Side::Buy, 49_900, 5);
+        combo.combo_id = 7;
+        middleware.submit(combo).unwrap();
+
+        let core = core_consumer.recv().unwrap().unwrap();
+        assert_eq!(core.combo_id, 0);
+        let combo = combo_consumer.recv().unwrap().unwrap();
+        assert_eq!(combo.combo_id, 7);
+        assert!(core_consumer.recv().is_none());
+        assert!(combo_consumer.recv().is_none());
+        let _ = std::fs::remove_file(&core_path);
+        let _ = std::fs::remove_file(&combo_path);
     }
 
     #[test]

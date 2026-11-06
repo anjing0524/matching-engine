@@ -8,11 +8,13 @@ use crate::exchange::combo_market_data::ComboMarketDataPublisher;
 use crate::exchange::gateway_runtime::GatewayRuntime;
 use crate::exchange::gateway_server::GatewayServerHandle;
 use crate::exchange::protocol::{Command, CommandType, Side};
+use crate::exchange::transport::CommandConsumer;
 
 /// Composite combo engine plus optional public transport.
 pub struct ComboRuntime {
     engine: ComboEngine,
     publisher: Option<ComboMarketDataPublisher>,
+    commands: Option<CommandConsumer>,
     public_sent: u64,
 }
 
@@ -22,6 +24,7 @@ impl ComboRuntime {
         Self {
             engine,
             publisher: None,
+            commands: None,
             public_sent: 0,
         }
     }
@@ -30,6 +33,27 @@ impl ComboRuntime {
     pub fn with_publisher(mut self, publisher: ComboMarketDataPublisher) -> Self {
         self.publisher = Some(publisher);
         self
+    }
+
+    #[must_use]
+    pub fn with_command_consumer(mut self, consumer: CommandConsumer) -> Self {
+        self.commands = Some(consumer);
+        self
+    }
+
+    /// Drains combo commands from the middleware combo ring.
+    pub fn poll_commands(&mut self) -> usize {
+        let Some(consumer) = self.commands.take() else {
+            return 0;
+        };
+        let mut executed = 0;
+        while let Some(Ok(command)) = consumer.recv() {
+            if self.submit_command(&command) {
+                executed += 1;
+            }
+        }
+        self.commands = Some(consumer);
+        executed
     }
 
     /// Routes one gateway command into this combo engine.
@@ -137,6 +161,35 @@ mod tests {
     use crate::exchange::combo_market_data::ComboMarketDataSubscriber;
     use crate::exchange::protocol::{Hedge, Offset, Side};
     use crate::shared::protocol::OrderType;
+
+    #[test]
+    fn combo_command_ring_reaches_engine() {
+        use crate::exchange::transport::create;
+
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-combo-commands-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 8).unwrap();
+        let engine = ComboEngine::new(
+            ContractSpec::new("LEG1", 1, 1_000, 100_000),
+            ContractSpec::new("LEG2", 1, 1, 100_000),
+        );
+        let mut runtime = ComboRuntime::new(engine).with_command_consumer(consumer);
+        let mut command = Command::zeroed();
+        command.command_type = CommandType::NewOrder;
+        command.combo_id = 7;
+        command.client_order_id = 42;
+        command.user_id = 1;
+        command.side = Side::Buy;
+        command.price_ticks = 49_900;
+        command.quantity = 5;
+        producer.send(&command).unwrap();
+        assert_eq!(runtime.poll_commands(), 1);
+        assert_eq!(runtime.engine().queue_len(), 1);
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn combo_command_routes_into_engine() {

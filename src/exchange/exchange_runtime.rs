@@ -138,6 +138,7 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             }
         }
         if let Some(combo) = &mut self.combo {
+            combo.poll_commands();
             let _ = combo.tick_with_gateway(&self.gateway, &self.server);
         }
         if let Some(server) = &self.repair_server {
