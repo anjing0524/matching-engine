@@ -131,7 +131,7 @@ impl GatewayRuntime {
                     last_private_seq,
                     active: true,
                 };
-                if !self.middleware.open_session(info) {
+                if self.middleware.open_or_takeover(info).is_err() {
                     self.errors += 1;
                     return;
                 }
@@ -377,6 +377,66 @@ mod tests {
         let replay = buffer.replay(2, 0);
         assert_eq!(replay.len(), 1);
         assert_eq!(replay[0].seq, 2);
+    }
+
+    #[test]
+    fn second_gateway_login_takes_over() {
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-gateway-takeover-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let mut runtime = GatewayRuntime::new(middleware, events);
+        let mut first = TcpStream::connect(addr).unwrap();
+        first
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                    auth_token: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.middleware_mut().session(1).is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let mut second = TcpStream::connect(addr).unwrap();
+        second
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                    auth_token: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.middleware_mut().session(2).is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(!runtime.middleware_mut().session(1).unwrap().active);
+        assert!(runtime.middleware_mut().session(2).unwrap().active);
+        server.stop();
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

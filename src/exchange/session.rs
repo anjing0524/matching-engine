@@ -39,6 +39,36 @@ impl SessionRegistry {
         true
     }
 
+    /// Opens a new session for the same member/user/seat and closes the old one.
+    ///
+    /// Returns the replaced session id, or `None` when no active session matched.
+    ///
+    /// # Errors
+    /// Returns `false` for a zero or duplicate session id.
+    pub fn open_or_takeover(&mut self, info: SessionInfo) -> Result<Option<u64>, ()> {
+        if info.session_id == 0 || self.sessions.contains_key(&info.session_id) {
+            return Err(());
+        }
+        let replaced = self
+            .sessions
+            .values()
+            .find(|session| {
+                session.active
+                    && session.member_id == info.member_id
+                    && session.user_id == info.user_id
+                    && session.seat_id == info.seat_id
+                    && session.session_id != info.session_id
+            })
+            .map(|session| session.session_id);
+        if let Some(old) = replaced
+            && let Some(session) = self.sessions.get_mut(&old)
+        {
+            session.active = false;
+        }
+        self.sessions.insert(info.session_id, info);
+        Ok(replaced)
+    }
+
     /// Marks a session closed; the record is retained for audit/reconnect.
     pub fn close(&mut self, session_id: u64) -> bool {
         let Some(session) = self.sessions.get_mut(&session_id) else {
@@ -126,6 +156,18 @@ mod tests {
         assert!(registry.acknowledge_private(1, 5));
         assert!(!registry.acknowledge_private(1, 4));
         assert_eq!(registry.get(1).unwrap().last_private_seq, 5);
+    }
+
+    #[test]
+    fn new_login_takes_over_same_member_session() {
+        let mut registry = SessionRegistry::new();
+        registry.open(session(1));
+        let mut replacement = session(2);
+        replacement.gateway_id = 2;
+        assert_eq!(registry.open_or_takeover(replacement), Ok(Some(1)));
+        assert!(!registry.get(1).unwrap().active);
+        assert!(registry.get(2).unwrap().active);
+        assert_eq!(registry.active_count(), 1);
     }
 
     #[test]

@@ -39,6 +39,10 @@ impl MiddlewareSequencer {
         self.sessions.close(session_id)
     }
 
+    pub fn open_or_takeover(&mut self, info: SessionInfo) -> Result<Option<u64>, ()> {
+        self.sessions.open_or_takeover(info)
+    }
+
     #[must_use]
     pub fn session(&self, session_id: u64) -> Option<SessionInfo> {
         self.sessions.get(session_id)

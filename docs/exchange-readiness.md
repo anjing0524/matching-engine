@@ -29,7 +29,8 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Per-member token credentials
 - [x] Seat permissions from the per-member credential registry
 - [x] Per-connection command rate limiting
-- [ ] Multiple active gateways and cross-gateway session takeover policy
+- [x] Same member/user/seat login takes over the previous session
+- [ ] Explicit multi-gateway failover and session drain policy
 - [x] Split core/middleware binaries over shared-memory rings
 - [x] Standalone gateway TCP relay to middleware
 
