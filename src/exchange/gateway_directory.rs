@@ -1,6 +1,6 @@
 //! Gateway endpoint directory and TCP health probes for client redirection.
 
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -73,6 +73,7 @@ fn probe(endpoint: SocketAddr, timeout: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
 
     #[test]
     fn round_robins_and_probes() {
