@@ -4,6 +4,7 @@
 //! core command consumer, then routes core private events back to the matching
 //! gateway session.
 
+use crate::exchange::combo_runtime::ComboRuntime;
 use crate::exchange::config::ExchangeConfig;
 use crate::exchange::core::ExchangeCore;
 use crate::exchange::gateway_runtime::GatewayRuntime;
@@ -22,6 +23,7 @@ pub struct ExchangeRuntime<P> {
     idle_timeout: Option<Duration>,
     last_expire: Instant,
     market_data: Option<MarketDataPublisher>,
+    combo: Option<ComboRuntime>,
     repair_buffer: Option<RepairBuffer>,
     repair_server: Option<RepairServer>,
     public_sent: u64,
@@ -38,6 +40,7 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             idle_timeout: None,
             last_expire: Instant::now(),
             market_data: None,
+            combo: None,
             repair_buffer: None,
             repair_server: None,
             public_sent: 0,
@@ -54,6 +57,16 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
     #[must_use]
     pub fn repair_sent(&self) -> u64 {
         self.repair_sent
+    }
+
+    #[must_use]
+    pub fn with_combo_runtime(mut self, combo: ComboRuntime) -> Self {
+        self.combo = Some(combo);
+        self
+    }
+
+    pub fn combo_mut(&mut self) -> Option<&mut ComboRuntime> {
+        self.combo.as_mut()
     }
 
     #[must_use]
@@ -123,6 +136,9 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
                     self.public_sent += 1;
                 }
             }
+        }
+        if let Some(combo) = &mut self.combo {
+            let _ = combo.tick_with_gateway(&self.gateway, &self.server);
         }
         if let Some(server) = &self.repair_server {
             self.repair_sent += server.poll_once().unwrap_or(0) as u64;
@@ -200,6 +216,57 @@ mod tests {
             trigger_type: TriggerType::None,
             cancel_order_id: 0,
         }
+    }
+
+    #[test]
+    fn combo_runtime_tick_is_driven_by_exchange_runtime() {
+        use crate::exchange::combo_engine::ComboEngine;
+        use crate::exchange::combo_market_data::{
+            ComboMarketDataPublisher, ComboMarketDataSubscriber,
+        };
+        use crate::exchange::combo_runtime::ComboRuntime;
+        use crate::exchange::protocol::{Hedge, Offset, Side};
+        use crate::shared::protocol::OrderType;
+
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-exchange-runtime-combo-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let gateway = GatewayRuntime::new(middleware, events);
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let runner = CoreRunner::new(core, consumer, NoPlugins);
+
+        let mut engine = ComboEngine::new(
+            ContractSpec::new("LEG1", 1, 1_000, 100_000),
+            ContractSpec::new("LEG2", 1, 1, 100_000),
+        );
+        engine
+            .executor_mut()
+            .leg1
+            .insert_resting_order(2, OrderType::Sell, 50_000, 5, 5, 1)
+            .unwrap();
+        engine
+            .executor_mut()
+            .leg2
+            .insert_resting_order(3, OrderType::Buy, 100, 5, 5, 2)
+            .unwrap();
+        assert!(engine.queue(10, 1, Side::Buy, 49_900, 5, Offset::Open, Hedge::Spec));
+        assert!(engine.try_execute_best(Side::Buy).unwrap().is_ok());
+        let subscriber = ComboMarketDataSubscriber::bind("127.0.0.1:0").unwrap();
+        let publisher =
+            ComboMarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap())
+                .unwrap();
+        let combo = ComboRuntime::new(engine).with_publisher(publisher);
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_combo_runtime(combo);
+        runtime.tick();
+        let fill = subscriber.recv().unwrap();
+        assert_eq!(fill.quantity, 5);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
