@@ -8,7 +8,7 @@ use crate::exchange::combo_market_data::ComboMarketDataPublisher;
 use crate::exchange::gateway_runtime::GatewayRuntime;
 use crate::exchange::gateway_server::GatewayServerHandle;
 use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
-use crate::exchange::protocol::{Command, CommandType, Side};
+use crate::exchange::protocol::{Command, CommandType};
 use crate::exchange::transport::CommandConsumer;
 
 /// Composite combo engine plus optional public transport.
@@ -189,6 +189,7 @@ mod tests {
     use super::*;
     use crate::domain::orderbook::ContractSpec;
     use crate::exchange::combo_market_data::ComboMarketDataSubscriber;
+    use crate::exchange::protocol::Side;
     use crate::exchange::protocol::{Hedge, Offset, Side};
     use crate::shared::protocol::OrderType;
 
