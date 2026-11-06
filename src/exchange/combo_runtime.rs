@@ -7,6 +7,7 @@ use crate::exchange::combo_engine::ComboEngine;
 use crate::exchange::combo_market_data::ComboMarketDataPublisher;
 use crate::exchange::gateway_runtime::GatewayRuntime;
 use crate::exchange::gateway_server::GatewayServerHandle;
+use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
 use crate::exchange::protocol::{Command, CommandType, Side};
 use crate::exchange::transport::CommandConsumer;
 
@@ -15,6 +16,8 @@ pub struct ComboRuntime {
     engine: ComboEngine,
     publisher: Option<ComboMarketDataPublisher>,
     commands: Option<CommandConsumer>,
+    command_events: Vec<PrivateEvent>,
+    next_private_seq: u64,
     public_sent: u64,
 }
 
@@ -25,6 +28,8 @@ impl ComboRuntime {
             engine,
             publisher: None,
             commands: None,
+            command_events: Vec::new(),
+            next_private_seq: 1,
             public_sent: 0,
         }
     }
@@ -65,24 +70,25 @@ impl ComboRuntime {
         if command.combo_id == 0 {
             return false;
         }
-        match command.command_type {
+        let accepted = match command.command_type {
             CommandType::NewOrder => {
                 if command.price_ticks < 0 {
-                    return false;
+                    false
+                } else {
+                    let side = match command.side {
+                        Side::Buy => Side::Buy,
+                        Side::Sell => Side::Sell,
+                    };
+                    self.engine.queue(
+                        command.client_order_id.max(1),
+                        u64::from(command.user_id),
+                        side,
+                        command.price_ticks as u64,
+                        command.quantity,
+                        command.offset,
+                        command.hedge,
+                    )
                 }
-                let side = match command.side {
-                    crate::exchange::protocol::Side::Buy => Side::Buy,
-                    crate::exchange::protocol::Side::Sell => Side::Sell,
-                };
-                self.engine.queue(
-                    command.client_order_id.max(1),
-                    u64::from(command.user_id),
-                    side,
-                    command.price_ticks as u64,
-                    command.quantity,
-                    command.offset,
-                    command.hedge,
-                )
             }
             CommandType::Cancel => {
                 let order_id = if command.cancel_order_id == 0 {
@@ -93,7 +99,33 @@ impl ComboRuntime {
                 self.engine.cancel(order_id)
             }
             _ => false,
-        }
+        };
+        let (status, remaining) = match (command.command_type, accepted) {
+            (CommandType::NewOrder, true) => (PrivateStatus::Accepted, command.quantity),
+            (CommandType::NewOrder, false) => (PrivateStatus::Rejected, 0),
+            (CommandType::Cancel, true) => (PrivateStatus::Canceled, 0),
+            (CommandType::Cancel, false) => (PrivateStatus::Rejected, 0),
+            _ => return false,
+        };
+        let seq = self.next_private_seq;
+        self.next_private_seq += 1;
+        self.command_events.push(PrivateEvent {
+            seq,
+            order_id: command.client_order_id.max(1),
+            client_order_id: command.client_order_id,
+            account_id: u64::from(command.user_id),
+            status,
+            filled_delta: 0,
+            remaining,
+            reason: matches!(status, PrivateStatus::Rejected)
+                .then(|| "combo command rejected".to_string()),
+        });
+        accepted
+    }
+
+    /// Drains private command-status events.
+    pub fn drain_command_events(&mut self) -> Vec<PrivateEvent> {
+        std::mem::take(&mut self.command_events)
     }
 
     /// Publishes fill events produced since the last tick.
@@ -117,9 +149,11 @@ impl ComboRuntime {
     /// Returns `(public_sent, private_sent)`.
     pub fn tick_with_gateway(
         &mut self,
-        gateway: &GatewayRuntime,
+        gateway: &mut GatewayRuntime,
         server: &GatewayServerHandle,
     ) -> (usize, usize) {
+        let command_events = self.drain_command_events();
+        let _ = gateway.dispatch_private(server, command_events);
         let events = self.engine.drain_events();
         let mut public = 0;
         if let Some(publisher) = &self.publisher {
@@ -161,6 +195,35 @@ mod tests {
     use crate::exchange::combo_market_data::ComboMarketDataSubscriber;
     use crate::exchange::protocol::{Hedge, Offset, Side};
     use crate::shared::protocol::OrderType;
+
+    #[test]
+    fn combo_command_emits_private_status() {
+        use crate::exchange::private_events::PrivateStatus;
+        use crate::exchange::protocol::{Command, CommandType};
+
+        let engine = ComboEngine::new(
+            ContractSpec::new("LEG1", 1, 1_000, 100_000),
+            ContractSpec::new("LEG2", 1, 1, 100_000),
+        );
+        let mut runtime = ComboRuntime::new(engine);
+        let mut command = Command::zeroed();
+        command.command_type = CommandType::NewOrder;
+        command.combo_id = 7;
+        command.client_order_id = 42;
+        command.user_id = 1;
+        command.side = Side::Buy;
+        command.price_ticks = 49_900;
+        command.quantity = 5;
+        assert!(runtime.submit_command(&command));
+        let events = runtime.drain_command_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status, PrivateStatus::Accepted);
+        assert_eq!(events[0].remaining, 5);
+
+        assert!(!runtime.submit_command(&command));
+        let rejected = runtime.drain_command_events();
+        assert_eq!(rejected[0].status, PrivateStatus::Rejected);
+    }
 
     #[test]
     fn combo_command_ring_reaches_engine() {
