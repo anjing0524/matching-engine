@@ -95,9 +95,28 @@ fn multi_gateway_tcp_fanout() {
     let elapsed = start_time.elapsed();
     let rate = total as f64 / elapsed.as_secs_f64();
     println!("{total} gateway orders in {elapsed:?} ({rate:.0} order/s)");
-    for _ in 0..total {
-        subscriber.recv().unwrap();
+
+    // UDP is lossy; consume with a deadline and require a high delivery ratio
+    // instead of asserting every datagram arrives.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut received = 0u64;
+    while received < total && Instant::now() < deadline {
+        match subscriber.recv() {
+            Ok(_) => received += 1,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("UDP receive failed: {error}"),
+        }
     }
+    println!("public packets received: {received}/{total}");
+    assert!(
+        received * 10 >= total * 9,
+        "public delivery below 90%: {received}/{total}"
+    );
     drop(streams);
     let _ = std::fs::remove_file(&path);
 }
