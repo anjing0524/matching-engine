@@ -9,10 +9,22 @@ use crate::exchange::combo::ComboQueue;
 use crate::exchange::combo_exec::{ComboExecError, ComboExecutor, ComboFill};
 use crate::exchange::protocol::Side;
 
+/// One completed combination fill, suitable for private/public projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComboFillEvent {
+    pub seq: u64,
+    pub order_id: u64,
+    pub user_id: u64,
+    pub side: Side,
+    pub fill: ComboFill,
+}
+
 /// Combines the combo queue with the two-leg executor.
 pub struct ComboEngine {
     queue: ComboQueue,
     executor: ComboExecutor,
+    next_event_seq: u64,
+    events: Vec<ComboFillEvent>,
 }
 
 impl ComboEngine {
@@ -21,6 +33,8 @@ impl ComboEngine {
         Self {
             queue: ComboQueue::new(),
             executor: ComboExecutor::new(leg1_spec, leg2_spec),
+            next_event_seq: 1,
+            events: Vec::new(),
         }
     }
 
@@ -51,6 +65,15 @@ impl ComboEngine {
         match result {
             Ok(fill) => {
                 self.queue.cancel(order.order_id);
+                let seq = self.next_event_seq;
+                self.next_event_seq += 1;
+                self.events.push(ComboFillEvent {
+                    seq,
+                    order_id: order.order_id,
+                    user_id: order.user_id,
+                    side,
+                    fill,
+                });
                 Some(Ok(fill))
             }
             Err(error) => Some(Err(error)),
@@ -73,6 +96,15 @@ impl ComboEngine {
             }
         }
         fills
+    }
+
+    pub fn drain_events(&mut self) -> Vec<ComboFillEvent> {
+        std::mem::take(&mut self.events)
+    }
+
+    #[must_use]
+    pub fn events(&self) -> &[ComboFillEvent] {
+        &self.events
     }
 
     #[must_use]
@@ -120,6 +152,11 @@ mod tests {
         let fill = engine.try_execute_best(Side::Buy).unwrap().unwrap();
         assert_eq!(fill.quantity, 5);
         assert_eq!(engine.queue_len(), 0);
+        let events = engine.drain_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].order_id, 10);
+        assert_eq!(events[0].side, Side::Buy);
+        assert_eq!(events[0].fill.quantity, 5);
     }
 
     #[test]
