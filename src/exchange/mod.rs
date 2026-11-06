@@ -14,6 +14,7 @@ pub mod gateway;
 pub mod gateway_runtime;
 pub mod gateway_server;
 pub mod market_data;
+pub mod market_data_tracker;
 pub mod middleware;
 pub mod plugins;
 pub mod positions;
