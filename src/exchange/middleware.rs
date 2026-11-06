@@ -5,13 +5,15 @@
 //! assign `global_seq`, append the fixed 256-byte command to the shared ring,
 //! and let the core runner consume it.
 
-use crate::exchange::protocol::Command;
+use crate::exchange::protocol::{Command, CommandType};
+use crate::exchange::schedule::{ScheduleDriver, TradingSchedule};
 use crate::exchange::transport::{CommandProducer, CommandTransportError};
 
 /// Single-writer middleware command sequencer.
 pub struct MiddlewareSequencer {
     producer: CommandProducer,
     next_global_seq: u64,
+    schedule: Option<ScheduleDriver>,
 }
 
 impl MiddlewareSequencer {
@@ -20,7 +22,15 @@ impl MiddlewareSequencer {
         Self {
             producer,
             next_global_seq: 1,
+            schedule: None,
         }
+    }
+
+    /// Attaches the trading schedule used to emit SessionControl commands.
+    #[must_use]
+    pub fn with_schedule(mut self, schedule: TradingSchedule) -> Self {
+        self.schedule = Some(ScheduleDriver::new(schedule));
+        self
     }
 
     /// Assigns the next global sequence and appends the command.
@@ -34,6 +44,34 @@ impl MiddlewareSequencer {
         self.producer.send(&command)?;
         self.next_global_seq += 1;
         Ok(global_seq)
+    }
+
+    /// Emits a TimeTick and, when the schedule changes phase, a SessionControl.
+    ///
+    /// Returns the global sequences of every command written.
+    pub fn submit_time_tick(
+        &mut self,
+        exchange_ts_ns: u64,
+    ) -> Result<Vec<u64>, CommandTransportError> {
+        let mut tick = Command::zeroed();
+        tick.command_type = CommandType::TimeTick;
+        tick.exchange_ts_ns = exchange_ts_ns;
+        tick.ingress_ts_ns = exchange_ts_ns;
+        let mut sequences = vec![self.submit(tick)?];
+
+        let transition = self
+            .schedule
+            .as_mut()
+            .and_then(|driver| driver.observe(exchange_ts_ns));
+        if let Some((phase, trading_day)) = transition {
+            let mut control = Command::zeroed();
+            control.command_type = CommandType::Control;
+            control.exchange_ts_ns = exchange_ts_ns;
+            control.flags = phase.code();
+            control.quantity = u64::from(trading_day);
+            sequences.push(self.submit(control)?);
+        }
+        Ok(sequences)
     }
 
     #[must_use]
@@ -96,6 +134,36 @@ mod tests {
             trigger_type: TriggerType::None,
             cancel_order_id: 0,
         }
+    }
+
+    #[test]
+    fn time_tick_emits_control_on_phase_change() {
+        use crate::exchange::public_events::ExchangePhase;
+        use crate::exchange::schedule::{SessionWindow, TradingSchedule};
+
+        let path = temp_path("schedule");
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 8).unwrap();
+        let schedule = TradingSchedule::new(vec![SessionWindow {
+            phase: ExchangePhase::Continuous,
+            start_ns: 100,
+            end_ns: 200,
+            trading_day: 7,
+        }])
+        .unwrap();
+        let mut middleware = MiddlewareSequencer::new(producer).with_schedule(schedule);
+
+        assert_eq!(middleware.submit_time_tick(100).unwrap(), vec![1, 2]);
+        assert_eq!(middleware.submit_time_tick(150).unwrap(), vec![3]);
+        assert_eq!(middleware.next_global_seq(), 4);
+
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let mut runner = CoreRunner::new(core, consumer, NoPlugins);
+        assert_eq!(runner.poll(), 3);
+        assert_eq!(runner.core().phase(), ExchangePhase::Continuous);
+        assert_eq!(runner.core().trading_day(), 7);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

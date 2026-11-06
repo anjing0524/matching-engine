@@ -273,6 +273,43 @@ pub struct Command {
 }
 
 impl Command {
+    /// Returns a zero-valued command skeleton for control/time messages.
+    #[must_use]
+    pub fn zeroed() -> Self {
+        Self {
+            global_seq: 0,
+            gateway_seq: 0,
+            ingress_ts_ns: 0,
+            exchange_ts_ns: 0,
+            client_order_id: 0,
+            session_id: 0,
+            gateway_id: 0,
+            member_id: 0,
+            user_id: 0,
+            seat_id: 0,
+            instrument_id: 0,
+            combo_id: 0,
+            session_epoch: 0,
+            command_type: CommandType::TimeTick,
+            price_type: PriceType::Limit,
+            time_condition: TimeCondition::Gfd,
+            volume_condition: VolumeCondition::Any,
+            side: Side::Buy,
+            offset: Offset::Open,
+            hedge: Hedge::Spec,
+            flags: 0,
+            leg2_ratio: 0,
+            price_ticks: 0,
+            quantity: 0,
+            trigger_price_ticks: 0,
+            leg2_instrument_id: 0,
+            leg2_offset: Offset::Open,
+            leg2_hedge: Hedge::Spec,
+            trigger_type: TriggerType::None,
+            cancel_order_id: 0,
+        }
+    }
+
     /// Encodes the command into its fixed 256-byte slot.
     #[must_use]
     pub fn encode(&self) -> [u8; COMMAND_SLOT_SIZE] {
