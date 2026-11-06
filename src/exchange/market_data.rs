@@ -4,7 +4,7 @@
 //! used for unicast repair and multicast distribution; this slice provides the
 //! UDP endpoints and packet codec, not the NACK/retransmit loop.
 
-use crate::exchange::public_events::{PublicEvent, PublicEventType};
+use crate::exchange::public_events::PublicEvent;
 use crate::exchange::transport::{
     PUBLIC_EVENT_SLOT_SIZE, decode_public_event, encode_public_event,
 };
@@ -98,6 +98,7 @@ impl MarketDataSubscriber {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exchange::public_events::PublicEventType;
 
     fn event() -> PublicEvent {
         PublicEvent {
