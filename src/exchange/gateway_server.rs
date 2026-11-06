@@ -64,6 +64,15 @@ impl GatewayServerHandle {
         self.send(connection_id, GatewayFrame::PrivateEvent(event.clone()))
     }
 
+    /// Closes one gateway connection and removes it from the write map.
+    pub fn close(&self, connection_id: u64) {
+        if let Ok(mut connections) = self.connections.lock()
+            && let Some(stream) = connections.remove(&connection_id)
+        {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+    }
+
     pub fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
         if let Some(join) = self.join.take() {

@@ -8,12 +8,15 @@ use crate::exchange::gateway::GatewayFrame;
 use crate::exchange::gateway_server::{GatewayEvent, GatewayServerHandle};
 use crate::exchange::middleware::MiddlewareSequencer;
 use crate::exchange::session::SessionInfo;
+use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
 
 /// Drains gateway events and applies them to middleware.
 pub struct GatewayRuntime {
     middleware: MiddlewareSequencer,
     events: Receiver<GatewayEvent>,
+    last_seen: HashMap<u64, Instant>,
     errors: u64,
 }
 
@@ -23,6 +26,7 @@ impl GatewayRuntime {
         Self {
             middleware,
             events,
+            last_seen: HashMap::new(),
             errors: 0,
         }
     }
@@ -38,10 +42,12 @@ impl GatewayRuntime {
                     frame,
                 } => {
                     processed += 1;
+                    self.last_seen.insert(connection_id, Instant::now());
                     self.handle_frame(connection_id, frame);
                 }
                 GatewayEvent::Closed { connection_id } => {
                     processed += 1;
+                    self.last_seen.remove(&connection_id);
                     self.middleware.close_session(connection_id);
                 }
             }
@@ -82,6 +88,25 @@ impl GatewayRuntime {
             }
             GatewayFrame::Heartbeat { .. } | GatewayFrame::PrivateEvent(_) => {}
         }
+    }
+
+    /// Closes sessions idle for at least `timeout`.
+    ///
+    /// Returns the connection ids that were expired. The caller should also
+    /// close the corresponding TCP connection.
+    pub fn expire_idle(&mut self, timeout: Duration) -> Vec<u64> {
+        let now = Instant::now();
+        let expired: Vec<u64> = self
+            .last_seen
+            .iter()
+            .filter(|(_, seen)| now.duration_since(**seen) >= timeout)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &expired {
+            self.last_seen.remove(id);
+            self.middleware.close_session(*id);
+        }
+        expired
     }
 
     /// Routes private events to the session whose user matches the account.
@@ -159,6 +184,45 @@ mod tests {
             trigger_type: TriggerType::None,
             cancel_order_id: 0,
         }
+    }
+
+    #[test]
+    fn idle_session_expires() {
+        use std::time::Duration;
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-gateway-idle-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let mut runtime = GatewayRuntime::new(middleware, events);
+        let mut stream = TcpStream::connect(server.addr()).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.middleware_mut().session_by_user(2).is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(runtime.expire_idle(Duration::from_millis(1)), vec![1]);
+        assert!(runtime.middleware_mut().session_by_user(2).is_none());
+        server.stop();
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
