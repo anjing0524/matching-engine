@@ -77,6 +77,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Combo queue/cancel/atomic-fill benchmark
 - [x] 1M command core soak and combo queue/fill soak
 - [x] Nightly soak workflow and reproducible soak script
+- [x] First manual soak run green (core, combo, TCP/UDP)
 - [ ] Multi-hour soak on target hardware
 - [ ] End-to-end TCP+multicast load test with many gateways
 
