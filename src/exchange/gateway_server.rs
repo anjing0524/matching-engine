@@ -5,6 +5,7 @@
 //! layered above this event stream; this slice only owns the accept/read loop.
 
 use crate::exchange::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
+use crate::exchange::private_events::PrivateEvent;
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -53,6 +54,14 @@ impl GatewayServerHandle {
             .get_mut(&connection_id)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "gateway not connected"))?;
         stream.write_all(&frame.encode())
+    }
+
+    /// Sends one private order event to a gateway connection.
+    ///
+    /// # Errors
+    /// Returns an I/O error when the connection is unknown or the write fails.
+    pub fn send_private(&self, connection_id: u64, event: &PrivateEvent) -> io::Result<()> {
+        self.send(connection_id, GatewayFrame::PrivateEvent(event.clone()))
     }
 
     pub fn stop(&mut self) {
