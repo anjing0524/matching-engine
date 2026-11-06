@@ -23,6 +23,9 @@ struct Args {
     private_ring: String,
     #[arg(long, default_value = "BTCUSDT")]
     instrument: String,
+    /// Optional versioned core snapshot to restore before consuming commands.
+    #[arg(long)]
+    snapshot: Option<String>,
     #[arg(long, default_value_t = 0)]
     iterations: u64,
 }
@@ -32,8 +35,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let consumer = open_command_consumer(Path::new(&args.command_ring))?;
     let public = open_public_event_producer(Path::new(&args.public_ring))?;
     let private = open_private_event_producer(Path::new(&args.private_ring))?;
-    let spec = ContractSpec::new(&args.instrument, 1, 1, 1_000_000);
-    let core = ExchangeCore::new(spec, SymbolId::intern(&args.instrument));
+    let core = if let Some(snapshot_path) = &args.snapshot {
+        let snapshot = ExchangeCore::load_snapshot(Path::new(snapshot_path))?;
+        let mut core = ExchangeCore::new(snapshot.spec.clone(), snapshot.symbol);
+        core.restore_snapshot(snapshot)?;
+        core
+    } else {
+        let spec = ContractSpec::new(&args.instrument, 1, 1, 1_000_000);
+        ExchangeCore::new(spec, SymbolId::intern(&args.instrument))
+    };
     let mut runner =
         CoreRunner::new(core, consumer, NoPlugins).with_event_transports(public, private);
 
