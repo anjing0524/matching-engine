@@ -8,8 +8,9 @@ These are **templates**, not a complete packaging story.
   binaries. They share command/public/private ring files created by middleware:
   core opens the command consumer and event producers, middleware opens the
   event consumers.
-- `exchange-gateway` remains a future binary; the current gateway TCP listener
-  runs inside `exchange-middleware`.
+- `exchange-gateway` is a TCP relay: it accepts member frames and forwards them
+  to the middleware gateway listener. Authentication and rate limiting still
+  belong in a future gateway layer.
 - `deploy/Dockerfile` builds a single-process runtime image; the compose example
   exposes 8000/tcp (gateway) and 9100/tcp (metrics).
 
