@@ -17,7 +17,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
   - secondary source checked; FOK/FAK rejected in auction
   - official CZCE PDF still needs confirmation
 - [x] Pending-open-order exposure projection and limit plugin
-- [ ] Combo close reservation split by yesterday/today reason codes
+- [x] Combo close rejection split by leg and today/yesterday
 
 ## Gateway / sessions
 

@@ -26,9 +26,25 @@ pub struct ComboFillEvent {
 pub enum ComboRejectReason {
     UserQuantityLimit,
     MarginInsufficient,
-    Leg1CloseUnavailable,
-    Leg2CloseUnavailable,
+    Leg1CloseTodayUnavailable,
+    Leg1CloseYesterdayUnavailable,
+    Leg2CloseTodayUnavailable,
+    Leg2CloseYesterdayUnavailable,
     InvalidOrder,
+}
+
+fn leg1_close_reason(offset: Offset) -> ComboRejectReason {
+    match offset {
+        Offset::Close => ComboRejectReason::Leg1CloseYesterdayUnavailable,
+        Offset::CloseToday | Offset::Open => ComboRejectReason::Leg1CloseTodayUnavailable,
+    }
+}
+
+fn leg2_close_reason(offset: Offset) -> ComboRejectReason {
+    match offset {
+        Offset::Close => ComboRejectReason::Leg2CloseYesterdayUnavailable,
+        Offset::CloseToday | Offset::Open => ComboRejectReason::Leg2CloseTodayUnavailable,
+    }
 }
 
 impl ComboRejectReason {
@@ -37,8 +53,10 @@ impl ComboRejectReason {
         match self {
             Self::UserQuantityLimit => "combo open quantity limit exceeded",
             Self::MarginInsufficient => "insufficient combo margin",
-            Self::Leg1CloseUnavailable => "insufficient closeable leg1 position",
-            Self::Leg2CloseUnavailable => "insufficient closeable leg2 position",
+            Self::Leg1CloseTodayUnavailable => "insufficient closeable leg1 today position",
+            Self::Leg1CloseYesterdayUnavailable => "insufficient closeable leg1 yesterday position",
+            Self::Leg2CloseTodayUnavailable => "insufficient closeable leg2 today position",
+            Self::Leg2CloseYesterdayUnavailable => "insufficient closeable leg2 yesterday position",
             Self::InvalidOrder => "invalid or duplicate combo order",
         }
     }
@@ -223,7 +241,7 @@ impl ComboEngine {
         let leg2_key = CloseKey::new(PositionKey::new(user_id, leg2_position, hedge), offset);
         if self.leg1_frozen.available(leg1_key, &self.leg1_positions) < qty {
             self.release_margin(order_id);
-            return Err(ComboRejectReason::Leg1CloseUnavailable);
+            return Err(leg1_close_reason(offset));
         }
         if self
             .leg1_frozen
@@ -231,12 +249,12 @@ impl ComboEngine {
             .is_err()
         {
             self.release_margin(order_id);
-            return Err(ComboRejectReason::Leg1CloseUnavailable);
+            return Err(leg1_close_reason(offset));
         }
         if self.leg2_frozen.available(leg2_key, &self.leg2_positions) < qty {
             self.leg1_frozen.release(leg1_key, qty);
             self.release_margin(order_id);
-            return Err(ComboRejectReason::Leg2CloseUnavailable);
+            return Err(leg2_close_reason(offset));
         }
         if self
             .leg2_frozen
@@ -245,7 +263,7 @@ impl ComboEngine {
         {
             self.leg1_frozen.release(leg1_key, qty);
             self.release_margin(order_id);
-            return Err(ComboRejectReason::Leg2CloseUnavailable);
+            return Err(leg2_close_reason(offset));
         }
         if !self
             .queue
@@ -562,7 +580,30 @@ mod tests {
         );
         assert_eq!(
             engine.queue_checked(1, 1, Side::Buy, 1_000, 1, Offset::CloseToday, Hedge::Spec),
-            Err(ComboRejectReason::Leg1CloseUnavailable)
+            Err(ComboRejectReason::Leg1CloseTodayUnavailable)
+        );
+    }
+
+    #[test]
+    fn close_reason_distinguishes_leg_and_day() {
+        use crate::exchange::positions::PositionKey;
+        use crate::exchange::protocol::{Hedge, Offset};
+
+        let mut engine = ComboEngine::new(
+            ContractSpec::new("LEG1", 1, 1_000, 100_000),
+            ContractSpec::new("LEG2", 1, 1, 100_000),
+        );
+        assert_eq!(
+            engine.queue_checked(1, 1, Side::Buy, 1_000, 1, Offset::Close, Hedge::Spec),
+            Err(ComboRejectReason::Leg1CloseYesterdayUnavailable)
+        );
+        engine
+            .leg1_positions_mut()
+            .apply_open(PositionKey::new(1, Side::Sell, Hedge::Spec), 5)
+            .unwrap();
+        assert_eq!(
+            engine.queue_checked(2, 1, Side::Buy, 1_000, 1, Offset::CloseToday, Hedge::Spec),
+            Err(ComboRejectReason::Leg2CloseTodayUnavailable)
         );
     }
 
