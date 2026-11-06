@@ -35,10 +35,15 @@ The current implementation also provides versioned JSON persistence:
 - `save_snapshot(path)` writes a temporary file and renames it atomically
 - `load_snapshot(path)` rejects unknown versions
 
+Implemented corruption detection:
+
+- CRC32 over the canonical snapshot payload
+- checksum stored in the version envelope
+- mismatches are rejected on both JSON restore and file load
+
 Still required for production:
 
-1. checksum and corruption detection
-2. snapshot cadence and command-log segment pinning
+1. snapshot cadence and command-log segment pinning
 3. replay from snapshot to the last sequenced command
 4. startup validation before middleware admits new commands
 

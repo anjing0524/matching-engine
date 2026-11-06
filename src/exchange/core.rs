@@ -126,6 +126,7 @@ pub struct CoreSnapshot {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SnapshotEnvelope {
     version: u32,
+    checksum: u32,
     snapshot: CoreSnapshot,
 }
 
@@ -240,9 +241,13 @@ impl ExchangeCore {
     /// # Errors
     /// Returns a JSON error if serialization fails.
     pub fn snapshot_json(&self) -> Result<String, serde_json::Error> {
+        let snapshot = self.snapshot();
+        let payload = serde_json::to_vec(&snapshot)?;
+        let checksum = crc32fast::hash(&payload);
         serde_json::to_string(&SnapshotEnvelope {
             version: SNAPSHOT_VERSION,
-            snapshot: self.snapshot(),
+            checksum,
+            snapshot,
         })
     }
 
@@ -255,6 +260,10 @@ impl ExchangeCore {
             serde_json::from_str(json).map_err(|error| error.to_string())?;
         if envelope.version != SNAPSHOT_VERSION {
             return Err(format!("unsupported snapshot version {}", envelope.version));
+        }
+        let payload = serde_json::to_vec(&envelope.snapshot).map_err(|error| error.to_string())?;
+        if crc32fast::hash(&payload) != envelope.checksum {
+            return Err("snapshot checksum mismatch".to_string());
         }
         self.restore_snapshot(envelope.snapshot)
     }
@@ -284,6 +293,14 @@ impl ExchangeCore {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unsupported snapshot version {}", envelope.version),
+            ));
+        }
+        let payload = serde_json::to_vec(&envelope.snapshot)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if crc32fast::hash(&payload) != envelope.checksum {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "snapshot checksum mismatch",
             ));
         }
         Ok(envelope.snapshot)
@@ -1898,6 +1915,16 @@ mod tests {
         state.save_snapshot(&path).unwrap();
         let loaded = ExchangeCore::load_snapshot(&path).unwrap();
         assert_eq!(loaded, expected);
+
+        let mut tampered: serde_json::Value = serde_json::from_str(&json).unwrap();
+        tampered["checksum"] = serde_json::Value::from(0);
+        let mut target = core();
+        assert!(
+            target
+                .restore_snapshot_json(&tampered.to_string())
+                .unwrap_err()
+                .contains("checksum")
+        );
         let _ = std::fs::remove_file(&path);
     }
 }
