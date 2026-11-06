@@ -7,6 +7,8 @@ These are **templates**, not a complete packaging story.
 - `exchange-core.service`, `exchange-middleware.service`, and
   `exchange-gateway.service` are for the future split-process deployment; the
   repository does not yet provide those three binaries.
+- `deploy/Dockerfile` builds a single-process runtime image; the compose example
+  exposes 8000/tcp (gateway) and 9100/tcp (metrics).
 
 ## Install
 

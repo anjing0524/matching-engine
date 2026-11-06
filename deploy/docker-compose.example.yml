@@ -1,0 +1,17 @@
+services:
+  exchange:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: exchange-runtime:local
+    ports:
+      - "8000:8000"
+      - "9100:9100"
+    environment:
+      EXCHANGE_GATEWAY_IDLE_TIMEOUT: "30"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: on-failure
