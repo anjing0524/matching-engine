@@ -52,7 +52,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Append-only public/private result logs with slot/version checks
 - [x] Size-based result-log rotation with bounded retention
 - [x] Per-server NACK rate limiting
-- [ ] Multicast interface failover
+- [x] Multicast interface fallback list (startup bind)
 
 ## Failure semantics
 

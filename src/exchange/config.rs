@@ -16,6 +16,8 @@ pub struct ExchangeConfig {
     pub multicast_group: Option<String>,
     pub multicast_port: Option<u16>,
     pub multicast_interface: Option<String>,
+    /// Additional interfaces tried in order if the primary cannot be used.
+    pub multicast_interfaces: Vec<String>,
 }
 
 impl Default for ExchangeConfig {
@@ -27,6 +29,7 @@ impl Default for ExchangeConfig {
             multicast_group: None,
             multicast_port: None,
             multicast_interface: None,
+            multicast_interfaces: Vec::new(),
         }
     }
 }
@@ -39,12 +42,30 @@ impl ExchangeConfig {
     pub fn multicast_publisher(&self, local: &str) -> io::Result<Option<MarketDataPublisher>> {
         self.validate()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-        match (&self.multicast_group, self.multicast_port) {
-            (Some(group), Some(port)) => Ok(Some(MarketDataPublisher::bind_multicast(
-                local, group, port,
-            )?)),
-            _ => Ok(None),
+        let (Some(group), Some(port)) = (&self.multicast_group, self.multicast_port) else {
+            return Ok(None);
+        };
+        let mut candidates = Vec::new();
+        if let Some(interface) = &self.multicast_interface {
+            candidates.push(interface.clone());
         }
+        candidates.extend(self.multicast_interfaces.iter().cloned());
+        if candidates.is_empty() {
+            candidates.push("127.0.0.1".to_string());
+        }
+        let mut last_error = None;
+        for interface in candidates {
+            let interface = interface
+                .parse::<std::net::Ipv4Addr>()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+            match MarketDataPublisher::bind_multicast_on(local, group, port, interface) {
+                Ok(publisher) => return Ok(Some(publisher)),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "no multicast interface")
+        }))
     }
 
     /// Validates cross-field constraints.
@@ -62,6 +83,13 @@ impl ExchangeConfig {
             && interface.parse::<std::net::Ipv4Addr>().is_err()
         {
             return Err("multicast_interface must be an IPv4 address");
+        }
+        if self
+            .multicast_interfaces
+            .iter()
+            .any(|interface| interface.parse::<std::net::Ipv4Addr>().is_err())
+        {
+            return Err("multicast_interfaces must contain IPv4 addresses");
         }
         match (&self.multicast_group, self.multicast_port) {
             (Some(group), Some(_)) => {
@@ -89,6 +117,15 @@ mod tests {
     fn incomplete_multicast_is_rejected() {
         let config = ExchangeConfig {
             multicast_group: Some("239.1.1.1".to_string()),
+            ..ExchangeConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn invalid_multicast_interface_list_is_rejected() {
+        let config = ExchangeConfig {
+            multicast_interfaces: vec!["not-an-ip".to_string()],
             ..ExchangeConfig::default()
         };
         assert!(config.validate().is_err());
@@ -126,6 +163,18 @@ mod tests {
             ..ExchangeConfig::default()
         };
         assert!(config.multicast_publisher("127.0.0.1:0").unwrap().is_some());
+    }
+
+    #[test]
+    fn multicast_publisher_uses_fallback_interfaces() {
+        let config = ExchangeConfig {
+            multicast_group: Some("239.1.1.1".to_string()),
+            multicast_port: Some(5000),
+            multicast_interface: Some("203.0.113.1".to_string()),
+            multicast_interfaces: vec!["127.0.0.1".to_string()],
+            ..ExchangeConfig::default()
+        };
+        assert!(config.multicast_publisher("0.0.0.0:0").unwrap().is_some());
     }
 
     #[test]

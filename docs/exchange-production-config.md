@@ -9,7 +9,8 @@
 | `idle_timeout` | 30s | gateway session timeout |
 | `multicast_group` | none | public market-data group |
 | `multicast_port` | none | public market-data UDP port |
-| `multicast_interface` | none (loopback in tests) | NIC used for outgoing multicast |
+| `multicast_interface` | none (loopback in tests) | primary NIC used for outgoing multicast |
+| `multicast_interfaces` | empty | fallback NICs tried in order if the primary fails |
 
 ## Example
 

@@ -11,6 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         multicast_group: Some("239.10.20.30".to_string()),
         multicast_port: Some(40_000),
         multicast_interface: Some("127.0.0.1".to_string()),
+        multicast_interfaces: vec!["127.0.0.1".to_string()],
     };
     config.validate()?;
     let publisher = config.multicast_publisher("0.0.0.0:0")?;
