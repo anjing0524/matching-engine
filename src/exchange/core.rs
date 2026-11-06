@@ -1125,7 +1125,7 @@ mod tests {
     fn unsupported_wire_command_is_rejected() {
         let mut core = core();
         let mut command = wire_command(Side::Buy, 50_000, 5);
-        command.command_type = CommandType::TimeTick;
+        command.price_type = PriceType::AdvancedMarket;
         let events = core.execute(command);
         assert!(matches!(events.as_slice(), [CoreEvent::Rejected { .. }]));
     }
