@@ -25,6 +25,8 @@ pub struct PublicEvent {
     pub instrument_id: u32,
     pub order_id: u64,
     pub trade_id: u64,
+    pub buy_order_id: u64,
+    pub sell_order_id: u64,
     pub side: Option<Side>,
     pub price_ticks: u64,
     pub quantity: u64,

@@ -23,7 +23,7 @@ use crate::exchange::protocol::{
 use crate::exchange::public_events::{PublicEvent, PublicEventType};
 use crate::shared::SymbolId;
 use crate::shared::protocol::{NewOrderRequest, OrderType};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A new limit order submitted to the core.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +92,7 @@ pub struct OrderMeta {
     pub side: Side,
     pub offset: Offset,
     pub hedge: Hedge,
+    pub price_ticks: u64,
     pub remaining: u64,
     pub status: OrderStatus,
 }
@@ -111,6 +112,7 @@ pub struct ExchangeCore {
     auction_order_seq: u64,
     public_seq: u64,
     public_events: Vec<PublicEvent>,
+    public_orders: HashSet<u64>,
 }
 
 impl ExchangeCore {
@@ -130,6 +132,7 @@ impl ExchangeCore {
             auction_order_seq: 1,
             public_seq: 1,
             public_events: Vec::new(),
+            public_orders: HashSet::new(),
         }
     }
 
@@ -228,6 +231,8 @@ impl ExchangeCore {
             instrument_id: 0,
             order_id: 0,
             trade_id: 0,
+            buy_order_id: 0,
+            sell_order_id: 0,
             side: None,
             price_ticks,
             quantity: 0,
@@ -341,6 +346,7 @@ impl ExchangeCore {
                         side: order.side,
                         offset: order.offset,
                         hedge: order.hedge,
+                        price_ticks: order.price_ticks,
                         remaining: order.quantity,
                         status: OrderStatus::Accepted,
                     },
@@ -412,7 +418,7 @@ impl ExchangeCore {
     pub fn cancel(&mut self, command: CancelCommand) -> CoreEvent {
         match self.book.cancel_order(command.order_id, command.user_id) {
             Ok(()) => {
-                if let Some(meta) = self.orders.get_mut(&command.order_id) {
+                if let Some(mut meta) = self.orders.remove(&command.order_id) {
                     if meta.offset != Offset::Open {
                         let key = CloseKey::new(
                             PositionKey::new(meta.account_id, meta.side.opposite(), meta.hedge),
@@ -420,8 +426,11 @@ impl ExchangeCore {
                         );
                         self.frozen_close.release(key, meta.remaining);
                     }
+                    let canceled_quantity = meta.remaining;
                     let client_order_id = meta.client_order_id;
                     let account_id = meta.account_id;
+                    let price_ticks = meta.price_ticks;
+                    let side = meta.side;
                     meta.remaining = 0;
                     meta.status = OrderStatus::Canceled;
                     self.push_private(
@@ -433,6 +442,24 @@ impl ExchangeCore {
                         0,
                         None,
                     );
+                    if self.public_orders.remove(&command.order_id) {
+                        self.push_public_event(PublicEvent {
+                            seq: 0,
+                            event_type: PublicEventType::OrderCanceled,
+                            exchange_ts_ns: 0,
+                            phase: 0,
+                            instrument_id: 0,
+                            order_id: command.order_id,
+                            trade_id: 0,
+                            buy_order_id: 0,
+                            sell_order_id: 0,
+                            side: Some(side),
+                            price_ticks,
+                            quantity: canceled_quantity,
+                            volume: 0,
+                        });
+                    }
+                    self.orders.insert(command.order_id, meta);
                 }
                 CoreEvent::Canceled {
                     order_id: command.order_id,
@@ -556,6 +583,7 @@ impl ExchangeCore {
                     side: command.side,
                     offset: command.offset,
                     hedge: command.hedge,
+                    price_ticks: command.price_ticks as u64,
                     remaining: command.quantity,
                     status: OrderStatus::Accepted,
                 },
@@ -652,17 +680,22 @@ impl ExchangeCore {
                 instrument_id: command.instrument_id,
                 order_id,
                 trade_id: 0,
+                buy_order_id: 0,
+                sell_order_id: 0,
                 side: Some(command.side),
                 price_ticks: command.price_ticks as u64,
                 quantity: remaining_quantity,
                 volume: 0,
             });
+            self.public_orders.insert(order_id);
         }
         for event in &events {
             if let CoreEvent::Trade {
                 price_ticks,
                 quantity,
                 trade_id,
+                buyer_order_id,
+                seller_order_id,
                 ..
             } = event
             {
@@ -674,6 +707,8 @@ impl ExchangeCore {
                     instrument_id: command.instrument_id,
                     order_id: 0,
                     trade_id: *trade_id,
+                    buy_order_id: *buyer_order_id,
+                    sell_order_id: *seller_order_id,
                     side: Some(command.side),
                     price_ticks: *price_ticks,
                     quantity: *quantity,
@@ -1366,6 +1401,34 @@ mod tests {
         assert_eq!(public[0].event_type, PublicEventType::Trade);
         assert_eq!(public[0].quantity, 5);
         assert_eq!(public[0].price_ticks, 50_000);
+        assert_eq!(public[0].event_type, PublicEventType::Trade);
+        assert_ne!(public[0].buy_order_id, 0);
+        assert_ne!(public[0].sell_order_id, 0);
+    }
+
+    #[test]
+    fn public_order_canceled_is_emitted_for_rested_orders() {
+        use crate::exchange::plugins::AvailableClosePlugin;
+        use crate::exchange::protocol::Offset;
+
+        let mut core = core();
+        let mut buy = wire_command(Side::Buy, 50_000, 5);
+        buy.offset = Offset::Open;
+        let events = core.execute_with_plugins(buy, &AvailableClosePlugin);
+        let order_id = match events[0] {
+            CoreEvent::Accepted { order_id, .. } => order_id,
+            _ => panic!("expected accepted"),
+        };
+        core.drain_public_events();
+        core.cancel(CancelCommand {
+            user_id: 1,
+            order_id,
+        });
+        let public = core.drain_public_events();
+        assert_eq!(public.len(), 1);
+        assert_eq!(public[0].event_type, PublicEventType::OrderCanceled);
+        assert_eq!(public[0].order_id, order_id);
+        assert_eq!(public[0].quantity, 5);
     }
 
     #[test]
