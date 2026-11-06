@@ -74,8 +74,8 @@ impl ComboExecutor {
             return Err(ComboExecError::SpreadNotSatisfied);
         }
         let available = self
-            .available_at(&self.leg1, ask1, OrderType::Sell)
-            .min(self.available_at(&self.leg2, bid2, OrderType::Buy));
+            .available_all(&self.leg1, OrderType::Sell)
+            .min(self.available_all(&self.leg2, OrderType::Buy));
         if available < quantity {
             return Err(ComboExecError::MissingLiquidity);
         }
@@ -89,14 +89,14 @@ impl ComboExecutor {
             next_order_id: self.leg2.next_order_id(),
         };
 
-        let filled1 = sweep(
+        let (filled1, prices1) = sweep(
             &mut self.leg1,
             OrderType::Buy,
             self.leg1_spec.max_price,
             quantity,
             1,
         );
-        let filled2 = sweep(
+        let (filled2, prices2) = sweep(
             &mut self.leg2,
             OrderType::Sell,
             self.leg2_spec.min_price,
@@ -106,6 +106,22 @@ impl ComboExecutor {
         if filled1 != quantity || filled2 != quantity {
             self.restore(snapshot1, snapshot2);
             return Err(ComboExecError::LegUnderfilled);
+        }
+        let worst_leg1 = prices1
+            .iter()
+            .map(|(price, _)| *price)
+            .max()
+            .unwrap_or(ask1);
+        let worst_leg2 = prices2
+            .iter()
+            .map(|(price, _)| *price)
+            .min()
+            .unwrap_or(bid2);
+        let realized = i64::try_from(worst_leg1).unwrap_or(i64::MAX)
+            - i64::try_from(worst_leg2).unwrap_or(i64::MAX);
+        if realized > i64::try_from(spread_limit_ticks).unwrap_or(i64::MAX) {
+            self.restore(snapshot1, snapshot2);
+            return Err(ComboExecError::SpreadNotSatisfied);
         }
 
         Ok(ComboFill {
@@ -140,8 +156,8 @@ impl ComboExecutor {
             return Err(ComboExecError::SpreadNotSatisfied);
         }
         let available = self
-            .available_at(&self.leg1, bid1, OrderType::Buy)
-            .min(self.available_at(&self.leg2, ask2, OrderType::Sell));
+            .available_all(&self.leg1, OrderType::Buy)
+            .min(self.available_all(&self.leg2, OrderType::Sell));
         if available < quantity {
             return Err(ComboExecError::MissingLiquidity);
         }
@@ -153,14 +169,14 @@ impl ComboExecutor {
             orders: self.leg2.snapshot_orders(),
             next_order_id: self.leg2.next_order_id(),
         };
-        let filled1 = sweep(
+        let (filled1, prices1) = sweep(
             &mut self.leg1,
             OrderType::Sell,
             self.leg1_spec.min_price,
             quantity,
             1,
         );
-        let filled2 = sweep(
+        let (filled2, prices2) = sweep(
             &mut self.leg2,
             OrderType::Buy,
             self.leg2_spec.max_price,
@@ -171,6 +187,22 @@ impl ComboExecutor {
             self.restore(snapshot1, snapshot2);
             return Err(ComboExecError::LegUnderfilled);
         }
+        let worst_leg1 = prices1
+            .iter()
+            .map(|(price, _)| *price)
+            .min()
+            .unwrap_or(bid1);
+        let worst_leg2 = prices2
+            .iter()
+            .map(|(price, _)| *price)
+            .max()
+            .unwrap_or(ask2);
+        let realized = i64::try_from(worst_leg1).unwrap_or(i64::MIN)
+            - i64::try_from(worst_leg2).unwrap_or(i64::MAX);
+        if realized < i64::try_from(spread_limit_ticks).unwrap_or(i64::MIN) {
+            self.restore(snapshot1, snapshot2);
+            return Err(ComboExecError::SpreadNotSatisfied);
+        }
         Ok(ComboFill {
             quantity,
             leg1_price: bid1,
@@ -179,10 +211,10 @@ impl ComboExecutor {
         })
     }
 
-    fn available_at(&self, book: &TickBasedOrderBook, price: u64, side: OrderType) -> u64 {
+    fn available_all(&self, book: &TickBasedOrderBook, side: OrderType) -> u64 {
         book.snapshot_orders()
             .into_iter()
-            .filter(|order| order.price == price && order.side == side)
+            .filter(|order| order.side == side)
             .map(|order| order.quantity)
             .sum()
     }
@@ -207,7 +239,7 @@ fn sweep(
     price: u64,
     quantity: u64,
     user_id: u64,
-) -> u64 {
+) -> (u64, Vec<(u64, u64)>) {
     let request = NewOrderRequest {
         user_id,
         client_order_id: 0,
@@ -217,7 +249,12 @@ fn sweep(
         quantity,
     };
     let (trades, _) = book.match_order(request).into_parts();
-    trades.iter().map(|trade| trade.matched_quantity).sum()
+    let total = trades.iter().map(|trade| trade.matched_quantity).sum();
+    let prices = trades
+        .iter()
+        .map(|trade| (trade.matched_price, trade.matched_quantity))
+        .collect();
+    (total, prices)
 }
 
 #[cfg(test)]
@@ -282,6 +319,29 @@ mod tests {
         assert_eq!(fill.leg1_price, 50_000);
         assert_eq!(fill.leg2_price, 100);
         assert_eq!(fill.spread_ticks, 49_900);
+        assert_eq!(executor.leg1.best_ask(), None);
+        assert_eq!(executor.leg2.best_bid(), None);
+    }
+
+    #[test]
+    fn sweeps_multiple_leg_levels() {
+        let leg1 = ContractSpec::new("LEG1", 1, 1_000, 100_000);
+        let leg2 = ContractSpec::new("LEG2", 1, 1, 100_000);
+        let mut executor = ComboExecutor::new(leg1, leg2);
+        executor
+            .leg1
+            .insert_resting_order(2, OrderType::Sell, 50_000, 1, 1, 1)
+            .unwrap();
+        executor
+            .leg1
+            .insert_resting_order(2, OrderType::Sell, 50_010, 4, 4, 2)
+            .unwrap();
+        executor
+            .leg2
+            .insert_resting_order(3, OrderType::Buy, 100, 5, 5, 3)
+            .unwrap();
+        let fill = executor.execute_buy(49_910, 5).unwrap();
+        assert_eq!(fill.quantity, 5);
         assert_eq!(executor.leg1.best_ask(), None);
         assert_eq!(executor.leg2.best_bid(), None);
     }
