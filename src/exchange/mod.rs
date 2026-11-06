@@ -7,6 +7,7 @@
 pub mod auction;
 pub mod combo;
 pub mod core;
+pub mod middleware;
 pub mod plugins;
 pub mod positions;
 pub mod private_events;
