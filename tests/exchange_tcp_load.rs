@@ -57,6 +57,18 @@ fn multi_gateway_tcp_fanout() {
     let subscriber = MarketDataSubscriber::bind("127.0.0.1:0").unwrap();
     let publisher =
         MarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap()).unwrap();
+    let (received_tx, received_rx) = std::sync::mpsc::channel();
+    let total_expected = 8u64 * 500u64;
+    let drain_thread = std::thread::spawn(move || {
+        let mut received = 0u64;
+        while received < total_expected {
+            match subscriber.recv() {
+                Ok(_) => received += 1,
+                Err(_) => break,
+            }
+        }
+        let _ = received_tx.send(received);
+    });
     let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_market_data(publisher);
 
     let clients = 8u64;
@@ -96,22 +108,12 @@ fn multi_gateway_tcp_fanout() {
     let rate = total as f64 / elapsed.as_secs_f64();
     println!("{total} gateway orders in {elapsed:?} ({rate:.0} order/s)");
 
-    // UDP is lossy; consume with a deadline and require a high delivery ratio
-    // instead of asserting every datagram arrives.
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut received = 0u64;
-    while received < total && Instant::now() < deadline {
-        match subscriber.recv() {
-            Ok(_) => received += 1,
-            Err(error)
-                if error.kind() == std::io::ErrorKind::WouldBlock
-                    || error.kind() == std::io::ErrorKind::TimedOut =>
-            {
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            Err(error) => panic!("UDP receive failed: {error}"),
-        }
-    }
+    // The consumer thread drains concurrently; UDP is still best-effort, so
+    // require a high-but-not-perfect delivery ratio on shared CI runners.
+    let received = received_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or(0);
+    let _ = drain_thread.join();
     println!("public packets received: {received}/{total}");
     assert!(
         received * 10 >= total * 9,
