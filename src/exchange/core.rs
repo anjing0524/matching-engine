@@ -117,6 +117,8 @@ pub struct ExchangeCore {
     combo_queues: HashMap<u32, ComboQueue>,
     phase: ExchangePhase,
     trading_day: u32,
+    last_tick_seq: u64,
+    last_exchange_ts_ns: u64,
 }
 
 impl ExchangeCore {
@@ -140,6 +142,8 @@ impl ExchangeCore {
             combo_queues: HashMap::new(),
             phase: ExchangePhase::Continuous,
             trading_day: 1,
+            last_tick_seq: 0,
+            last_exchange_ts_ns: 0,
         }
     }
 
@@ -271,6 +275,16 @@ impl ExchangeCore {
     #[must_use]
     pub fn trading_day(&self) -> u32 {
         self.trading_day
+    }
+
+    #[must_use]
+    pub fn last_tick_seq(&self) -> u64 {
+        self.last_tick_seq
+    }
+
+    #[must_use]
+    pub fn last_exchange_ts_ns(&self) -> u64 {
+        self.last_exchange_ts_ns
     }
 
     /// Switches the trading phase and emits a public SessionSwitch event.
@@ -875,6 +889,32 @@ impl ExchangeCore {
     /// commands are rejected explicitly instead of being silently ignored.
     pub fn execute(&mut self, command: Command) -> Vec<CoreEvent> {
         match command.command_type {
+            CommandType::TimeTick => {
+                self.last_tick_seq = command.global_seq;
+                self.last_exchange_ts_ns = command.exchange_ts_ns;
+                self.push_public_event(PublicEvent {
+                    seq: 0,
+                    event_type: PublicEventType::TimeTick,
+                    exchange_ts_ns: command.exchange_ts_ns,
+                    phase: self.phase.code(),
+                    instrument_id: 0,
+                    order_id: 0,
+                    trade_id: 0,
+                    buy_order_id: 0,
+                    sell_order_id: 0,
+                    side: None,
+                    price_ticks: 0,
+                    quantity: 0,
+                    volume: 0,
+                });
+                Vec::new()
+            }
+            CommandType::Control => {
+                if let Some(phase) = ExchangePhase::from_code(command.flags) {
+                    self.set_phase(phase, command.quantity as u32);
+                }
+                Vec::new()
+            }
             CommandType::NewOrder if command.price_type == PriceType::Limit => {
                 if command.price_ticks < 0 || command.quantity == 0 {
                     return vec![CoreEvent::Rejected {
@@ -1548,6 +1588,37 @@ mod tests {
         buy.offset = Offset::Open;
         let events = core.execute_with_plugins(buy, &AvailableClosePlugin);
         assert!(matches!(events.as_slice(), [CoreEvent::Rejected { .. }]));
+    }
+
+    #[test]
+    fn time_tick_advances_public_time() {
+        let mut core = core();
+        let mut command = wire_command(Side::Buy, 50_000, 1);
+        command.command_type = CommandType::TimeTick;
+        command.global_seq = 42;
+        command.exchange_ts_ns = 123;
+        let events = core.execute(command);
+        assert!(events.is_empty());
+        assert_eq!(core.last_tick_seq(), 42);
+        assert_eq!(core.last_exchange_ts_ns(), 123);
+        let public = core.drain_public_events();
+        assert_eq!(public.len(), 1);
+        assert_eq!(public[0].event_type, PublicEventType::TimeTick);
+        assert_eq!(public[0].exchange_ts_ns, 123);
+    }
+
+    #[test]
+    fn control_command_switches_phase() {
+        let mut core = core();
+        let mut command = wire_command(Side::Buy, 50_000, 1);
+        command.command_type = CommandType::Control;
+        command.flags = ExchangePhase::Break.code();
+        command.quantity = 3;
+        core.execute(command);
+        assert_eq!(core.phase(), ExchangePhase::Break);
+        assert_eq!(core.trading_day(), 3);
+        let public = core.drain_public_events();
+        assert_eq!(public[0].event_type, PublicEventType::SessionSwitch);
     }
 
     #[test]

@@ -8,6 +8,7 @@ use crate::exchange::protocol::Side;
 /// Public event kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublicEventType {
+    TimeTick,
     OrderRested,
     OrderCanceled,
     Trade,
@@ -26,6 +27,18 @@ pub enum ExchangePhase {
 }
 
 impl ExchangePhase {
+    #[must_use]
+    pub const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::Closed),
+            1 => Some(Self::PreOpen),
+            2 => Some(Self::OpeningAuction),
+            3 => Some(Self::Continuous),
+            4 => Some(Self::Break),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub const fn code(self) -> u8 {
         match self {
