@@ -55,7 +55,8 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Runtime counters for gateway events, commands, private/public sends,
       repair, replay, and idle expiry
 - [x] Prometheus text rendering for those counters
-- [ ] HTTP scrape endpoint and latency histograms
+- [x] HTTP `/metrics` scrape endpoint
+- [ ] Latency histograms
 - [ ] Structured audit log retention policy
 
 ## Performance

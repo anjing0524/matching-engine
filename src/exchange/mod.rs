@@ -20,6 +20,7 @@ pub mod margin;
 pub mod market_data;
 pub mod market_data_tracker;
 pub mod metrics;
+pub mod metrics_server;
 pub mod middleware;
 pub mod plugins;
 pub mod positions;

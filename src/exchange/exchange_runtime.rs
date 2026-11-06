@@ -14,6 +14,7 @@ use crate::exchange::metrics::ExchangeMetrics;
 use crate::exchange::plugins::PreTradePlugin;
 use crate::exchange::repair::{NackRequest, RepairBuffer, RepairServer};
 use crate::exchange::runner::CoreRunner;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Composite gateway/middleware/core runtime for one process.
@@ -30,6 +31,7 @@ pub struct ExchangeRuntime<P> {
     public_sent: u64,
     repair_sent: u64,
     metrics: ExchangeMetrics,
+    metrics_sink: Option<Arc<Mutex<ExchangeMetrics>>>,
 }
 
 impl<P: PreTradePlugin> ExchangeRuntime<P> {
@@ -48,6 +50,7 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             public_sent: 0,
             repair_sent: 0,
             metrics: ExchangeMetrics::new(),
+            metrics_sink: None,
         }
     }
 
@@ -100,6 +103,12 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
     pub fn with_config(mut self, config: ExchangeConfig) -> Self {
         self.idle_timeout = config.idle_timeout;
         self.repair_buffer = Some(RepairBuffer::new(config.repair_buffer_capacity));
+        self
+    }
+
+    #[must_use]
+    pub fn with_metrics_sink(mut self, sink: Arc<Mutex<ExchangeMetrics>>) -> Self {
+        self.metrics_sink = Some(sink);
         self
     }
 
@@ -166,6 +175,11 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
                 self.metrics.idle_sessions_expired += 1;
             }
             self.last_expire = Instant::now();
+        }
+        if let Some(sink) = &self.metrics_sink
+            && let Ok(mut snapshot) = sink.lock()
+        {
+            *snapshot = self.metrics;
         }
         (gateway_events, commands, sent)
     }
@@ -757,7 +771,9 @@ mod tests {
         let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
         let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
         let runner = CoreRunner::new(core, consumer, NoPlugins);
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server);
+        let metrics_sink = Arc::new(Mutex::new(ExchangeMetrics::new()));
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server)
+            .with_metrics_sink(Arc::clone(&metrics_sink));
 
         let mut stream = TcpStream::connect(addr).unwrap();
         stream
@@ -800,6 +816,8 @@ mod tests {
         assert!(metrics.gateway_events > 0);
         assert_eq!(metrics.commands_executed, 1);
         assert_eq!(metrics.private_events_sent, 1);
+        let shared = *metrics_sink.lock().unwrap();
+        assert_eq!(shared.commands_executed, 1);
         let _ = std::fs::remove_file(&path);
     }
 }
