@@ -27,6 +27,7 @@ pub enum GatewayFrame {
         seat_id: u32,
         session_epoch: u32,
         last_private_seq: u64,
+        auth_token: u64,
     },
     Command(Command),
     Heartbeat {
@@ -56,6 +57,7 @@ impl GatewayFrame {
                 seat_id,
                 session_epoch,
                 last_private_seq,
+                auth_token,
             } => {
                 out[0] = TAG_LOGIN;
                 out[PAYLOAD_OFFSET..PAYLOAD_OFFSET + 4].copy_from_slice(&member_id.to_le_bytes());
@@ -66,6 +68,8 @@ impl GatewayFrame {
                     .copy_from_slice(&session_epoch.to_le_bytes());
                 out[PAYLOAD_OFFSET + 16..PAYLOAD_OFFSET + 24]
                     .copy_from_slice(&last_private_seq.to_le_bytes());
+                out[PAYLOAD_OFFSET + 24..PAYLOAD_OFFSET + 32]
+                    .copy_from_slice(&auth_token.to_le_bytes());
             }
             Self::Command(command) => {
                 out[0] = TAG_COMMAND;
@@ -147,6 +151,11 @@ impl GatewayFrame {
                 ),
                 last_private_seq: u64::from_le_bytes(
                     frame[PAYLOAD_OFFSET + 16..PAYLOAD_OFFSET + 24]
+                        .try_into()
+                        .expect("8 bytes"),
+                ),
+                auth_token: u64::from_le_bytes(
+                    frame[PAYLOAD_OFFSET + 24..PAYLOAD_OFFSET + 32]
                         .try_into()
                         .expect("8 bytes"),
                 ),
@@ -312,6 +321,7 @@ mod tests {
             seat_id: 3,
             session_epoch: 4,
             last_private_seq: 5,
+            auth_token: 6,
         };
         assert_eq!(GatewayFrame::decode(&frame.clone().encode()), Ok(frame));
     }

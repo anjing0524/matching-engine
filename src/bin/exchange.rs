@@ -57,6 +57,9 @@ struct RunArgs {
     /// Gateway idle timeout in seconds; 0 disables expiry.
     #[arg(long, default_value_t = 30)]
     idle_timeout_secs: u64,
+    /// Optional shared login token.
+    #[arg(long)]
+    auth_token: Option<u64>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -79,7 +82,11 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
     let middleware = MiddlewareSequencer::new(cmd_producer).with_combo_transport(combo_producer);
     let (gateway, gateway_events) = start_gateway(&args.listen)?;
     let gateway_addr = gateway.addr();
-    let gateway_runtime = GatewayRuntime::with_replay_capacity(middleware, gateway_events, 4096);
+    let mut gateway_runtime =
+        GatewayRuntime::with_replay_capacity(middleware, gateway_events, 4096);
+    if let Some(token) = args.auth_token {
+        gateway_runtime = gateway_runtime.with_auth_token(token);
+    }
 
     let spec = ContractSpec::new("BTCUSDT", 1, 1, 1_000_000);
     let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));

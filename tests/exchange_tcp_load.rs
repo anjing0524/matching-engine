@@ -69,6 +69,7 @@ fn multi_gateway_tcp_fanout() {
             .write_all(
                 &GatewayFrame::Login {
                     member_id: client as u32 + 1,
+                    auth_token: 0,
                     user_id: client as u32 + 1,
                     seat_id: 1,
                     session_epoch: 1,

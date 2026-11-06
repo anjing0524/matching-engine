@@ -24,6 +24,7 @@ pub struct GatewayRuntime {
     pending_replay: HashMap<u64, Vec<PrivateEvent>>,
     rate_limit: Option<(f64, f64)>,
     buckets: HashMap<u64, TokenBucket>,
+    auth_token: Option<u64>,
     errors: u64,
 }
 
@@ -47,8 +48,16 @@ impl GatewayRuntime {
             pending_replay: HashMap::new(),
             rate_limit: None,
             buckets: HashMap::new(),
+            auth_token: None,
             errors: 0,
         }
+    }
+
+    /// Requires every login to carry the given shared token.
+    #[must_use]
+    pub fn with_auth_token(mut self, token: u64) -> Self {
+        self.auth_token = Some(token);
+        self
     }
 
     /// Enables a per-connection token bucket for command frames.
@@ -91,7 +100,15 @@ impl GatewayRuntime {
                 seat_id,
                 session_epoch: _,
                 last_private_seq,
+                auth_token,
             } => {
+                if self
+                    .auth_token
+                    .is_some_and(|expected| expected != auth_token)
+                {
+                    self.errors += 1;
+                    return;
+                }
                 let info = SessionInfo {
                     session_id: connection_id,
                     gateway_id: 1,
@@ -290,6 +307,7 @@ mod tests {
             .write_all(
                 &GatewayFrame::Login {
                     member_id: 10,
+                    auth_token: 0,
                     user_id: 2,
                     seat_id: 3,
                     session_epoch: 1,
@@ -349,6 +367,69 @@ mod tests {
     }
 
     #[test]
+    fn login_requires_matching_auth_token() {
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-gateway-auth-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let mut runtime = GatewayRuntime::new(middleware, events).with_auth_token(42);
+
+        let mut wrong = TcpStream::connect(addr).unwrap();
+        wrong
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                    auth_token: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.errors() > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(runtime.errors() > 0);
+        assert!(runtime.middleware_mut().session_by_user(2).is_none());
+
+        let mut right = TcpStream::connect(addr).unwrap();
+        right
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                    auth_token: 42,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.middleware_mut().session_by_user(2).is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(runtime.middleware_mut().session_by_user(2).is_some());
+        server.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn rate_limit_drops_excess_commands() {
         let path = std::env::temp_dir().join(format!(
             "matching-engine-gateway-rate-{}",
@@ -364,6 +445,7 @@ mod tests {
             .write_all(
                 &GatewayFrame::Login {
                     member_id: 10,
+                    auth_token: 0,
                     user_id: 2,
                     seat_id: 3,
                     session_epoch: 1,
@@ -418,6 +500,7 @@ mod tests {
             .write_all(
                 &GatewayFrame::Login {
                     member_id: 10,
+                    auth_token: 0,
                     user_id: 2,
                     seat_id: 3,
                     session_epoch: 1,
@@ -479,6 +562,7 @@ mod tests {
             .write_all(
                 &GatewayFrame::Login {
                     member_id: 10,
+                    auth_token: 0,
                     user_id: 2,
                     seat_id: 3,
                     session_epoch: 1,
@@ -519,6 +603,7 @@ mod tests {
             .write_all(
                 &GatewayFrame::Login {
                     member_id: 10,
+                    auth_token: 0,
                     user_id: 2,
                     seat_id: 3,
                     session_epoch: 1,
@@ -560,6 +645,7 @@ mod tests {
             .write_all(
                 &GatewayFrame::Login {
                     member_id: 10,
+                    auth_token: 0,
                     user_id: 2,
                     seat_id: 3,
                     session_epoch: 1,
@@ -601,6 +687,7 @@ mod tests {
             .write_all(
                 &GatewayFrame::Login {
                     member_id: 10,
+                    auth_token: 0,
                     user_id: 2,
                     seat_id: 3,
                     session_epoch: 1,
@@ -653,6 +740,7 @@ mod tests {
             .write_all(
                 &GatewayFrame::Login {
                     member_id: 10,
+                    auth_token: 0,
                     user_id: 2,
                     seat_id: 3,
                     session_epoch: 1,

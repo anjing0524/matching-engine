@@ -25,7 +25,8 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Idle timeout expires sessions and closes TCP
 - [x] Client private ack updates `last_private_seq`
 - [x] Reconnect replays private events after ack
-- [ ] Gateway authentication and seat permissions
+- [x] Shared login token authentication
+- [ ] Seat permissions and per-member credentials
 - [x] Per-connection command rate limiting
 - [ ] Multiple active gateways and cross-gateway session takeover policy
 - [x] Split core/middleware binaries over shared-memory rings

@@ -200,6 +200,7 @@ mod tests {
 
         let login = GatewayFrame::Login {
             member_id: 1,
+            auth_token: 0,
             user_id: 2,
             seat_id: 3,
             session_epoch: 4,

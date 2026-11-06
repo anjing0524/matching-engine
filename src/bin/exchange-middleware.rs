@@ -33,6 +33,8 @@ struct Args {
     iterations: u64,
     #[arg(long, default_value_t = 30)]
     idle_timeout_secs: u64,
+    #[arg(long)]
+    auth_token: Option<u64>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -50,6 +52,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let middleware = MiddlewareSequencer::new(command_producer);
     let (server, events) = start_gateway(&args.listen)?;
     let mut gateway = GatewayRuntime::with_replay_capacity(middleware, events, 4096);
+    if let Some(token) = args.auth_token {
+        gateway = gateway.with_auth_token(token);
+    }
     let publisher = match (&args.multicast_group, args.multicast_port) {
         (Some(group), Some(port)) => Some(MarketDataPublisher::bind_multicast_on(
             "0.0.0.0:0",

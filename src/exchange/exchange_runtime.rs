@@ -287,6 +287,7 @@ mod tests {
                 .write_all(
                     &GatewayFrame::Login {
                         member_id: client as u32 + 1,
+                        auth_token: 0,
                         user_id: client as u32 + 1,
                         seat_id: 1,
                         session_epoch: 1,
@@ -391,6 +392,7 @@ mod tests {
             .write_all(
                 &GatewayFrame::Login {
                     member_id: 10,
+                    auth_token: 0,
                     user_id: 2,
                     seat_id: 3,
                     session_epoch: 1,
@@ -543,6 +545,7 @@ mod tests {
             .write_all(
                 &GatewayFrame::Login {
                     member_id: 10,
+                    auth_token: 0,
                     user_id: 2,
                     seat_id: 3,
                     session_epoch: 1,
@@ -607,6 +610,7 @@ mod tests {
             .write_all(
                 &GatewayFrame::Login {
                     member_id: 10,
+                    auth_token: 0,
                     user_id: 2,
                     seat_id: 3,
                     session_epoch: 1,
@@ -676,6 +680,7 @@ mod tests {
             .write_all(
                 &GatewayFrame::Login {
                     member_id: 10,
+                    auth_token: 0,
                     user_id: 2,
                     seat_id: 3,
                     session_epoch: 1,
@@ -726,6 +731,7 @@ mod tests {
             .write_all(
                 &GatewayFrame::Login {
                     member_id: 10,
+                    auth_token: 0,
                     user_id: 2,
                     seat_id: 3,
                     session_epoch: 1,
@@ -786,6 +792,7 @@ mod tests {
             .write_all(
                 &GatewayFrame::Login {
                     member_id: 10,
+                    auth_token: 0,
                     user_id: 2,
                     seat_id: 3,
                     session_epoch: 1,
