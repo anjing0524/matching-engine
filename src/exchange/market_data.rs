@@ -95,7 +95,17 @@ impl MarketDataSubscriber {
     /// # Errors
     /// Returns an I/O error if bind fails.
     pub fn bind(local: &str) -> io::Result<Self> {
-        let socket = UdpSocket::bind(local)?;
+        let local: SocketAddr = local
+            .parse()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let socket = socket2::Socket::new(
+            socket2::Domain::for_address(local),
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        )?;
+        socket.set_recv_buffer_size(4 * 1024 * 1024)?;
+        socket.bind(&local.into())?;
+        let socket: UdpSocket = socket.into();
         socket.set_read_timeout(Some(Duration::from_secs(2)))?;
         Ok(Self { socket })
     }
@@ -138,6 +148,7 @@ impl MarketDataSubscriber {
             Some(socket2::Protocol::UDP),
         )?;
         socket.set_reuse_address(true)?;
+        socket.set_recv_buffer_size(4 * 1024 * 1024)?;
         socket.bind(&SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, port)).into())?;
         socket.set_multicast_loop_v4(true)?;
         socket.join_multicast_v4(&group, &interface)?;
