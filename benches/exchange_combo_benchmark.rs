@@ -1,6 +1,6 @@
 //! Combo queue and atomic leg-execution throughput.
 
-use matching_engine::domain::orderbook::ContractSpec;
+use matching_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use matching_engine::exchange::combo_engine::ComboEngine;
 use matching_engine::exchange::protocol::{Hedge, Offset, Side};
 use matching_engine::shared::protocol::OrderType;
@@ -70,6 +70,22 @@ fn main() {
     println!(
         "combo atomic fills: {rounds} in {elapsed:?} ({:.0} fill/s)",
         rounds as f64 / elapsed.as_secs_f64()
+    );
+
+    // Isolate snapshot cost on a book holding one order.
+    let mut book = TickBasedOrderBook::new(ContractSpec::new("LEG", 1, 1_000, 100_000));
+    book.insert_resting_order(1, OrderType::Sell, 50_000, 1, 1, 1)
+        .unwrap();
+    let mut buffer = Vec::new();
+    let start = Instant::now();
+    for _ in 0..rounds {
+        book.snapshot_orders_into(&mut buffer);
+        black_box(buffer.as_slice());
+    }
+    let elapsed = start.elapsed();
+    println!(
+        "snapshot only: {rounds} in {elapsed:?} ({:.0} ns/snapshot)",
+        elapsed.as_nanos() as f64 / rounds as f64
     );
     drop(engine);
 }
