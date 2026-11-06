@@ -27,7 +27,11 @@ fn command(seq: u64) -> Command {
     command.price_type = PriceType::Limit;
     command.time_condition = TimeCondition::Gfd;
     command.volume_condition = VolumeCondition::Any;
-    command.side = if seq % 2 == 0 { Side::Buy } else { Side::Sell };
+    command.side = if seq.is_multiple_of(2) {
+        Side::Buy
+    } else {
+        Side::Sell
+    };
     command.offset = Offset::Open;
     command.hedge = Hedge::Spec;
     command.price_ticks = 500_000 + (seq % 100) as i64;
