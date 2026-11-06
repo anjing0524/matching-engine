@@ -22,6 +22,7 @@ cargo test --release --test exchange_combo_soak
 | resting 200k commands | ~1.8–2.0M cmd/s |
 | middleware submit 200k | ~11–28M cmd/s |
 | core consume 200k via shared ring | ~2.5–2.7M cmd/s |
+| end-to-end TCP fan-out, 4k orders / 8 clients | ~95k order/s |
 
 Key fixes that moved these numbers:
 
