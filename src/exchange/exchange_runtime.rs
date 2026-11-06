@@ -9,12 +9,15 @@ use crate::exchange::gateway_runtime::GatewayRuntime;
 use crate::exchange::gateway_server::GatewayServerHandle;
 use crate::exchange::plugins::PreTradePlugin;
 use crate::exchange::runner::CoreRunner;
+use std::time::{Duration, Instant};
 
 /// Composite gateway/middleware/core runtime for one process.
 pub struct ExchangeRuntime<P> {
     gateway: GatewayRuntime,
     core: CoreRunner<P>,
     server: GatewayServerHandle,
+    idle_timeout: Option<Duration>,
+    last_expire: Instant,
 }
 
 impl<P: PreTradePlugin> ExchangeRuntime<P> {
@@ -24,7 +27,15 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             gateway,
             core,
             server,
+            idle_timeout: None,
+            last_expire: Instant::now(),
         }
+    }
+
+    #[must_use]
+    pub fn with_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.idle_timeout = Some(timeout);
+        self
     }
 
     /// Runs one non-blocking iteration.
@@ -35,6 +46,14 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
         let commands = self.core.poll();
         let private = self.core.drain_private();
         let sent = self.gateway.dispatch_private(&self.server, private);
+        if let Some(timeout) = self.idle_timeout
+            && self.last_expire.elapsed() >= timeout / 2
+        {
+            for connection_id in self.gateway.expire_idle(timeout) {
+                self.server.close(connection_id);
+            }
+            self.last_expire = Instant::now();
+        }
         (gateway_events, commands, sent)
     }
 
@@ -100,6 +119,62 @@ mod tests {
             trigger_type: TriggerType::None,
             cancel_order_id: 0,
         }
+    }
+
+    #[test]
+    fn runtime_expires_idle_gateway() {
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-exchange-runtime-idle-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 16).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let gateway = GatewayRuntime::new(middleware, events);
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let runner = CoreRunner::new(core, consumer, NoPlugins);
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server)
+            .with_idle_timeout(Duration::from_millis(30));
+
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.tick();
+            if runtime
+                .gateway_mut()
+                .middleware_mut()
+                .session_by_user(2)
+                .is_some()
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        std::thread::sleep(Duration::from_millis(40));
+        runtime.tick();
+        assert!(
+            runtime
+                .gateway_mut()
+                .middleware_mut()
+                .session_by_user(2)
+                .is_none()
+        );
+        drop(stream);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
