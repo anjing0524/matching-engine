@@ -5,11 +5,12 @@
 //! layered above this event stream; this slice only owns the accept/read loop.
 
 use crate::exchange::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
-use std::io::{self, Read};
+use std::collections::HashMap;
+use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, channel};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -29,6 +30,7 @@ pub enum GatewayEvent {
 pub struct GatewayServerHandle {
     addr: std::net::SocketAddr,
     shutdown: Arc<AtomicBool>,
+    connections: Arc<Mutex<HashMap<u64, TcpStream>>>,
     join: Option<thread::JoinHandle<()>>,
 }
 
@@ -36,6 +38,21 @@ impl GatewayServerHandle {
     #[must_use]
     pub fn addr(&self) -> std::net::SocketAddr {
         self.addr
+    }
+
+    /// Sends one frame to a connected gateway.
+    ///
+    /// # Errors
+    /// Returns an I/O error when the connection is unknown or the write fails.
+    pub fn send(&self, connection_id: u64, frame: GatewayFrame) -> io::Result<()> {
+        let mut connections = self
+            .connections
+            .lock()
+            .map_err(|_| io::Error::other("gateway connection lock poisoned"))?;
+        let stream = connections
+            .get_mut(&connection_id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "gateway not connected"))?;
+        stream.write_all(&frame.encode())
     }
 
     pub fn stop(&mut self) {
@@ -66,6 +83,8 @@ pub fn start(
     let accept_shutdown = Arc::clone(&shutdown);
     let (tx, rx) = channel();
     let next_connection = Arc::new(AtomicU64::new(1));
+    let connections = Arc::new(Mutex::new(HashMap::new()));
+    let accept_connections = Arc::clone(&connections);
     let join = thread::Builder::new()
         .name("gateway-tcp-listener".to_string())
         .spawn(move || {
@@ -74,9 +93,22 @@ pub fn start(
                     Ok((stream, _)) => {
                         let id = next_connection.fetch_add(1, Ordering::Relaxed);
                         let event_tx = tx.clone();
+                        let write_stream = match stream.try_clone() {
+                            Ok(stream) => stream,
+                            Err(_) => continue,
+                        };
+                        if let Ok(mut map) = accept_connections.lock() {
+                            map.insert(id, write_stream);
+                        }
+                        let remove_connections = Arc::clone(&accept_connections);
                         let _ = thread::Builder::new()
                             .name(format!("gateway-tcp-{id}"))
-                            .spawn(move || serve_connection(id, stream, event_tx));
+                            .spawn(move || {
+                                serve_connection(id, stream, event_tx);
+                                if let Ok(mut map) = remove_connections.lock() {
+                                    map.remove(&id);
+                                }
+                            });
                     }
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
@@ -89,6 +121,7 @@ pub fn start(
         GatewayServerHandle {
             addr,
             shutdown,
+            connections,
             join: Some(join),
         },
         rx,
