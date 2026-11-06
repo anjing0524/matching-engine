@@ -73,6 +73,50 @@ impl TradingSchedule {
     }
 }
 
+/// Converts timed observations into phase-change decisions.
+///
+/// The middleware owns the wall clock; the driver only reports a change when
+/// the observed phase differs from the last reported phase.
+#[derive(Debug)]
+pub struct ScheduleDriver {
+    schedule: TradingSchedule,
+    last_phase: Option<ExchangePhase>,
+}
+
+impl ScheduleDriver {
+    #[must_use]
+    pub fn new(schedule: TradingSchedule) -> Self {
+        Self {
+            schedule,
+            last_phase: None,
+        }
+    }
+
+    /// Feeds one timestamp and returns `(phase, trading_day)` on a transition.
+    pub fn observe(&mut self, ts_ns: u64) -> Option<(ExchangePhase, u32)> {
+        let phase = self
+            .schedule
+            .phase_at(ts_ns)
+            .unwrap_or(ExchangePhase::Closed);
+        if self.last_phase == Some(phase) {
+            return None;
+        }
+        self.last_phase = Some(phase);
+        let trading_day = self
+            .schedule
+            .windows()
+            .iter()
+            .find(|window| window.start_ns <= ts_ns && ts_ns < window.end_ns)
+            .map_or(1, |window| window.trading_day);
+        Some((phase, trading_day))
+    }
+
+    #[must_use]
+    pub fn schedule(&self) -> &TradingSchedule {
+        &self.schedule
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,6 +164,18 @@ mod tests {
             Some((500, ExchangePhase::Closed, 1))
         );
         assert_eq!(schedule.next_transition(500), None);
+    }
+
+    #[test]
+    fn driver_reports_only_phase_changes() {
+        let mut driver = ScheduleDriver::new(schedule());
+        assert_eq!(
+            driver.observe(100),
+            Some((ExchangePhase::OpeningAuction, 1))
+        );
+        assert_eq!(driver.observe(150), None);
+        assert_eq!(driver.observe(200), Some((ExchangePhase::Continuous, 1)));
+        assert_eq!(driver.observe(500), Some((ExchangePhase::Closed, 1)));
     }
 
     #[test]
