@@ -82,6 +82,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] 1M command core soak and combo queue/fill soak
 - [x] Nightly soak workflow and reproducible soak script
 - [x] First manual soak run green (core, combo, TCP/UDP)
+- [x] Duration-parameterized soak (`EXCHANGE_SOAK_SECS`)
 - [ ] Multi-hour soak on target hardware
 - [ ] End-to-end TCP+multicast load test with many gateways
 

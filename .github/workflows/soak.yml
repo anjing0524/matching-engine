@@ -15,6 +15,7 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
+      EXCHANGE_SOAK_SECS: "120"
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
