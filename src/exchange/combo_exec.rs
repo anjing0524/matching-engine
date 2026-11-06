@@ -27,17 +27,14 @@ pub enum ComboExecError {
     PositionUnavailable,
 }
 
-struct LegSnapshot {
-    orders: Vec<RestingOrder>,
-    next_order_id: u64,
-}
-
 /// Two leg books plus their contract specs.
 pub struct ComboExecutor {
     pub leg1: TickBasedOrderBook,
     pub leg2: TickBasedOrderBook,
     leg1_spec: ContractSpec,
     leg2_spec: ContractSpec,
+    snapshot1: Vec<RestingOrder>,
+    snapshot2: Vec<RestingOrder>,
 }
 
 impl ComboExecutor {
@@ -48,6 +45,8 @@ impl ComboExecutor {
             leg2: TickBasedOrderBook::new(leg2_spec.clone()),
             leg1_spec,
             leg2_spec,
+            snapshot1: Vec::new(),
+            snapshot2: Vec::new(),
         }
     }
 
@@ -82,14 +81,10 @@ impl ComboExecutor {
             return Err(ComboExecError::MissingLiquidity);
         }
 
-        let snapshot1 = LegSnapshot {
-            orders: self.leg1.snapshot_orders(),
-            next_order_id: self.leg1.next_order_id(),
-        };
-        let snapshot2 = LegSnapshot {
-            orders: self.leg2.snapshot_orders(),
-            next_order_id: self.leg2.next_order_id(),
-        };
+        let next1 = self.leg1.next_order_id();
+        let next2 = self.leg2.next_order_id();
+        self.leg1.snapshot_orders_into(&mut self.snapshot1);
+        self.leg2.snapshot_orders_into(&mut self.snapshot2);
 
         let (filled1, prices1) = sweep(
             &mut self.leg1,
@@ -106,7 +101,7 @@ impl ComboExecutor {
             2,
         );
         if filled1 != quantity || filled2 != quantity {
-            self.restore(snapshot1, snapshot2);
+            self.restore(next1, next2);
             return Err(ComboExecError::LegUnderfilled);
         }
         let worst_leg1 = prices1
@@ -122,7 +117,7 @@ impl ComboExecutor {
         let realized = i64::try_from(worst_leg1).unwrap_or(i64::MAX)
             - i64::try_from(worst_leg2).unwrap_or(i64::MAX);
         if realized > i64::try_from(spread_limit_ticks).unwrap_or(i64::MAX) {
-            self.restore(snapshot1, snapshot2);
+            self.restore(next1, next2);
             return Err(ComboExecError::SpreadNotSatisfied);
         }
 
@@ -164,14 +159,10 @@ impl ComboExecutor {
         if available < quantity {
             return Err(ComboExecError::MissingLiquidity);
         }
-        let snapshot1 = LegSnapshot {
-            orders: self.leg1.snapshot_orders(),
-            next_order_id: self.leg1.next_order_id(),
-        };
-        let snapshot2 = LegSnapshot {
-            orders: self.leg2.snapshot_orders(),
-            next_order_id: self.leg2.next_order_id(),
-        };
+        let next1 = self.leg1.next_order_id();
+        let next2 = self.leg2.next_order_id();
+        self.leg1.snapshot_orders_into(&mut self.snapshot1);
+        self.leg2.snapshot_orders_into(&mut self.snapshot2);
         let (filled1, prices1) = sweep(
             &mut self.leg1,
             OrderType::Sell,
@@ -187,7 +178,7 @@ impl ComboExecutor {
             2,
         );
         if filled1 != quantity || filled2 != quantity {
-            self.restore(snapshot1, snapshot2);
+            self.restore(next1, next2);
             return Err(ComboExecError::LegUnderfilled);
         }
         let worst_leg1 = prices1
@@ -203,7 +194,7 @@ impl ComboExecutor {
         let realized = i64::try_from(worst_leg1).unwrap_or(i64::MIN)
             - i64::try_from(worst_leg2).unwrap_or(i64::MAX);
         if realized < i64::try_from(spread_limit_ticks).unwrap_or(i64::MIN) {
-            self.restore(snapshot1, snapshot2);
+            self.restore(next1, next2);
             return Err(ComboExecError::SpreadNotSatisfied);
         }
         Ok(ComboFill {
@@ -214,17 +205,17 @@ impl ComboExecutor {
         })
     }
 
-    fn restore(&mut self, leg1: LegSnapshot, leg2: LegSnapshot) {
-        if let Ok(book) =
-            TickBasedOrderBook::restore(self.leg1_spec.clone(), &leg1.orders, leg1.next_order_id)
-        {
+    fn restore(&mut self, next1: u64, next2: u64) {
+        let orders1 = std::mem::take(&mut self.snapshot1);
+        let orders2 = std::mem::take(&mut self.snapshot2);
+        if let Ok(book) = TickBasedOrderBook::restore(self.leg1_spec.clone(), &orders1, next1) {
             self.leg1 = book;
         }
-        if let Ok(book) =
-            TickBasedOrderBook::restore(self.leg2_spec.clone(), &leg2.orders, leg2.next_order_id)
-        {
+        if let Ok(book) = TickBasedOrderBook::restore(self.leg2_spec.clone(), &orders2, next2) {
             self.leg2 = book;
         }
+        self.snapshot1 = orders1;
+        self.snapshot2 = orders2;
     }
 }
 

@@ -849,6 +849,14 @@ impl TickBasedOrderBook {
     #[must_use]
     pub fn snapshot_orders(&self) -> Vec<RestingOrder> {
         let mut orders = Vec::with_capacity(self.order_locations.len());
+        self.snapshot_orders_into(&mut orders);
+        orders
+    }
+
+    /// Fills `orders` with the current book snapshot, reusing its capacity.
+    pub fn snapshot_orders_into(&self, orders: &mut Vec<RestingOrder>) {
+        orders.clear();
+        orders.reserve(self.order_locations.len());
 
         if let (Some(mut idx), Some(max_idx)) = (self.bid_min_idx, self.best_bid_idx) {
             loop {
@@ -899,8 +907,6 @@ impl TickBasedOrderBook {
                 idx = next;
             }
         }
-
-        orders
     }
 
     /// Rebuilds a book directly from snapshot orders without matching them.
