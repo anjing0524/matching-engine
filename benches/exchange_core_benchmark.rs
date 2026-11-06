@@ -60,6 +60,21 @@ fn main() {
     assert_eq!(executed as u64, orders);
 
     let per_sec = orders as f64 / elapsed.as_secs_f64();
-    println!("exchange core: {orders} commands in {elapsed:?} ({per_sec:.0} cmd/s)");
+    println!("exchange core crossing: {orders} commands in {elapsed:?} ({per_sec:.0} cmd/s)");
+
+    // Resting-only workload: no trades, one new price level per order.
+    for seq in 1..=orders {
+        producer
+            .send(&command(orders + seq, Side::Buy, 600_000 + seq as i64))
+            .unwrap();
+    }
+    let start = Instant::now();
+    let executed = runner.poll();
+    let elapsed = start.elapsed();
+    black_box(runner.core());
+    assert_eq!(executed as u64, orders);
+    let per_sec = orders as f64 / elapsed.as_secs_f64();
+    println!("exchange core resting: {orders} commands in {elapsed:?} ({per_sec:.0} cmd/s)");
+
     let _ = std::fs::remove_file(&path);
 }
