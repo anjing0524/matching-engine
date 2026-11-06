@@ -807,6 +807,18 @@ impl ExchangeCore {
             out.extend(self.execute(command));
             return;
         }
+        if self.phase == ExchangePhase::OpeningAuction
+            && (command.price_type == PriceType::Market
+                || command.time_condition == TimeCondition::Ioc
+                || command.volume_condition == VolumeCondition::All)
+        {
+            self.reject_private_into(
+                &command,
+                "auction rejects market/FAK/FOK orders".to_string(),
+                out,
+            );
+            return;
+        }
         if command.price_ticks < 0 || command.quantity == 0 {
             self.reject_private_into(&command, "invalid price or quantity".to_string(), out);
             return;
@@ -2002,5 +2014,29 @@ mod tests {
         cancel.cancel_order_id = 1;
         let _ = core.execute_with_plugins(cancel, &NoPlugins);
         assert_eq!(core.pending_open().get(key).total(), 0);
+    }
+    #[test]
+    fn auction_rejects_market_fak_and_fok() {
+        use crate::exchange::plugins::NoPlugins;
+
+        let mut core = core();
+        let mut control = Command::zeroed();
+        control.command_type = CommandType::Control;
+        control.flags = ExchangePhase::OpeningAuction.code();
+        core.execute(control);
+        assert_eq!(core.phase(), ExchangePhase::OpeningAuction);
+
+        for adjust in [
+            |command: &mut Command| command.price_type = PriceType::Market,
+            |command: &mut Command| command.time_condition = TimeCondition::Ioc,
+            |command: &mut Command| command.volume_condition = VolumeCondition::All,
+        ] {
+            let mut command = wire_command(Side::Buy, 50_000, 5);
+            adjust(&mut command);
+            let events = core.execute_with_plugins(command, &NoPlugins);
+            assert!(events.iter().any(|event| {
+                matches!(event, CoreEvent::Rejected { reason, .. } if reason.contains("auction"))
+            }));
+        }
     }
 }
