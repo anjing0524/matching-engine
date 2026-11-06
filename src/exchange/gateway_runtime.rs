@@ -1,0 +1,186 @@
+//! Connects gateway TCP events to middleware session and command handling.
+//!
+//! Login frames open a session keyed by the TCP connection id; command frames
+//! are stamped with that session/member and submitted to the ordered command
+//! ring. Private downlink is a later slice.
+
+use crate::exchange::gateway::GatewayFrame;
+use crate::exchange::gateway_server::GatewayEvent;
+use crate::exchange::middleware::MiddlewareSequencer;
+use crate::exchange::session::SessionInfo;
+use std::sync::mpsc::Receiver;
+
+/// Drains gateway events and applies them to middleware.
+pub struct GatewayRuntime {
+    middleware: MiddlewareSequencer,
+    events: Receiver<GatewayEvent>,
+    errors: u64,
+}
+
+impl GatewayRuntime {
+    #[must_use]
+    pub fn new(middleware: MiddlewareSequencer, events: Receiver<GatewayEvent>) -> Self {
+        Self {
+            middleware,
+            events,
+            errors: 0,
+        }
+    }
+
+    /// Drains all pending gateway events. Returns the number of frame/closed
+    /// events processed.
+    pub fn poll(&mut self) -> usize {
+        let mut processed = 0;
+        while let Ok(event) = self.events.try_recv() {
+            match event {
+                GatewayEvent::Frame {
+                    connection_id,
+                    frame,
+                } => {
+                    processed += 1;
+                    self.handle_frame(connection_id, frame);
+                }
+                GatewayEvent::Closed { connection_id } => {
+                    processed += 1;
+                    self.middleware.close_session(connection_id);
+                }
+            }
+        }
+        processed
+    }
+
+    fn handle_frame(&mut self, connection_id: u64, frame: GatewayFrame) {
+        match frame {
+            GatewayFrame::Login {
+                member_id,
+                user_id,
+                seat_id,
+                session_epoch: _,
+                last_private_seq,
+            } => {
+                let info = SessionInfo {
+                    session_id: connection_id,
+                    gateway_id: 1,
+                    member_id,
+                    user_id,
+                    seat_id,
+                    last_private_seq,
+                    active: true,
+                };
+                if !self.middleware.open_session(info) {
+                    self.errors += 1;
+                }
+            }
+            GatewayFrame::Command(mut command) => {
+                command.session_id = connection_id;
+                if let Some(session) = self.middleware.session(connection_id) {
+                    command.member_id = session.member_id;
+                }
+                if self.middleware.submit_for_session(command).is_err() {
+                    self.errors += 1;
+                }
+            }
+            GatewayFrame::Heartbeat { .. } => {}
+        }
+    }
+
+    #[must_use]
+    pub fn errors(&self) -> u64 {
+        self.errors
+    }
+
+    pub fn middleware_mut(&mut self) -> &mut MiddlewareSequencer {
+        &mut self.middleware
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::exchange::gateway_server::start;
+    use crate::exchange::protocol::{
+        Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
+        VolumeCondition,
+    };
+    use crate::exchange::transport::create;
+    use std::io::Write;
+    use std::net::TcpStream;
+
+    fn command() -> Command {
+        Command {
+            global_seq: 0,
+            gateway_seq: 1,
+            ingress_ts_ns: 0,
+            exchange_ts_ns: 0,
+            client_order_id: 1,
+            session_id: 0,
+            gateway_id: 1,
+            member_id: 0,
+            user_id: 2,
+            seat_id: 3,
+            instrument_id: 1,
+            combo_id: 0,
+            session_epoch: 1,
+            command_type: CommandType::NewOrder,
+            price_type: PriceType::Limit,
+            time_condition: TimeCondition::Gfd,
+            volume_condition: VolumeCondition::Any,
+            side: Side::Buy,
+            offset: Offset::Open,
+            hedge: Hedge::Spec,
+            flags: 0,
+            leg2_ratio: 0,
+            price_ticks: 50_000,
+            quantity: 5,
+            trigger_price_ticks: 0,
+            leg2_instrument_id: 0,
+            leg2_offset: Offset::Open,
+            leg2_hedge: Hedge::Spec,
+            trigger_type: TriggerType::None,
+            cancel_order_id: 0,
+        }
+    }
+
+    #[test]
+    fn login_and_command_reach_core() {
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-gateway-runtime-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let mut runtime = GatewayRuntime::new(middleware, events);
+        let mut stream = TcpStream::connect(server.addr()).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        stream
+            .write_all(&GatewayFrame::Command(command()).encode())
+            .unwrap();
+        // Give the listener thread a moment to read both frames.
+        for _ in 0..100 {
+            runtime.poll();
+            if let Some(Ok(event)) = consumer.recv() {
+                assert_eq!(event.global_seq, 1);
+                assert_eq!(event.session_id, 1);
+                assert_eq!(event.member_id, 10);
+                server.stop();
+                let _ = std::fs::remove_file(&path);
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        panic!("command did not reach the command ring");
+    }
+}
