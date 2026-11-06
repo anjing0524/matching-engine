@@ -5,6 +5,7 @@
 //! deliberately separate later slices; see `docs/exchange-core-architecture.md`.
 
 pub mod auction;
+pub mod auth;
 pub mod combo;
 pub mod combo_engine;
 pub mod combo_exec;

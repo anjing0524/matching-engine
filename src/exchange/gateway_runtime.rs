@@ -4,6 +4,7 @@
 //! are stamped with that session/member and submitted to the ordered command
 //! ring. Private downlink is a later slice.
 
+use crate::exchange::auth::GatewayCredentials;
 use crate::exchange::gateway::GatewayFrame;
 use crate::exchange::gateway_server::{GatewayEvent, GatewayServerHandle};
 use crate::exchange::middleware::MiddlewareSequencer;
@@ -25,6 +26,7 @@ pub struct GatewayRuntime {
     rate_limit: Option<(f64, f64)>,
     buckets: HashMap<u64, TokenBucket>,
     auth_token: Option<u64>,
+    credentials: Option<GatewayCredentials>,
     errors: u64,
 }
 
@@ -49,6 +51,7 @@ impl GatewayRuntime {
             rate_limit: None,
             buckets: HashMap::new(),
             auth_token: None,
+            credentials: None,
             errors: 0,
         }
     }
@@ -57,6 +60,13 @@ impl GatewayRuntime {
     #[must_use]
     pub fn with_auth_token(mut self, token: u64) -> Self {
         self.auth_token = Some(token);
+        self
+    }
+
+    /// Requires a per-member token; unknown members are rejected.
+    #[must_use]
+    pub fn with_credentials(mut self, credentials: GatewayCredentials) -> Self {
+        self.credentials = Some(credentials);
         self
     }
 
@@ -102,10 +112,13 @@ impl GatewayRuntime {
                 last_private_seq,
                 auth_token,
             } => {
-                if self
-                    .auth_token
-                    .is_some_and(|expected| expected != auth_token)
-                {
+                let token_ok = if let Some(credentials) = &self.credentials {
+                    credentials.verify(member_id, auth_token)
+                } else {
+                    self.auth_token
+                        .is_none_or(|expected| expected == auth_token)
+                };
+                if !token_ok {
                     self.errors += 1;
                     return;
                 }
@@ -364,6 +377,73 @@ mod tests {
         let replay = buffer.replay(2, 0);
         assert_eq!(replay.len(), 1);
         assert_eq!(replay[0].seq, 2);
+    }
+
+    #[test]
+    fn per_member_credentials_are_enforced() {
+        use crate::exchange::auth::GatewayCredentials;
+
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-gateway-credentials-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let mut credentials = GatewayCredentials::new();
+        credentials.insert(1, 11);
+        credentials.insert(2, 22);
+        let mut runtime = GatewayRuntime::new(middleware, events).with_credentials(credentials);
+
+        let mut wrong = TcpStream::connect(addr).unwrap();
+        wrong
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 1,
+                    user_id: 1,
+                    seat_id: 1,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                    auth_token: 22,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.errors() > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(runtime.errors() > 0);
+
+        let mut right = TcpStream::connect(addr).unwrap();
+        right
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 2,
+                    user_id: 2,
+                    seat_id: 1,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                    auth_token: 22,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.middleware_mut().session_by_user(2).is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(runtime.middleware_mut().session_by_user(2).is_some());
+        server.stop();
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

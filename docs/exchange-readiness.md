@@ -26,7 +26,8 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Client private ack updates `last_private_seq`
 - [x] Reconnect replays private events after ack
 - [x] Shared login token authentication
-- [ ] Seat permissions and per-member credentials
+- [x] Per-member token credentials
+- [ ] Seat permissions
 - [x] Per-connection command rate limiting
 - [ ] Multiple active gateways and cross-gateway session takeover policy
 - [x] Split core/middleware binaries over shared-memory rings
