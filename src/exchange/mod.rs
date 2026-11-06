@@ -9,6 +9,7 @@ pub mod combo;
 pub mod combo_engine;
 pub mod combo_exec;
 pub mod core;
+pub mod gateway;
 pub mod middleware;
 pub mod plugins;
 pub mod positions;
