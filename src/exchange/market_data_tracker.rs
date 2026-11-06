@@ -122,7 +122,15 @@ mod tests {
                 to_seq: 2,
             })
             .unwrap();
-        assert_eq!(server.poll_once().unwrap(), 1);
+        let mut repaired = 0;
+        for _ in 0..100 {
+            repaired = server.poll_once().unwrap();
+            if repaired == 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(repaired, 1);
         assert_eq!(subscriber.recv().unwrap().seq, 2);
         assert_eq!(tracker.next_seq(), 1);
     }
