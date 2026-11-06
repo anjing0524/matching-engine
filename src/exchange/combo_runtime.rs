@@ -5,6 +5,8 @@
 
 use crate::exchange::combo_engine::ComboEngine;
 use crate::exchange::combo_market_data::ComboMarketDataPublisher;
+use crate::exchange::gateway_runtime::GatewayRuntime;
+use crate::exchange::gateway_server::GatewayServerHandle;
 
 /// Composite combo engine plus optional public transport.
 pub struct ComboRuntime {
@@ -43,6 +45,33 @@ impl ComboRuntime {
             }
         }
         sent
+    }
+
+    /// Publishes public fills and routes private fills to logged-in gateways.
+    ///
+    /// Returns `(public_sent, private_sent)`.
+    pub fn tick_with_gateway(
+        &mut self,
+        gateway: &GatewayRuntime,
+        server: &GatewayServerHandle,
+    ) -> (usize, usize) {
+        let events = self.engine.drain_events();
+        let mut public = 0;
+        if let Some(publisher) = &self.publisher {
+            for event in &events {
+                if publisher.send(&event.public_fill()).is_ok() {
+                    public += 1;
+                    self.public_sent += 1;
+                }
+            }
+        }
+        let private = gateway.dispatch_combo_private(
+            server,
+            events
+                .iter()
+                .map(crate::exchange::combo_engine::ComboFillEvent::private_fill),
+        );
+        (public, private)
     }
 
     #[must_use]

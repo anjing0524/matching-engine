@@ -111,6 +111,26 @@ impl GatewayRuntime {
         expired
     }
 
+    /// Routes combo private fills to the session whose user matches the fill.
+    ///
+    /// Returns how many fills were handed to a gateway downlink.
+    pub fn dispatch_combo_private(
+        &self,
+        server: &GatewayServerHandle,
+        fills: impl IntoIterator<Item = crate::exchange::combo_engine::ComboPrivateFill>,
+    ) -> usize {
+        let mut sent = 0;
+        for fill in fills {
+            let user_id = u32::try_from(fill.user_id).unwrap_or(u32::MAX);
+            if let Some(session) = self.middleware.session_by_user(user_id)
+                && server.send_combo_private(session.session_id, &fill).is_ok()
+            {
+                sent += 1;
+            }
+        }
+        sent
+    }
+
     /// Routes private events to the session whose user matches the account.
     ///
     /// Returns how many events were handed to a gateway downlink.
@@ -186,6 +206,62 @@ mod tests {
             trigger_type: TriggerType::None,
             cancel_order_id: 0,
         }
+    }
+
+    #[test]
+    fn combo_private_fill_routes_to_logged_in_gateway() {
+        use crate::exchange::combo_engine::ComboPrivateFill;
+        use crate::exchange::protocol::Side;
+        use std::io::Read;
+
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-gateway-combo-private-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let mut runtime = GatewayRuntime::new(middleware, events);
+        let mut stream = TcpStream::connect(server.addr()).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.middleware_mut().session_by_user(2).is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let fill = ComboPrivateFill {
+            seq: 1,
+            order_id: 2,
+            user_id: 2,
+            side: Side::Buy,
+            quantity: 5,
+            leg1_price: 50_000,
+            leg2_price: 100,
+            spread_ticks: 49_900,
+        };
+        assert_eq!(runtime.dispatch_combo_private(&server, [fill]), 1);
+        let mut frame = [0u8; crate::exchange::gateway::GATEWAY_FRAME_SIZE];
+        stream.read_exact(&mut frame).unwrap();
+        assert_eq!(
+            GatewayFrame::decode(&frame).unwrap(),
+            GatewayFrame::ComboPrivate(fill)
+        );
+        server.stop();
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
