@@ -776,18 +776,6 @@ mod tests {
         }
         assert_eq!(core.best_bid(), Some(50_000));
         assert_eq!(core.best_ask(), None);
-        assert_eq!(
-            core.positions()
-                .get(PositionKey::new(1, Side::Buy, Hedge::Spec))
-                .today,
-            8
-        );
-        assert_eq!(
-            core.positions()
-                .get(PositionKey::new(2, Side::Sell, Hedge::Spec))
-                .today,
-            8
-        );
     }
 
     #[test]
@@ -1245,6 +1233,18 @@ mod tests {
         assert_eq!(core.auction_order_count(), 0);
         assert_eq!(core.best_bid(), Some(50_000));
         assert_eq!(core.best_ask(), None);
+        assert_eq!(
+            core.positions()
+                .get(PositionKey::new(1, Side::Buy, Hedge::Spec))
+                .today,
+            8
+        );
+        assert_eq!(
+            core.positions()
+                .get(PositionKey::new(2, Side::Sell, Hedge::Spec))
+                .today,
+            8
+        );
     }
 
     #[test]
