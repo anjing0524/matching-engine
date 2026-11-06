@@ -1,14 +1,18 @@
 //! Gateway endpoint directory and TCP health probes for client redirection.
 
+use std::collections::HashMap;
 use std::net::{SocketAddr, TcpStream};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+use std::time::Instant;
 
 /// Round-robin directory of gateway TCP endpoints.
 #[derive(Debug)]
 pub struct GatewayDirectory {
     endpoints: Vec<SocketAddr>,
     next: AtomicUsize,
+    health: Mutex<HashMap<SocketAddr, (bool, Instant)>>,
 }
 
 impl GatewayDirectory {
@@ -24,6 +28,7 @@ impl GatewayDirectory {
         Ok(Self {
             endpoints,
             next: AtomicUsize::new(0),
+            health: Mutex::new(HashMap::new()),
         })
     }
 
@@ -54,6 +59,44 @@ impl GatewayDirectory {
             .iter()
             .map(|endpoint| (*endpoint, probe(*endpoint, timeout)))
             .collect()
+    }
+
+    /// Uses a cached health result newer than `ttl`, otherwise probes.
+    #[must_use]
+    pub fn is_healthy_cached(
+        &self,
+        endpoint: SocketAddr,
+        timeout: Duration,
+        ttl: Duration,
+    ) -> bool {
+        let now = Instant::now();
+        if let Ok(cache) = self.health.lock()
+            && let Some((healthy, checked_at)) = cache.get(&endpoint)
+            && now.duration_since(*checked_at) <= ttl
+        {
+            return *healthy;
+        }
+        let healthy = probe(endpoint, timeout);
+        if let Ok(mut cache) = self.health.lock() {
+            cache.insert(endpoint, (healthy, now));
+        }
+        healthy
+    }
+
+    /// Drops cached health state.
+    pub fn clear_health_cache(&self) {
+        if let Ok(mut cache) = self.health.lock() {
+            cache.clear();
+        }
+    }
+
+    /// Returns the first endpoint with a fresh/refreshed healthy state.
+    #[must_use]
+    pub fn first_healthy_cached(&self, timeout: Duration, ttl: Duration) -> Option<SocketAddr> {
+        self.endpoints
+            .iter()
+            .find(|endpoint| self.is_healthy_cached(**endpoint, timeout, ttl))
+            .copied()
     }
 
     /// Returns the first endpoint that accepts a TCP connection.
@@ -97,5 +140,23 @@ mod tests {
             directory.first_healthy(Duration::from_millis(200)),
             Some(live_addr)
         );
+        assert!(directory.is_healthy_cached(
+            live_addr,
+            Duration::from_millis(200),
+            Duration::from_secs(5)
+        ));
+        drop(live);
+        // TTL keeps the cached healthy result even though the listener is gone.
+        assert!(directory.is_healthy_cached(
+            live_addr,
+            Duration::from_millis(200),
+            Duration::from_secs(5)
+        ));
+        directory.clear_health_cache();
+        assert!(!directory.is_healthy_cached(
+            live_addr,
+            Duration::from_millis(50),
+            Duration::from_secs(5)
+        ));
     }
 }

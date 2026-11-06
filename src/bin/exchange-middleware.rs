@@ -142,7 +142,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .ok()?;
             directory
-                .first_healthy(Duration::from_millis(200))
+                .first_healthy_cached(Duration::from_millis(200), Duration::from_secs(5))
                 .map(|address| address.to_string())
         })
     });
