@@ -21,6 +21,7 @@ pub struct RiskOrder {
 pub struct ValidationContext<'a> {
     pub positions: &'a Positions,
     pub frozen_close: &'a FrozenClose,
+    pub pending_open: &'a Positions,
 }
 
 /// A pre-trade plugin. Reject is a stable reason string for private reporting.
@@ -126,6 +127,36 @@ impl PreTradePlugin for MaxOrderQuantityPlugin {
     }
 }
 
+/// Rejects open orders that would exceed a gross position limit when current
+/// positions and all pending open orders are counted.
+#[derive(Clone, Copy, Debug)]
+pub struct PendingPositionLimitPlugin {
+    pub max_position: u64,
+}
+
+impl PreTradePlugin for PendingPositionLimitPlugin {
+    fn check(
+        &self,
+        order: &RiskOrder,
+        context: &ValidationContext<'_>,
+    ) -> Result<(), &'static str> {
+        if order.offset != Offset::Open {
+            return Ok(());
+        }
+        let key = PositionKey::new(order.account_id, order.side, order.hedge);
+        let projected = context
+            .positions
+            .get(key)
+            .total()
+            .saturating_add(context.pending_open.get(key).total())
+            .saturating_add(order.quantity);
+        if projected > self.max_position {
+            return Err("projected position exceeds limit");
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,9 +187,11 @@ mod tests {
             Offset::CloseToday,
         );
         frozen.reserve(close_key, &positions, 8).unwrap();
+        let pending = Positions::new();
         let context = ValidationContext {
             positions: &positions,
             frozen_close: &frozen,
+            pending_open: &pending,
         };
         let plugin = AvailableClosePlugin;
         assert!(
@@ -174,12 +207,35 @@ mod tests {
     }
 
     #[test]
-    fn tuple_chain_is_static_and_ordered() {
-        let positions = Positions::new();
+    fn pending_position_limit_counts_open_exposure() {
+        let mut positions = Positions::new();
+        let mut pending = Positions::new();
         let frozen = FrozenClose::new();
+        let key = PositionKey::new(1, Side::Buy, Hedge::Spec);
+        positions.apply_open(key, 3).unwrap();
+        pending.apply_open(key, 4).unwrap();
         let context = ValidationContext {
             positions: &positions,
             frozen_close: &frozen,
+            pending_open: &pending,
+        };
+        let plugin = PendingPositionLimitPlugin { max_position: 10 };
+        assert!(plugin.check(&order(Offset::Open, 2), &context).is_ok());
+        assert_eq!(
+            plugin.check(&order(Offset::Open, 4), &context),
+            Err("projected position exceeds limit")
+        );
+    }
+
+    #[test]
+    fn tuple_chain_is_static_and_ordered() {
+        let positions = Positions::new();
+        let frozen = FrozenClose::new();
+        let pending = Positions::new();
+        let context = ValidationContext {
+            positions: &positions,
+            frozen_close: &frozen,
+            pending_open: &pending,
         };
         let chain = (
             MaxOrderQuantityPlugin { max_quantity: 5 },

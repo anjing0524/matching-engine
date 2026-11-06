@@ -14,7 +14,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Combo queue, atomic two-leg execution, open/close positions
 - [x] Combo per-user open quantity limit and optional margin precheck
 - [ ] Official CZCE verification of FOK semantics
-- [ ] Position-limit treatment of pending open orders (exchange-specific细则)
+- [x] Pending-open-order exposure projection and limit plugin
 - [ ] Combo close reservation split by yesterday/today reason codes
 
 ## Gateway / sessions

@@ -113,6 +113,7 @@ pub struct CoreSnapshot {
     pub next_order_id: u64,
     pub orders: Vec<(u64, OrderMeta)>,
     pub positions: Vec<(PositionKey, crate::exchange::positions::Position)>,
+    pub pending_open: Vec<(PositionKey, crate::exchange::positions::Position)>,
     pub frozen_close: Vec<(CloseKey, u64)>,
     pub phase: ExchangePhase,
     pub trading_day: u32,
@@ -139,6 +140,7 @@ pub struct ExchangeCore {
     symbol: SymbolId,
     next_trade_id: u64,
     positions: Positions,
+    pending_open: Positions,
     frozen_close: FrozenClose,
     orders: HashMap<u64, OrderMeta>,
     private_seq: u64,
@@ -164,6 +166,7 @@ impl ExchangeCore {
             symbol,
             next_trade_id: 1,
             positions: Positions::new(),
+            pending_open: Positions::new(),
             frozen_close: FrozenClose::new(),
             orders: HashMap::new(),
             private_seq: 1,
@@ -191,6 +194,8 @@ impl ExchangeCore {
         orders.sort_by_key(|(id, _)| *id);
         let mut positions = self.positions.snapshot();
         positions.sort_by_key(|(key, _)| (key.account_id, key.side as u8, key.hedge as u8));
+        let mut pending_open = self.pending_open.snapshot();
+        pending_open.sort_by_key(|(key, _)| (key.account_id, key.side as u8, key.hedge as u8));
         let mut frozen_close = self.frozen_close.snapshot();
         frozen_close.sort_by_key(|(key, _)| {
             (
@@ -207,6 +212,7 @@ impl ExchangeCore {
             next_order_id: self.book.next_order_id(),
             orders,
             positions,
+            pending_open,
             frozen_close,
             phase: self.phase,
             trading_day: self.trading_day,
@@ -233,6 +239,7 @@ impl ExchangeCore {
         self.orders = snapshot.orders.into_iter().collect();
         self.public_orders = self.orders.keys().copied().collect();
         self.positions.restore(snapshot.positions);
+        self.pending_open.restore(snapshot.pending_open);
         self.frozen_close.restore(snapshot.frozen_close);
         self.phase = snapshot.phase;
         self.trading_day = snapshot.trading_day;
@@ -326,6 +333,11 @@ impl ExchangeCore {
 
     pub fn positions_mut(&mut self) -> &mut Positions {
         &mut self.positions
+    }
+
+    #[must_use]
+    pub fn pending_open(&self) -> &Positions {
+        &self.pending_open
     }
 
     #[must_use]
@@ -691,6 +703,12 @@ impl ExchangeCore {
         match self.book.cancel_order(command.order_id, command.user_id) {
             Ok(()) => {
                 if let Some(mut meta) = self.orders.remove(&command.order_id) {
+                    if meta.offset == Offset::Open {
+                        self.pending_open.release_open(
+                            PositionKey::new(meta.account_id, meta.side, meta.hedge),
+                            meta.remaining,
+                        );
+                    }
                     if meta.offset != Offset::Open {
                         let key = CloseKey::new(
                             PositionKey::new(meta.account_id, meta.side.opposite(), meta.hedge),
@@ -829,6 +847,7 @@ impl ExchangeCore {
         let context = ValidationContext {
             positions: &self.positions,
             frozen_close: &self.frozen_close,
+            pending_open: &self.pending_open,
         };
         if let Err(reason) = plugin.check(&risk_order, &context) {
             self.reject_private_into(&command, reason.to_string(), out);
@@ -932,6 +951,12 @@ impl ExchangeCore {
                 remaining_quantity,
                 None,
             );
+            if command.offset == Offset::Open {
+                let _ = self.pending_open.apply_open(
+                    PositionKey::new(u64::from(command.user_id), command.side, command.hedge),
+                    remaining_quantity,
+                );
+            }
         }
 
         let fills: smallvec::SmallVec<[(u64, u64, u64); 8]> = out[start..]
@@ -1052,6 +1077,7 @@ impl ExchangeCore {
         let key = PositionKey::new(account_id, position_side, hedge);
         if offset == Offset::Open {
             let _ = self.positions.apply_open(key, quantity);
+            self.pending_open.release_open(key, quantity);
         } else {
             let _ = self.positions.apply_close(key, offset, quantity);
         }
@@ -1939,5 +1965,42 @@ mod tests {
                 .contains("checksum")
         );
         let _ = std::fs::remove_file(&path);
+    }
+    #[test]
+    fn pending_open_exposure_tracks_accept_and_cancel() {
+        use crate::exchange::plugins::NoPlugins;
+
+        let mut core = core();
+        let mut command = Command::zeroed();
+        command.command_type = CommandType::NewOrder;
+        command.client_order_id = 1;
+        command.session_id = 1;
+        command.member_id = 1;
+        command.user_id = 1;
+        command.seat_id = 1;
+        command.instrument_id = 1;
+        command.price_type = PriceType::Limit;
+        command.time_condition = TimeCondition::Gfd;
+        command.volume_condition = VolumeCondition::Any;
+        command.side = Side::Buy;
+        command.offset = Offset::Open;
+        command.hedge = Hedge::Spec;
+        command.price_ticks = 50_000;
+        command.quantity = 5;
+        let _ = core.execute_with_plugins(command, &NoPlugins);
+        let key = PositionKey::new(1, Side::Buy, Hedge::Spec);
+        assert_eq!(core.pending_open().get(key).total(), 5);
+
+        let mut cancel = Command::zeroed();
+        cancel.command_type = CommandType::Cancel;
+        cancel.client_order_id = 2;
+        cancel.session_id = 1;
+        cancel.member_id = 1;
+        cancel.user_id = 1;
+        cancel.seat_id = 1;
+        cancel.instrument_id = 1;
+        cancel.cancel_order_id = 1;
+        let _ = core.execute_with_plugins(cancel, &NoPlugins);
+        assert_eq!(core.pending_open().get(key).total(), 0);
     }
 }

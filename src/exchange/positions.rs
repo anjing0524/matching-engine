@@ -100,6 +100,13 @@ impl Positions {
         Ok(())
     }
 
+    /// Releases pending open exposure when an order fills or cancels.
+    pub fn release_open(&mut self, key: PositionKey, quantity: u64) {
+        if let Some(position) = self.positions.get_mut(&key) {
+            position.today = position.today.saturating_sub(quantity);
+        }
+    }
+
     /// Applies a close fill to exactly one position bucket.
     pub fn apply_close(
         &mut self,
