@@ -220,6 +220,114 @@ mod tests {
     }
 
     #[test]
+    fn combo_order_flows_gateway_to_public_transport() {
+        use crate::exchange::combo_engine::ComboEngine;
+        use crate::exchange::combo_market_data::{
+            ComboMarketDataPublisher, ComboMarketDataSubscriber,
+        };
+        use crate::exchange::combo_runtime::ComboRuntime;
+        use crate::exchange::protocol::{Command, CommandType, Hedge, Offset, Side};
+        use crate::shared::protocol::OrderType;
+        use std::io::Read;
+
+        let core_path = std::env::temp_dir().join(format!(
+            "matching-engine-combo-e2e-core-{}",
+            std::process::id()
+        ));
+        let combo_path = std::env::temp_dir().join(format!(
+            "matching-engine-combo-e2e-ring-{}",
+            std::process::id()
+        ));
+        for path in [&core_path, &combo_path] {
+            let _ = std::fs::remove_file(path);
+        }
+        let (core_producer, core_consumer) = create(&core_path, 16).unwrap();
+        let (combo_producer, combo_consumer) = create(&combo_path, 16).unwrap();
+        let middleware =
+            MiddlewareSequencer::new(core_producer).with_combo_transport(combo_producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let gateway = GatewayRuntime::new(middleware, events);
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let runner = CoreRunner::new(core, core_consumer, NoPlugins);
+
+        let mut engine = ComboEngine::new(
+            ContractSpec::new("LEG1", 1, 1_000, 100_000),
+            ContractSpec::new("LEG2", 1, 1, 100_000),
+        );
+        engine
+            .executor_mut()
+            .leg1
+            .insert_resting_order(2, OrderType::Sell, 50_000, 5, 5, 1)
+            .unwrap();
+        engine
+            .executor_mut()
+            .leg2
+            .insert_resting_order(3, OrderType::Buy, 100, 5, 5, 2)
+            .unwrap();
+        let subscriber = ComboMarketDataSubscriber::bind("127.0.0.1:0").unwrap();
+        let publisher =
+            ComboMarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap())
+                .unwrap();
+        let combo = ComboRuntime::new(engine)
+            .with_command_consumer(combo_consumer)
+            .with_publisher(publisher);
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_combo_runtime(combo);
+
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        let mut combo_command = Command::zeroed();
+        combo_command.command_type = CommandType::NewOrder;
+        combo_command.combo_id = 7;
+        combo_command.client_order_id = 42;
+        combo_command.user_id = 2;
+        combo_command.side = Side::Buy;
+        combo_command.price_ticks = 49_900;
+        combo_command.quantity = 5;
+        combo_command.offset = Offset::Open;
+        combo_command.hedge = Hedge::Spec;
+        stream
+            .write_all(&GatewayFrame::Command(combo_command).encode())
+            .unwrap();
+
+        let mut private = None;
+        for _ in 0..500 {
+            runtime.tick();
+            let mut frame = [0u8; crate::exchange::gateway::GATEWAY_FRAME_SIZE];
+            if stream.read_exact(&mut frame).is_ok() {
+                private = Some(GatewayFrame::decode(&frame).unwrap());
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(matches!(
+            private,
+            Some(GatewayFrame::PrivateEvent(event)) if event.status == crate::exchange::private_events::PrivateStatus::Accepted
+        ));
+        let fill = subscriber.recv().unwrap();
+        assert_eq!(fill.quantity, 5);
+        assert_eq!(fill.spread_ticks, 49_900);
+        for path in [&core_path, &combo_path] {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
     fn combo_runtime_tick_is_driven_by_exchange_runtime() {
         use crate::exchange::combo_engine::ComboEngine;
         use crate::exchange::combo_market_data::{

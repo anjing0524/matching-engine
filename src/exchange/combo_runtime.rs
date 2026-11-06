@@ -162,6 +162,8 @@ impl ComboRuntime {
     ) -> (usize, usize) {
         let command_events = self.drain_command_events();
         let _ = gateway.dispatch_private(server, command_events);
+        // Execute every marketable queued combo before draining its fills.
+        let _ = self.engine.run();
         let events = self.engine.drain_events();
         let mut public = 0;
         if let Some(publisher) = &self.publisher {
