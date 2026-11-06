@@ -106,6 +106,7 @@ pub struct ExchangeCore {
     private_seq: u64,
     private_events: Vec<PrivateEvent>,
     auction_orders: Vec<AuctionOrder>,
+    auction_meta: HashMap<u64, (u64, Side, Offset, Hedge)>,
     auction_order_seq: u64,
 }
 
@@ -122,6 +123,7 @@ impl ExchangeCore {
             private_seq: 1,
             private_events: Vec::new(),
             auction_orders: Vec::new(),
+            auction_meta: HashMap::new(),
             auction_order_seq: 1,
         }
     }
@@ -227,6 +229,8 @@ impl ExchangeCore {
         side: Side,
         price_ticks: u64,
         quantity: u64,
+        offset: Offset,
+        hedge: Hedge,
     ) -> u64 {
         let order_id = self.book.reserve_order_id();
         self.auction_order_seq += 1;
@@ -236,8 +240,12 @@ impl ExchangeCore {
             side,
             price_ticks,
             quantity,
+            offset,
+            hedge,
             arrival_seq: order_id,
         });
+        self.auction_meta
+            .insert(order_id, (user_id, side, offset, hedge));
         order_id
     }
 
@@ -245,20 +253,64 @@ impl ExchangeCore {
     pub fn uncross_auction(&mut self, previous_settlement: u64) -> AuctionResult {
         let orders = std::mem::take(&mut self.auction_orders);
         let result = auction::uncross(&orders, previous_settlement);
+        for trade in &result.trades {
+            self.apply_auction_fill(trade.buyer_order_id, trade.quantity);
+            self.apply_auction_fill(trade.seller_order_id, trade.quantity);
+            self.push_private(
+                trade.buyer_order_id,
+                0,
+                self.auction_meta
+                    .get(&trade.buyer_order_id)
+                    .map_or(0, |meta| meta.0),
+                PrivateStatus::Filled,
+                trade.quantity,
+                0,
+                None,
+            );
+            self.push_private(
+                trade.seller_order_id,
+                0,
+                self.auction_meta
+                    .get(&trade.seller_order_id)
+                    .map_or(0, |meta| meta.0),
+                PrivateStatus::Filled,
+                trade.quantity,
+                0,
+                None,
+            );
+        }
         for order in &result.remaining {
             let side = match order.side {
                 Side::Buy => OrderType::Buy,
                 Side::Sell => OrderType::Sell,
             };
-            let _ = self.book.insert_resting_order(
-                order.user_id,
-                side,
-                order.price_ticks,
-                order.quantity,
-                order.quantity,
-                order.order_id,
-            );
+            if self
+                .book
+                .insert_resting_order(
+                    order.user_id,
+                    side,
+                    order.price_ticks,
+                    order.quantity,
+                    order.quantity,
+                    order.order_id,
+                )
+                .is_ok()
+            {
+                self.orders.insert(
+                    order.order_id,
+                    OrderMeta {
+                        client_order_id: 0,
+                        account_id: order.user_id,
+                        side: order.side,
+                        offset: order.offset,
+                        hedge: order.hedge,
+                        remaining: order.quantity,
+                        status: OrderStatus::Accepted,
+                    },
+                );
+            }
         }
+        self.auction_meta.clear();
         result
     }
 
@@ -554,6 +606,24 @@ impl ExchangeCore {
         events
     }
 
+    fn apply_auction_fill(&mut self, order_id: u64, quantity: u64) {
+        let Some((account_id, side, offset, hedge)) = self.auction_meta.get(&order_id).copied()
+        else {
+            return;
+        };
+        let position_side = if offset == Offset::Open {
+            side
+        } else {
+            side.opposite()
+        };
+        let key = PositionKey::new(account_id, position_side, hedge);
+        if offset == Offset::Open {
+            let _ = self.positions.apply_open(key, quantity);
+        } else {
+            let _ = self.positions.apply_close(key, offset, quantity);
+        }
+    }
+
     /// Applies one fill to an order's position and remaining quantity.
     fn apply_fill(&mut self, order_id: u64, quantity: u64) {
         let Some(mut meta) = self.orders.remove(&order_id) else {
@@ -706,6 +776,18 @@ mod tests {
         }
         assert_eq!(core.best_bid(), Some(50_000));
         assert_eq!(core.best_ask(), None);
+        assert_eq!(
+            core.positions()
+                .get(PositionKey::new(1, Side::Buy, Hedge::Spec))
+                .today,
+            8
+        );
+        assert_eq!(
+            core.positions()
+                .get(PositionKey::new(2, Side::Sell, Hedge::Spec))
+                .today,
+            8
+        );
     }
 
     #[test]
@@ -1154,8 +1236,8 @@ mod tests {
     fn auction_collects_and_uncrosses() {
         let mut core = core();
         core.begin_auction();
-        core.queue_auction_order(1, Side::Buy, 50_000, 10);
-        core.queue_auction_order(2, Side::Sell, 49_900, 8);
+        core.queue_auction_order(1, Side::Buy, 50_000, 10, Offset::Open, Hedge::Spec);
+        core.queue_auction_order(2, Side::Sell, 49_900, 8, Offset::Open, Hedge::Spec);
         assert_eq!(core.auction_order_count(), 2);
         let result = core.uncross_auction(50_000);
         assert_eq!(result.price_ticks, Some(50_000));

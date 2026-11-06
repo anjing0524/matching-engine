@@ -4,7 +4,7 @@
 //! deterministic tie-breaking. Market/arbitrage orders are rejected by the
 //! caller before entering this book.
 
-use crate::exchange::protocol::Side;
+use crate::exchange::protocol::{Hedge, Offset, Side};
 
 /// One order collected during the call auction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,6 +14,8 @@ pub struct AuctionOrder {
     pub side: Side,
     pub price_ticks: u64,
     pub quantity: u64,
+    pub offset: Offset,
+    pub hedge: Hedge,
     /// Global arrival sequence, used as the time-priority tie-breaker.
     pub arrival_seq: u64,
 }
@@ -185,6 +187,8 @@ mod tests {
             side,
             price_ticks: price,
             quantity,
+            offset: Offset::Open,
+            hedge: Hedge::Spec,
             arrival_seq: seq,
         }
     }
