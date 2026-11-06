@@ -4,7 +4,7 @@
 //! spread-price/FIFO queue and are later executed atomically against the two
 //! leg books. This slice implements the queue and cancellation only.
 
-use crate::exchange::protocol::Side;
+use crate::exchange::protocol::{Hedge, Offset, Side};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 /// One resting combination order.
@@ -16,6 +16,8 @@ pub struct ComboOrder {
     /// Spread price × tick, e.g. leg1 - leg2.
     pub spread_price_ticks: u64,
     pub quantity: u64,
+    pub offset: Offset,
+    pub hedge: Hedge,
     pub arrival_seq: u64,
 }
 
@@ -43,6 +45,8 @@ impl ComboQueue {
         side: Side,
         spread_price_ticks: u64,
         quantity: u64,
+        offset: Offset,
+        hedge: Hedge,
     ) -> bool {
         if quantity == 0 || self.locations.contains_key(&order_id) {
             return false;
@@ -55,6 +59,8 @@ impl ComboQueue {
             side,
             spread_price_ticks,
             quantity,
+            offset,
+            hedge,
             arrival_seq,
         };
         let book = match side {
@@ -143,9 +149,9 @@ mod tests {
     #[test]
     fn price_then_time_priority() {
         let mut queue = ComboQueue::new();
-        queue.push(1, 1, Side::Buy, 100, 5);
-        queue.push(2, 1, Side::Buy, 110, 5);
-        queue.push(3, 1, Side::Buy, 110, 5);
+        queue.push(1, 1, Side::Buy, 100, 5, Offset::Open, Hedge::Spec);
+        queue.push(2, 1, Side::Buy, 110, 5, Offset::Open, Hedge::Spec);
+        queue.push(3, 1, Side::Buy, 110, 5, Offset::Open, Hedge::Spec);
         assert_eq!(queue.best_bid(), Some(110));
         assert_eq!(queue.pop_best(Side::Buy).unwrap().order_id, 2);
         assert_eq!(queue.pop_best(Side::Buy).unwrap().order_id, 3);
@@ -155,8 +161,8 @@ mod tests {
     #[test]
     fn cancel_removes_from_the_right_price_level() {
         let mut queue = ComboQueue::new();
-        queue.push(1, 1, Side::Sell, 90, 5);
-        queue.push(2, 1, Side::Sell, 80, 5);
+        queue.push(1, 1, Side::Sell, 90, 5, Offset::Open, Hedge::Spec);
+        queue.push(2, 1, Side::Sell, 80, 5, Offset::Open, Hedge::Spec);
         assert_eq!(queue.cancel(2).unwrap().order_id, 2);
         assert_eq!(queue.best_ask(), Some(90));
         assert_eq!(queue.len(), 1);
@@ -165,8 +171,8 @@ mod tests {
     #[test]
     fn duplicate_and_zero_quantity_are_rejected() {
         let mut queue = ComboQueue::new();
-        assert!(!queue.push(1, 1, Side::Buy, 100, 0));
-        assert!(queue.push(1, 1, Side::Buy, 100, 5));
-        assert!(!queue.push(1, 1, Side::Buy, 100, 5));
+        assert!(!queue.push(1, 1, Side::Buy, 100, 0, Offset::Open, Hedge::Spec));
+        assert!(queue.push(1, 1, Side::Buy, 100, 5, Offset::Open, Hedge::Spec));
+        assert!(!queue.push(1, 1, Side::Buy, 100, 5, Offset::Open, Hedge::Spec));
     }
 }

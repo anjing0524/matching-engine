@@ -8,7 +8,7 @@ use crate::domain::orderbook::ContractSpec;
 use crate::exchange::combo::ComboQueue;
 use crate::exchange::combo_exec::{ComboExecError, ComboExecutor, ComboFill};
 use crate::exchange::positions::{PositionKey, Positions};
-use crate::exchange::protocol::{Hedge, Side};
+use crate::exchange::protocol::{Hedge, Offset, Side};
 
 /// One completed combination fill, suitable for private/public projection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,8 +50,11 @@ impl ComboEngine {
         side: Side,
         spread: u64,
         qty: u64,
+        offset: Offset,
+        hedge: Hedge,
     ) -> bool {
-        self.queue.push(order_id, user_id, side, spread, qty)
+        self.queue
+            .push(order_id, user_id, side, spread, qty, offset, hedge)
     }
 
     /// Attempts to execute the best resting order on `side`.
@@ -59,6 +62,19 @@ impl ComboEngine {
     /// The order stays queued if the leg books cannot fill it at its spread.
     pub fn try_execute_best(&mut self, side: Side) -> Option<Result<ComboFill, ComboExecError>> {
         let order = self.queue.peek_best(side)?;
+        if order.offset != Offset::Open {
+            let (leg1_position, leg2_position) = match side {
+                Side::Buy => (Side::Sell, Side::Buy),
+                Side::Sell => (Side::Buy, Side::Sell),
+            };
+            let leg1_key = PositionKey::new(order.user_id, leg1_position, order.hedge);
+            let leg2_key = PositionKey::new(order.user_id, leg2_position, order.hedge);
+            if self.leg1_positions.available_close(leg1_key, order.offset) < order.quantity
+                || self.leg2_positions.available_close(leg2_key, order.offset) < order.quantity
+            {
+                return Some(Err(ComboExecError::PositionUnavailable));
+            }
+        }
         let result = match side {
             Side::Buy => self
                 .executor
@@ -79,18 +95,7 @@ impl ComboEngine {
                     side,
                     fill,
                 });
-                let (leg1_side, leg2_side) = match side {
-                    Side::Buy => (Side::Buy, Side::Sell),
-                    Side::Sell => (Side::Sell, Side::Buy),
-                };
-                let _ = self.leg1_positions.apply_open(
-                    PositionKey::new(order.user_id, leg1_side, Hedge::Spec),
-                    fill.quantity,
-                );
-                let _ = self.leg2_positions.apply_open(
-                    PositionKey::new(order.user_id, leg2_side, Hedge::Spec),
-                    fill.quantity,
-                );
+                self.apply_combo_positions(&order, fill.quantity);
                 Some(Ok(fill))
             }
             Err(error) => Some(Err(error)),
@@ -115,6 +120,36 @@ impl ComboEngine {
         fills
     }
 
+    fn apply_combo_positions(&mut self, order: &crate::exchange::combo::ComboOrder, quantity: u64) {
+        let (leg1_side, leg2_side) = match order.side {
+            Side::Buy => (Side::Buy, Side::Sell),
+            Side::Sell => (Side::Sell, Side::Buy),
+        };
+        if order.offset == Offset::Open {
+            let _ = self.leg1_positions.apply_open(
+                PositionKey::new(order.user_id, leg1_side, order.hedge),
+                quantity,
+            );
+            let _ = self.leg2_positions.apply_open(
+                PositionKey::new(order.user_id, leg2_side, order.hedge),
+                quantity,
+            );
+        } else {
+            let leg1_position = leg1_side.opposite();
+            let leg2_position = leg2_side.opposite();
+            let _ = self.leg1_positions.apply_close(
+                PositionKey::new(order.user_id, leg1_position, order.hedge),
+                order.offset,
+                quantity,
+            );
+            let _ = self.leg2_positions.apply_close(
+                PositionKey::new(order.user_id, leg2_position, order.hedge),
+                order.offset,
+                quantity,
+            );
+        }
+    }
+
     pub fn drain_events(&mut self) -> Vec<ComboFillEvent> {
         std::mem::take(&mut self.events)
     }
@@ -132,6 +167,14 @@ impl ComboEngine {
     #[must_use]
     pub fn leg2_positions(&self) -> &Positions {
         &self.leg2_positions
+    }
+
+    pub fn leg1_positions_mut(&mut self) -> &mut Positions {
+        &mut self.leg1_positions
+    }
+
+    pub fn leg2_positions_mut(&mut self) -> &mut Positions {
+        &mut self.leg2_positions
     }
 
     #[must_use]
@@ -175,7 +218,7 @@ mod tests {
     #[test]
     fn executes_marketable_buy_from_queue() {
         let mut engine = engine();
-        assert!(engine.queue(10, 1, Side::Buy, 49_900, 5));
+        assert!(engine.queue(10, 1, Side::Buy, 49_900, 5, Offset::Open, Hedge::Spec));
         let fill = engine.try_execute_best(Side::Buy).unwrap().unwrap();
         assert_eq!(fill.quantity, 5);
         assert_eq!(engine.queue_len(), 0);
@@ -201,9 +244,59 @@ mod tests {
     }
 
     #[test]
+    fn closes_both_leg_positions_atomically() {
+        use crate::exchange::positions::PositionKey;
+        use crate::exchange::protocol::{Hedge, Offset};
+
+        let mut engine = ComboEngine::new(
+            ContractSpec::new("LEG1", 1, 1_000, 100_000),
+            ContractSpec::new("LEG2", 1, 1, 100_000),
+        );
+        engine
+            .executor_mut()
+            .leg1
+            .insert_resting_order(2, OrderType::Buy, 50_000, 5, 5, 1)
+            .unwrap();
+        engine
+            .executor_mut()
+            .leg2
+            .insert_resting_order(3, OrderType::Sell, 100, 5, 5, 2)
+            .unwrap();
+        let leg1_key = PositionKey::new(1, Side::Buy, Hedge::Spec);
+        let leg2_key = PositionKey::new(1, Side::Sell, Hedge::Spec);
+        engine.leg1_positions_mut().apply_open(leg1_key, 5).unwrap();
+        engine.leg2_positions_mut().apply_open(leg2_key, 5).unwrap();
+
+        assert!(engine.queue(
+            10,
+            1,
+            Side::Sell,
+            49_900,
+            5,
+            Offset::CloseToday,
+            Hedge::Spec
+        ));
+        let fill = engine.try_execute_best(Side::Sell).unwrap().unwrap();
+        assert_eq!(fill.quantity, 5);
+        assert_eq!(engine.leg1_positions().get(leg1_key).total(), 0);
+        assert_eq!(engine.leg2_positions().get(leg2_key).total(), 0);
+    }
+
+    #[test]
+    fn rejects_close_without_leg_positions() {
+        use crate::exchange::protocol::{Hedge, Offset};
+
+        let mut engine = engine();
+        assert!(engine.queue(10, 1, Side::Buy, 49_900, 5, Offset::CloseToday, Hedge::Spec));
+        let result = engine.try_execute_best(Side::Buy).unwrap();
+        assert_eq!(result, Err(ComboExecError::PositionUnavailable));
+        assert_eq!(engine.queue_len(), 1);
+    }
+
+    #[test]
     fn leaves_order_queued_when_spread_fails() {
         let mut engine = engine();
-        assert!(engine.queue(10, 1, Side::Buy, 49_000, 5));
+        assert!(engine.queue(10, 1, Side::Buy, 49_000, 5, Offset::Open, Hedge::Spec));
         let result = engine.try_execute_best(Side::Buy).unwrap();
         assert_eq!(result, Err(ComboExecError::SpreadNotSatisfied));
         assert_eq!(engine.queue_len(), 1);
@@ -212,7 +305,7 @@ mod tests {
     #[test]
     fn run_executes_both_sides() {
         let mut engine = engine();
-        engine.queue(10, 1, Side::Buy, 49_900, 5);
+        engine.queue(10, 1, Side::Buy, 49_900, 5, Offset::Open, Hedge::Spec);
         let fills = engine.run();
         assert_eq!(fills.len(), 1);
         assert_eq!(engine.queue_len(), 0);

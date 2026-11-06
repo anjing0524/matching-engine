@@ -24,6 +24,7 @@ pub enum ComboExecError {
     MissingLiquidity,
     SpreadNotSatisfied,
     LegUnderfilled,
+    PositionUnavailable,
 }
 
 struct LegSnapshot {

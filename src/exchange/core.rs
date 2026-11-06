@@ -316,11 +316,21 @@ impl ExchangeCore {
         side: Side,
         spread_price_ticks: u64,
         quantity: u64,
+        offset: Offset,
+        hedge: Hedge,
     ) -> Option<u64> {
         let order_id = self.book.reserve_order_id();
         let queue = self.combo_queues.entry(combo_id).or_default();
         queue
-            .push(order_id, user_id, side, spread_price_ticks, quantity)
+            .push(
+                order_id,
+                user_id,
+                side,
+                spread_price_ticks,
+                quantity,
+                offset,
+                hedge,
+            )
             .then_some(order_id)
     }
 
@@ -1546,8 +1556,12 @@ mod tests {
     #[test]
     fn combo_queue_orders_by_spread_price() {
         let mut core = core();
-        let a = core.submit_combo_order(7, 1, Side::Buy, 100, 5).unwrap();
-        let b = core.submit_combo_order(7, 1, Side::Buy, 110, 5).unwrap();
+        let a = core
+            .submit_combo_order(7, 1, Side::Buy, 100, 5, Offset::Open, Hedge::Spec)
+            .unwrap();
+        let b = core
+            .submit_combo_order(7, 1, Side::Buy, 110, 5, Offset::Open, Hedge::Spec)
+            .unwrap();
         assert_eq!(core.combo_queue_len(7), 2);
         let queue = core.combo_queues.get_mut(&7).unwrap();
         assert_eq!(queue.best_bid(), Some(110));
@@ -1559,7 +1573,9 @@ mod tests {
     #[test]
     fn combo_order_can_be_canceled() {
         let mut core = core();
-        let order_id = core.submit_combo_order(7, 1, Side::Sell, 90, 5).unwrap();
+        let order_id = core
+            .submit_combo_order(7, 1, Side::Sell, 90, 5, Offset::Open, Hedge::Spec)
+            .unwrap();
         assert!(core.cancel_combo_order(7, order_id));
         assert_eq!(core.combo_queue_len(7), 0);
     }
