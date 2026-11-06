@@ -20,6 +20,56 @@ pub struct ComboFillEvent {
     pub fill: ComboFill,
 }
 
+/// Public projection of a combination fill: no member identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComboPublicFill {
+    pub seq: u64,
+    pub quantity: u64,
+    pub leg1_price: u64,
+    pub leg2_price: u64,
+    pub spread_ticks: i64,
+}
+
+/// Private projection of a combination fill: routed back to the member.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComboPrivateFill {
+    pub seq: u64,
+    pub order_id: u64,
+    pub user_id: u64,
+    pub side: Side,
+    pub quantity: u64,
+    pub leg1_price: u64,
+    pub leg2_price: u64,
+    pub spread_ticks: i64,
+}
+
+impl ComboFillEvent {
+    #[must_use]
+    pub fn public_fill(&self) -> ComboPublicFill {
+        ComboPublicFill {
+            seq: self.seq,
+            quantity: self.fill.quantity,
+            leg1_price: self.fill.leg1_price,
+            leg2_price: self.fill.leg2_price,
+            spread_ticks: self.fill.spread_ticks,
+        }
+    }
+
+    #[must_use]
+    pub fn private_fill(&self) -> ComboPrivateFill {
+        ComboPrivateFill {
+            seq: self.seq,
+            order_id: self.order_id,
+            user_id: self.user_id,
+            side: self.side,
+            quantity: self.fill.quantity,
+            leg1_price: self.fill.leg1_price,
+            leg2_price: self.fill.leg2_price,
+            spread_ticks: self.fill.spread_ticks,
+        }
+    }
+}
+
 /// Combines the combo queue with the two-leg executor.
 pub struct ComboEngine {
     queue: ComboQueue,
@@ -298,6 +348,12 @@ mod tests {
         assert_eq!(events[0].order_id, 10);
         assert_eq!(events[0].side, Side::Buy);
         assert_eq!(events[0].fill.quantity, 5);
+        let public = events[0].public_fill();
+        assert_eq!(public.quantity, 5);
+        assert_eq!(public.leg1_price, 50_000);
+        let private = events[0].private_fill();
+        assert_eq!(private.user_id, 1);
+        assert_eq!(private.spread_ticks, 49_900);
     }
 
     #[test]
