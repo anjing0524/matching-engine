@@ -7,7 +7,8 @@
 use crate::domain::orderbook::ContractSpec;
 use crate::exchange::combo::ComboQueue;
 use crate::exchange::combo_exec::{ComboExecError, ComboExecutor, ComboFill};
-use crate::exchange::protocol::Side;
+use crate::exchange::positions::{PositionKey, Positions};
+use crate::exchange::protocol::{Hedge, Side};
 
 /// One completed combination fill, suitable for private/public projection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +26,8 @@ pub struct ComboEngine {
     executor: ComboExecutor,
     next_event_seq: u64,
     events: Vec<ComboFillEvent>,
+    leg1_positions: Positions,
+    leg2_positions: Positions,
 }
 
 impl ComboEngine {
@@ -35,6 +38,8 @@ impl ComboEngine {
             executor: ComboExecutor::new(leg1_spec, leg2_spec),
             next_event_seq: 1,
             events: Vec::new(),
+            leg1_positions: Positions::new(),
+            leg2_positions: Positions::new(),
         }
     }
 
@@ -74,6 +79,18 @@ impl ComboEngine {
                     side,
                     fill,
                 });
+                let (leg1_side, leg2_side) = match side {
+                    Side::Buy => (Side::Buy, Side::Sell),
+                    Side::Sell => (Side::Sell, Side::Buy),
+                };
+                let _ = self.leg1_positions.apply_open(
+                    PositionKey::new(order.user_id, leg1_side, Hedge::Spec),
+                    fill.quantity,
+                );
+                let _ = self.leg2_positions.apply_open(
+                    PositionKey::new(order.user_id, leg2_side, Hedge::Spec),
+                    fill.quantity,
+                );
                 Some(Ok(fill))
             }
             Err(error) => Some(Err(error)),
@@ -105,6 +122,16 @@ impl ComboEngine {
     #[must_use]
     pub fn events(&self) -> &[ComboFillEvent] {
         &self.events
+    }
+
+    #[must_use]
+    pub fn leg1_positions(&self) -> &Positions {
+        &self.leg1_positions
+    }
+
+    #[must_use]
+    pub fn leg2_positions(&self) -> &Positions {
+        &self.leg2_positions
     }
 
     #[must_use]
@@ -152,6 +179,20 @@ mod tests {
         let fill = engine.try_execute_best(Side::Buy).unwrap().unwrap();
         assert_eq!(fill.quantity, 5);
         assert_eq!(engine.queue_len(), 0);
+        assert_eq!(
+            engine
+                .leg1_positions()
+                .get(PositionKey::new(1, Side::Buy, Hedge::Spec))
+                .today,
+            5
+        );
+        assert_eq!(
+            engine
+                .leg2_positions()
+                .get(PositionKey::new(1, Side::Sell, Hedge::Spec))
+                .today,
+            5
+        );
         let events = engine.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].order_id, 10);
