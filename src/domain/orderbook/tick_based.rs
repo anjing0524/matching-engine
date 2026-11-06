@@ -823,30 +823,57 @@ impl TickBasedOrderBook {
     #[must_use]
     pub fn snapshot_orders(&self) -> Vec<RestingOrder> {
         let mut orders = Vec::with_capacity(self.order_locations.len());
-        for side in [BookSide::Bid, BookSide::Ask] {
-            let levels = match side {
-                BookSide::Bid => &self.bid_levels,
-                BookSide::Ask => &self.ask_levels,
-            };
-            for level in levels {
-                let mut node = level.head;
+
+        if let (Some(mut idx), Some(max_idx)) = (self.bid_min_idx, self.best_bid_idx) {
+            loop {
+                let mut node = self.bid_levels[idx].head;
                 while node != NONE {
                     let order = &self.nodes[node as usize];
                     orders.push(RestingOrder {
                         user_id: order.user_id,
                         order_id: order.order_id,
-                        side: match side {
-                            BookSide::Bid => OrderType::Buy,
-                            BookSide::Ask => OrderType::Sell,
-                        },
+                        side: OrderType::Buy,
                         price: order.price,
                         quantity: order.quantity,
                         original_quantity: order.original_quantity,
                     });
                     node = order.next;
                 }
+                if idx >= max_idx {
+                    break;
+                }
+                let Some(next) = self.bid_bitmap.find_next_one(idx) else {
+                    break;
+                };
+                idx = next;
             }
         }
+
+        if let (Some(mut idx), Some(max_idx)) = (self.best_ask_idx, self.ask_max_idx) {
+            loop {
+                let mut node = self.ask_levels[idx].head;
+                while node != NONE {
+                    let order = &self.nodes[node as usize];
+                    orders.push(RestingOrder {
+                        user_id: order.user_id,
+                        order_id: order.order_id,
+                        side: OrderType::Sell,
+                        price: order.price,
+                        quantity: order.quantity,
+                        original_quantity: order.original_quantity,
+                    });
+                    node = order.next;
+                }
+                if idx >= max_idx {
+                    break;
+                }
+                let Some(next) = self.ask_bitmap.find_next_one(idx) else {
+                    break;
+                };
+                idx = next;
+            }
+        }
+
         orders
     }
 
