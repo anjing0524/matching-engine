@@ -75,14 +75,10 @@ impl ComboRuntime {
                 if command.price_ticks < 0 {
                     false
                 } else {
-                    let side = match command.side {
-                        Side::Buy => Side::Buy,
-                        Side::Sell => Side::Sell,
-                    };
                     self.engine.queue(
                         command.client_order_id.max(1),
                         u64::from(command.user_id),
-                        side,
+                        command.side,
                         command.price_ticks as u64,
                         command.quantity,
                         command.offset,
