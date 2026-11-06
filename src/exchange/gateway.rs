@@ -14,6 +14,7 @@ const TAG_COMMAND: u8 = 2;
 const TAG_HEARTBEAT: u8 = 3;
 const TAG_PRIVATE_EVENT: u8 = 4;
 const TAG_COMBO_PRIVATE: u8 = 5;
+const TAG_ACK: u8 = 6;
 const PAYLOAD_OFFSET: usize = 4;
 const PRIVATE_REASON_MAX: usize = 48;
 
@@ -33,6 +34,9 @@ pub enum GatewayFrame {
     },
     PrivateEvent(PrivateEvent),
     ComboPrivate(ComboPrivateFill),
+    Ack {
+        private_seq: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,6 +75,10 @@ impl GatewayFrame {
             Self::Heartbeat { seq } => {
                 out[0] = TAG_HEARTBEAT;
                 out[PAYLOAD_OFFSET..PAYLOAD_OFFSET + 8].copy_from_slice(&seq.to_le_bytes());
+            }
+            Self::Ack { private_seq } => {
+                out[0] = TAG_ACK;
+                out[PAYLOAD_OFFSET..PAYLOAD_OFFSET + 8].copy_from_slice(&private_seq.to_le_bytes());
             }
             Self::ComboPrivate(fill) => {
                 out[0] = TAG_COMBO_PRIVATE;
@@ -204,6 +212,13 @@ impl GatewayFrame {
                     reason,
                 }))
             }
+            TAG_ACK => Ok(Self::Ack {
+                private_seq: u64::from_le_bytes(
+                    frame[PAYLOAD_OFFSET..PAYLOAD_OFFSET + 8]
+                        .try_into()
+                        .expect("8 bytes"),
+                ),
+            }),
             TAG_COMBO_PRIVATE => {
                 let at = PAYLOAD_OFFSET;
                 let side = match frame[at + 24] {
@@ -342,6 +357,12 @@ mod tests {
             spread_ticks: 49_900,
         };
         let frame = GatewayFrame::ComboPrivate(fill);
+        assert_eq!(GatewayFrame::decode(&frame.clone().encode()), Ok(frame));
+    }
+
+    #[test]
+    fn ack_roundtrips() {
+        let frame = GatewayFrame::Ack { private_seq: 42 };
         assert_eq!(GatewayFrame::decode(&frame.clone().encode()), Ok(frame));
     }
 

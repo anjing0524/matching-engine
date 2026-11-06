@@ -97,6 +97,14 @@ impl GatewayRuntime {
                     self.errors += 1;
                 }
             }
+            GatewayFrame::Ack { private_seq } => {
+                if !self
+                    .middleware
+                    .acknowledge_private(connection_id, private_seq)
+                {
+                    self.errors += 1;
+                }
+            }
             GatewayFrame::Heartbeat { .. }
             | GatewayFrame::PrivateEvent(_)
             | GatewayFrame::ComboPrivate(_) => {}
@@ -281,6 +289,64 @@ mod tests {
         assert_eq!(
             GatewayFrame::decode(&frame).unwrap(),
             GatewayFrame::ComboPrivate(fill)
+        );
+        server.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn client_ack_updates_session_private_seq() {
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-gateway-ack-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let mut runtime = GatewayRuntime::new(middleware, events);
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.middleware_mut().session_by_user(2).is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        stream
+            .write_all(&GatewayFrame::Ack { private_seq: 7 }.encode())
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime
+                .middleware_mut()
+                .session_by_user(2)
+                .is_some_and(|session| session.last_private_seq == 7)
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(
+            runtime
+                .middleware_mut()
+                .session_by_user(2)
+                .unwrap()
+                .last_private_seq,
+            7
         );
         server.stop();
         let _ = std::fs::remove_file(&path);

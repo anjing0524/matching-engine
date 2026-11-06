@@ -47,6 +47,10 @@ impl MiddlewareSequencer {
         self.sessions.find_active_by_user(user_id)
     }
 
+    pub fn acknowledge_private(&mut self, session_id: u64, private_seq: u64) -> bool {
+        self.sessions.acknowledge_private(session_id, private_seq)
+    }
+
     /// Submits only when the command's session is open and active.
     pub fn submit_for_session(&mut self, command: Command) -> Result<u64, CommandTransportError> {
         let session = self
