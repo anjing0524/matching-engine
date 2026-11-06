@@ -22,14 +22,29 @@
   `auction rejects market/FAK/FOK orders`.
 - Limit + GFD remains the auction-compatible order shape in this core.
 
+## Official rules text (extracted 2026-11-06)
+
+From the official CZCE trading rules PDF, 第二十六条:
+
+- order types listed: 限价指令、市价指令、套利指令、取消指令
+- 市价指令不参与集合竞价
+- 套利指令不参与集合竞价
+- single-side no-quote: unfilled market order is automatically canceled
+- minimum order quantity is 1 lot
+- limit order maximum is 1000 lots; market order maximum is 200 lots
+- FOK/FAK are **not** listed as order types in this 2021 text
+
+This matches the core's auction rejection for market orders. FOK/FAK are treated
+as order attributes by brokers/trading systems, not as CZCE order types in the
+2021 rules. The secondary source says all six exchanges support these attributes
+and that they are not allowed in auction; product-level confirmation is still
+needed.
+
 ## Remaining validation
 
-The secondary source confirms the general rule, but the official CZCE PDF has
-not been machine-verified in this repository. Before production, confirm:
+Before production, confirm:
 
 1. whether CZCE emits a rejected order or an accepted-then-canceled order when
    FOK cannot fill
-2. exact auction order-type restrictions
+2. product-level availability of FOK/FAK attributes
 3. any product-specific exceptions
-
-Until then, readiness keeps official CZCE verification open.

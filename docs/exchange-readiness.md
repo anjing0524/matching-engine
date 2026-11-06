@@ -13,9 +13,8 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Session phase and time-tick control from middleware
 - [x] Combo queue, atomic two-leg execution, open/close positions
 - [x] Combo per-user open quantity limit and optional margin precheck
-- [ ] Official CZCE verification of FOK semantics
-  - secondary source checked; FOK/FAK rejected in auction
-  - official CZCE PDF still needs confirmation
+- [x] Official CZCE order-type and auction rules checked (2021 PDF)
+- [ ] Product-level FOK/FAK attribute confirmation
 - [x] Pending-open-order exposure projection and limit plugin
 - [x] Combo close rejection split by leg and today/yesterday
 
