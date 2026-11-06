@@ -63,6 +63,20 @@ impl<A: PreTradePlugin, B: PreTradePlugin> PreTradePlugin for (A, B) {
     }
 }
 
+/// Plugin used by the minimal runner when no exchange-specific rule is enabled.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoPlugins;
+
+impl PreTradePlugin for NoPlugins {
+    fn check(
+        &self,
+        _order: &RiskOrder,
+        _context: &ValidationContext<'_>,
+    ) -> Result<(), &'static str> {
+        Ok(())
+    }
+}
+
 /// Rejects a close order that exceeds the position bucket after accounting for
 /// already accepted close orders.
 #[derive(Clone, Copy, Debug, Default)]
