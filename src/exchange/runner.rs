@@ -8,7 +8,10 @@ use crate::exchange::core::{CoreEvent, ExchangeCore};
 use crate::exchange::plugins::PreTradePlugin;
 use crate::exchange::private_events::PrivateEvent;
 use crate::exchange::public_events::PublicEvent;
-use crate::exchange::transport::{CommandConsumer, PrivateEventProducer, PublicEventProducer};
+use crate::exchange::transport::{
+    CommandConsumer, CommandTransportError, PrivateEventProducer, PublicEventProducer,
+};
+use std::collections::VecDeque;
 
 /// Drains commands from a `CommandConsumer` and applies them to `ExchangeCore`.
 pub struct CoreRunner<P> {
@@ -18,6 +21,8 @@ pub struct CoreRunner<P> {
     events: Vec<CoreEvent>,
     public_producer: Option<PublicEventProducer>,
     private_producer: Option<PrivateEventProducer>,
+    pending_public: VecDeque<PublicEvent>,
+    pending_private: VecDeque<PrivateEvent>,
 }
 
 impl<P: PreTradePlugin> CoreRunner<P> {
@@ -30,6 +35,8 @@ impl<P: PreTradePlugin> CoreRunner<P> {
             events: Vec::new(),
             public_producer: None,
             private_producer: None,
+            pending_public: VecDeque::new(),
+            pending_private: VecDeque::new(),
         }
     }
 
@@ -46,20 +53,60 @@ impl<P: PreTradePlugin> CoreRunner<P> {
     }
 
     /// Flushes buffered public/private events to the attached transports.
+    ///
+    /// A full ring keeps the unsent tail in memory and retries on the next
+    /// call; events are only dropped after a non-backpressure transport error.
     pub fn flush_events(&mut self) {
-        if let Some(producer) = &self.public_producer {
-            for event in self.core.drain_public_events() {
-                let _ = producer.send(&event);
-            }
+        if self.public_producer.is_some() {
+            self.pending_public.extend(self.core.drain_public_events());
+            self.drain_public_queue();
         }
-        if let Some(producer) = &self.private_producer {
-            for event in self.core.drain_private_events() {
-                let _ = producer.send(&event);
+        if self.private_producer.is_some() {
+            self.pending_private
+                .extend(self.core.drain_private_events());
+            self.drain_private_queue();
+        }
+    }
+
+    fn drain_public_queue(&mut self) {
+        let Some(producer) = &self.public_producer else {
+            return;
+        };
+        while let Some(event) = self.pending_public.front() {
+            match producer.send(event) {
+                Ok(()) => {
+                    self.pending_public.pop_front();
+                }
+                Err(CommandTransportError::Full) => break,
+                Err(_) => {
+                    self.pending_public.pop_front();
+                }
             }
         }
     }
 
-    /// Drains all currently available commands. Returns the number executed.
+    fn drain_private_queue(&mut self) {
+        let Some(producer) = &self.private_producer else {
+            return;
+        };
+        while let Some(event) = self.pending_private.front() {
+            match producer.send(event) {
+                Ok(()) => {
+                    self.pending_private.pop_front();
+                }
+                Err(CommandTransportError::Full) => break,
+                Err(_) => {
+                    self.pending_private.pop_front();
+                }
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn pending_event_count(&self) -> usize {
+        self.pending_public.len() + self.pending_private.len()
+    }
+
     pub fn poll(&mut self) -> usize {
         let mut executed = 0;
         while let Some(result) = self.consumer.recv() {
@@ -189,6 +236,40 @@ mod tests {
             private.status,
             crate::exchange::private_events::PrivateStatus::Accepted
         );
+        drop(producer);
+        for path in [&cmd_path, &public_path, &private_path] {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn full_event_ring_retains_pending_events() {
+        let cmd_path = temp_path("retry-cmd");
+        let public_path = temp_path("retry-public");
+        let private_path = temp_path("retry-private");
+        for path in [&cmd_path, &public_path, &private_path] {
+            let _ = std::fs::remove_file(path);
+        }
+        let (producer, consumer) = create(&cmd_path, 8).unwrap();
+        let (public_producer, public_consumer) =
+            create_public_event_transport(&public_path, 1).unwrap();
+        let (private_producer, _private_consumer) =
+            create_private_event_transport(&private_path, 8).unwrap();
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let mut runner = CoreRunner::new(core, consumer, NoPlugins)
+            .with_event_transports(public_producer, private_producer);
+
+        producer.send(&command(1, Side::Buy, 50_000, 5)).unwrap();
+        producer.send(&command(2, Side::Buy, 50_100, 5)).unwrap();
+        assert_eq!(runner.poll(), 2);
+        assert_eq!(runner.pending_event_count(), 1);
+        let first = public_consumer.recv().unwrap().unwrap();
+        assert_eq!(first.quantity, 5);
+        runner.flush_events();
+        assert_eq!(runner.pending_event_count(), 0);
+        let second = public_consumer.recv().unwrap().unwrap();
+        assert_eq!(second.price_ticks, 50_100);
         drop(producer);
         for path in [&cmd_path, &public_path, &private_path] {
             let _ = std::fs::remove_file(path);
