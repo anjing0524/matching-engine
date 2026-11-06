@@ -47,6 +47,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Append-only command-log segments with header/version checks
 - [x] Size-based command-log rotation with bounded retention
 - [x] Append-only public/private result logs with slot/version checks
+- [x] Size-based result-log rotation with bounded retention
 - [ ] NACK rate limiting and anti-amplification policy
 - [ ] Multicast interface failover
 

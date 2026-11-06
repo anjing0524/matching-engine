@@ -39,6 +39,16 @@ struct Args {
     /// Persist private events to this result log.
     #[arg(long)]
     private_log: Option<String>,
+    /// Rotate public events into this directory.
+    #[arg(long)]
+    public_log_dir: Option<String>,
+    /// Rotate private events into this directory.
+    #[arg(long)]
+    private_log_dir: Option<String>,
+    #[arg(long, default_value_t = 64 * 1024 * 1024)]
+    result_log_max_bytes: u64,
+    #[arg(long, default_value_t = 4)]
+    result_log_retain: usize,
     #[arg(long)]
     auth_token: Option<u64>,
     /// Append accepted commands to this replay log segment.
@@ -74,6 +84,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_deref()
         .map(|path| {
             matching_engine::exchange::result_log::PrivateResultLog::create(Path::new(path))
+        })
+        .transpose()?;
+    let mut rotating_public_log = args
+        .public_log_dir
+        .as_deref()
+        .map(|dir| {
+            matching_engine::exchange::result_log::RotatingPublicResultLog::open(
+                Path::new(dir),
+                "public",
+                args.result_log_max_bytes,
+                args.result_log_retain,
+            )
+        })
+        .transpose()?;
+    let mut rotating_private_log = args
+        .private_log_dir
+        .as_deref()
+        .map(|dir| {
+            matching_engine::exchange::result_log::RotatingPrivateResultLog::open(
+                Path::new(dir),
+                "private",
+                args.result_log_max_bytes,
+                args.result_log_retain,
+            )
         })
         .transpose()?;
 
@@ -121,9 +155,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             log.sync()?;
         }
+        if let Some(log) = &mut rotating_private_log {
+            for event in &private {
+                log.append(event)?;
+            }
+        }
         let _ = gateway.dispatch_private(&server, private);
         while let Some(Ok(event)) = public_consumer.recv() {
             if let Some(log) = &mut public_log {
+                log.append(&event)?;
+            }
+            if let Some(log) = &mut rotating_public_log {
                 log.append(&event)?;
             }
             if let Some(publisher) = &publisher {

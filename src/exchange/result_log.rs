@@ -169,9 +169,232 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_string())
 }
 
+/// Size-bounded rotating result log.
+pub struct RotatingResultLog {
+    directory: std::path::PathBuf,
+    prefix: String,
+    slot_size: usize,
+    max_segment_bytes: u64,
+    retain_segments: usize,
+    next_segment: u64,
+    current_bytes: u64,
+    writer: Option<ResultLogWriter>,
+}
+
+impl RotatingResultLog {
+    /// # Errors
+    /// Returns an I/O error if the directory cannot be created.
+    pub fn open(
+        directory: &Path,
+        prefix: &str,
+        slot_size: usize,
+        max_segment_bytes: u64,
+        retain_segments: usize,
+    ) -> io::Result<Self> {
+        std::fs::create_dir_all(directory)?;
+        Ok(Self {
+            directory: directory.to_path_buf(),
+            prefix: prefix.to_string(),
+            slot_size,
+            max_segment_bytes: max_segment_bytes.max(HEADER_SIZE as u64 + slot_size as u64),
+            retain_segments: retain_segments.max(1),
+            next_segment: 1,
+            current_bytes: 0,
+            writer: None,
+        })
+    }
+
+    /// # Errors
+    /// Returns an I/O error from segment creation/write/sync.
+    pub fn append(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if self.writer.is_none()
+            || self.current_bytes.saturating_add(self.slot_size as u64) > self.max_segment_bytes
+        {
+            self.rotate()?;
+        }
+        if let Some(writer) = &mut self.writer {
+            writer.append(bytes)?;
+            writer.sync()?;
+            self.current_bytes = self.current_bytes.saturating_add(self.slot_size as u64);
+        }
+        Ok(())
+    }
+
+    fn rotate(&mut self) -> io::Result<()> {
+        let path = self
+            .directory
+            .join(format!("{}-{:08}.log", self.prefix, self.next_segment));
+        self.next_segment += 1;
+        self.writer = Some(ResultLogWriter::create(&path, self.slot_size)?);
+        self.current_bytes = HEADER_SIZE as u64;
+        self.prune()?;
+        Ok(())
+    }
+
+    fn prune(&self) -> io::Result<()> {
+        let mut segments = self.segments()?;
+        segments.sort();
+        while segments.len() > self.retain_segments {
+            std::fs::remove_file(segments.remove(0))?;
+        }
+        Ok(())
+    }
+
+    /// # Errors
+    /// Returns an I/O error if the directory cannot be read.
+    pub fn segments(&self) -> io::Result<Vec<std::path::PathBuf>> {
+        let mut paths = Vec::new();
+        for entry in std::fs::read_dir(&self.directory)? {
+            let path = entry?.path();
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&format!("{}-", self.prefix)))
+            {
+                paths.push(path);
+            }
+        }
+        paths.sort();
+        Ok(paths)
+    }
+}
+
+/// Rotating public result log.
+pub struct RotatingPublicResultLog {
+    inner: RotatingResultLog,
+}
+
+impl RotatingPublicResultLog {
+    /// # Errors
+    /// Returns an I/O error if the directory cannot be created.
+    pub fn open(
+        directory: &Path,
+        prefix: &str,
+        max_segment_bytes: u64,
+        retain_segments: usize,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            inner: RotatingResultLog::open(
+                directory,
+                prefix,
+                PUBLIC_EVENT_SLOT_SIZE,
+                max_segment_bytes,
+                retain_segments,
+            )?,
+        })
+    }
+
+    /// # Errors
+    /// Returns an I/O error from the write.
+    pub fn append(&mut self, event: &PublicEvent) -> io::Result<()> {
+        self.inner.append(&encode_public_event(event))
+    }
+}
+
+/// Rotating private result log.
+pub struct RotatingPrivateResultLog {
+    inner: RotatingResultLog,
+}
+
+impl RotatingPrivateResultLog {
+    /// # Errors
+    /// Returns an I/O error if the directory cannot be created.
+    pub fn open(
+        directory: &Path,
+        prefix: &str,
+        max_segment_bytes: u64,
+        retain_segments: usize,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            inner: RotatingResultLog::open(
+                directory,
+                prefix,
+                PRIVATE_EVENT_SLOT_SIZE,
+                max_segment_bytes,
+                retain_segments,
+            )?,
+        })
+    }
+
+    /// # Errors
+    /// Returns an I/O error from the write.
+    pub fn append(&mut self, event: &PrivateEvent) -> io::Result<()> {
+        self.inner.append(&encode_private_event(event))
+    }
+}
+
+/// Reads all public segments in a directory.
+///
+/// # Errors
+/// Returns an I/O error for read/decode failures.
+pub fn read_public_log_dir(directory: &Path) -> io::Result<Vec<PublicEvent>> {
+    read_dir_slots(directory, PUBLIC_EVENT_SLOT_SIZE)?
+        .iter()
+        .map(|slot| decode_public_event(slot).map_err(|error| invalid(&format!("{error:?}"))))
+        .collect()
+}
+
+/// Reads all private segments in a directory.
+///
+/// # Errors
+/// Returns an I/O error for read/decode failures.
+pub fn read_private_log_dir(directory: &Path) -> io::Result<Vec<PrivateEvent>> {
+    read_dir_slots(directory, PRIVATE_EVENT_SLOT_SIZE)?
+        .iter()
+        .map(|slot| decode_private_event(slot).map_err(|error| invalid(&format!("{error:?}"))))
+        .collect()
+}
+
+fn read_dir_slots(directory: &Path, slot_size: usize) -> io::Result<Vec<[u8; 128]>> {
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "log") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    let mut slots = Vec::new();
+    for path in paths {
+        slots.extend(read_slots(&path, slot_size)?);
+    }
+    Ok(slots)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotating_public_log_bounds_segments() {
+        let directory = std::env::temp_dir().join(format!(
+            "matching-engine-rotating-result-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        let mut log = RotatingPublicResultLog::open(&directory, "public", 16 + 128 * 2, 2).unwrap();
+        for seq in 1..=5 {
+            log.append(&PublicEvent {
+                seq,
+                event_type: crate::exchange::public_events::PublicEventType::TimeTick,
+                exchange_ts_ns: 0,
+                phase: 3,
+                instrument_id: 0,
+                order_id: 0,
+                trade_id: 0,
+                buy_order_id: 0,
+                sell_order_id: 0,
+                side: None,
+                price_ticks: 0,
+                quantity: 0,
+                volume: 0,
+            })
+            .unwrap();
+        }
+        let events = read_public_log_dir(&directory).unwrap();
+        assert!(!events.is_empty());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 
     #[test]
     fn public_and_private_logs_roundtrip() {
