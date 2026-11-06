@@ -8,7 +8,7 @@ use crate::exchange::core::{CoreEvent, ExchangeCore};
 use crate::exchange::plugins::PreTradePlugin;
 use crate::exchange::private_events::PrivateEvent;
 use crate::exchange::public_events::PublicEvent;
-use crate::exchange::transport::CommandConsumer;
+use crate::exchange::transport::{CommandConsumer, PrivateEventProducer, PublicEventProducer};
 
 /// Drains commands from a `CommandConsumer` and applies them to `ExchangeCore`.
 pub struct CoreRunner<P> {
@@ -16,6 +16,8 @@ pub struct CoreRunner<P> {
     consumer: CommandConsumer,
     plugin: P,
     events: Vec<CoreEvent>,
+    public_producer: Option<PublicEventProducer>,
+    private_producer: Option<PrivateEventProducer>,
 }
 
 impl<P: PreTradePlugin> CoreRunner<P> {
@@ -26,6 +28,34 @@ impl<P: PreTradePlugin> CoreRunner<P> {
             consumer,
             plugin,
             events: Vec::new(),
+            public_producer: None,
+            private_producer: None,
+        }
+    }
+
+    /// Attaches shared-memory public/private event producers.
+    #[must_use]
+    pub fn with_event_transports(
+        mut self,
+        public: PublicEventProducer,
+        private: PrivateEventProducer,
+    ) -> Self {
+        self.public_producer = Some(public);
+        self.private_producer = Some(private);
+        self
+    }
+
+    /// Flushes buffered public/private events to the attached transports.
+    pub fn flush_events(&mut self) {
+        if let Some(producer) = &self.public_producer {
+            for event in self.core.drain_public_events() {
+                let _ = producer.send(&event);
+            }
+        }
+        if let Some(producer) = &self.private_producer {
+            for event in self.core.drain_private_events() {
+                let _ = producer.send(&event);
+            }
         }
     }
 
@@ -47,6 +77,7 @@ impl<P: PreTradePlugin> CoreRunner<P> {
                 }
             }
         }
+        self.flush_events();
         executed
     }
 
@@ -81,7 +112,9 @@ mod tests {
         Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
         VolumeCondition,
     };
-    use crate::exchange::transport::create;
+    use crate::exchange::transport::{
+        create, create_private_event_transport, create_public_event_transport,
+    };
     use crate::shared::SymbolId;
 
     fn temp_path(name: &str) -> std::path::PathBuf {
@@ -123,6 +156,42 @@ mod tests {
             leg2_hedge: Hedge::Spec,
             trigger_type: TriggerType::None,
             cancel_order_id: 0,
+        }
+    }
+
+    #[test]
+    fn runner_flushes_events_to_transports() {
+        let cmd_path = temp_path("flush-cmd");
+        let public_path = temp_path("flush-public");
+        let private_path = temp_path("flush-private");
+        for path in [&cmd_path, &public_path, &private_path] {
+            let _ = std::fs::remove_file(path);
+        }
+        let (producer, consumer) = create(&cmd_path, 8).unwrap();
+        let (public_producer, public_consumer) =
+            create_public_event_transport(&public_path, 8).unwrap();
+        let (private_producer, private_consumer) =
+            create_private_event_transport(&private_path, 8).unwrap();
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let mut runner = CoreRunner::new(core, consumer, NoPlugins)
+            .with_event_transports(public_producer, private_producer);
+
+        producer.send(&command(1, Side::Buy, 50_000, 5)).unwrap();
+        assert_eq!(runner.poll(), 1);
+        let public = public_consumer.recv().unwrap().unwrap();
+        assert_eq!(
+            public.event_type,
+            crate::exchange::public_events::PublicEventType::OrderRested
+        );
+        let private = private_consumer.recv().unwrap().unwrap();
+        assert_eq!(
+            private.status,
+            crate::exchange::private_events::PrivateStatus::Accepted
+        );
+        drop(producer);
+        for path in [&cmd_path, &public_path, &private_path] {
+            let _ = std::fs::remove_file(path);
         }
     }
 
