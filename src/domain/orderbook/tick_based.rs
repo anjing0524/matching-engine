@@ -90,7 +90,7 @@ pub struct OrderNode {
 }
 
 /// One resting order in a snapshot.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RestingOrder {
     pub user_id: u64,
     pub order_id: u64,
@@ -101,7 +101,7 @@ pub struct RestingOrder {
 }
 
 /// 合约配置
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ContractSpec {
     /// 合约代码
     pub symbol: String,

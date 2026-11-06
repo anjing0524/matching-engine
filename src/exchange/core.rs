@@ -25,6 +25,8 @@ use crate::exchange::public_events::{ExchangePhase, PublicEvent, PublicEventType
 use crate::shared::SymbolId;
 use crate::shared::protocol::{NewOrderRequest, OrderType};
 use std::collections::{HashMap, HashSet};
+use std::io;
+use std::path::Path;
 
 /// A new limit order submitted to the core.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,7 +75,7 @@ pub enum CoreEvent {
 }
 
 /// Lifecycle status of an exchange order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OrderStatus {
     Accepted,
     PartiallyFilled,
@@ -86,7 +88,7 @@ pub enum OrderStatus {
 ///
 /// The order book owns price/FIFO state; this table carries the business
 /// attributes needed to update positions and release close reservations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OrderMeta {
     pub client_order_id: u64,
     pub account_id: u64,
@@ -103,7 +105,7 @@ pub struct OrderMeta {
 /// Combo queues and call-auction staging are intentionally outside this slice;
 /// callers must drain them before snapshotting. Ephemeral event buffers are not
 /// snapshotted because they are already consumed by middleware.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CoreSnapshot {
     pub spec: ContractSpec,
     pub symbol: SymbolId,
@@ -120,6 +122,15 @@ pub struct CoreSnapshot {
     pub last_tick_seq: u64,
     pub last_exchange_ts_ns: u64,
 }
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SnapshotEnvelope {
+    version: u32,
+    snapshot: CoreSnapshot,
+}
+
+/// Current on-disk snapshot format version.
+pub const SNAPSHOT_VERSION: u32 = 1;
 
 /// The deterministic core state machine for one contract.
 pub struct ExchangeCore {
@@ -222,6 +233,60 @@ impl ExchangeCore {
         self.auction_meta.clear();
         self.combo_queues.clear();
         Ok(())
+    }
+
+    /// Serializes the snapshot with a format version.
+    ///
+    /// # Errors
+    /// Returns a JSON error if serialization fails.
+    pub fn snapshot_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&SnapshotEnvelope {
+            version: SNAPSHOT_VERSION,
+            snapshot: self.snapshot(),
+        })
+    }
+
+    /// Restores a snapshot from versioned JSON.
+    ///
+    /// # Errors
+    /// Returns a reason for invalid JSON, a version mismatch, or a restore error.
+    pub fn restore_snapshot_json(&mut self, json: &str) -> Result<(), String> {
+        let envelope: SnapshotEnvelope =
+            serde_json::from_str(json).map_err(|error| error.to_string())?;
+        if envelope.version != SNAPSHOT_VERSION {
+            return Err(format!("unsupported snapshot version {}", envelope.version));
+        }
+        self.restore_snapshot(envelope.snapshot)
+    }
+
+    /// Atomically writes a versioned snapshot to `path`.
+    ///
+    /// # Errors
+    /// Returns an I/O error for serialization or file replacement failure.
+    pub fn save_snapshot(&self, path: &Path) -> io::Result<()> {
+        let json = self
+            .snapshot_json()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let temporary = path.with_extension("tmp");
+        std::fs::write(&temporary, json)?;
+        std::fs::rename(temporary, path)
+    }
+
+    /// Loads a versioned snapshot from `path`.
+    ///
+    /// # Errors
+    /// Returns an I/O error for read/JSON/version failures.
+    pub fn load_snapshot(path: &Path) -> io::Result<CoreSnapshot> {
+        let json = std::fs::read_to_string(path)?;
+        let envelope: SnapshotEnvelope = serde_json::from_str(&json)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if envelope.version != SNAPSHOT_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unsupported snapshot version {}", envelope.version),
+            ));
+        }
+        Ok(envelope.snapshot)
     }
 
     #[must_use]
@@ -1808,5 +1873,31 @@ mod tests {
         assert_eq!(core.phase(), snapshot.phase);
         assert_eq!(core.snapshot(), snapshot);
         let _ = resting_id;
+    }
+    #[test]
+    fn snapshot_json_and_file_roundtrip() {
+        use crate::exchange::positions::PositionKey;
+
+        let mut state = core();
+        let _ = state.submit_limit(order(1, OrderType::Buy, 49_000, 5));
+        state
+            .positions_mut()
+            .apply_open(PositionKey::new(1, Side::Buy, Hedge::Spec), 2)
+            .unwrap();
+        let expected = state.snapshot();
+        let json = state.snapshot_json().unwrap();
+        let mut restored = core();
+        restored.restore_snapshot_json(&json).unwrap();
+        assert_eq!(restored.snapshot(), expected);
+
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-snapshot-{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        state.save_snapshot(&path).unwrap();
+        let loaded = ExchangeCore::load_snapshot(&path).unwrap();
+        assert_eq!(loaded, expected);
+        let _ = std::fs::remove_file(&path);
     }
 }

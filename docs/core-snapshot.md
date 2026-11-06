@@ -29,13 +29,18 @@ state. The rebuilt snapshot compares equal to the captured snapshot in tests.
 
 ## Persistence
 
-The current snapshot is in-memory only. A production implementation needs:
+The current implementation also provides versioned JSON persistence:
 
-1. a stable wire format (versioned, little-endian, explicit field ids)
-2. checksum + atomic file replace
-3. snapshot cadence and command-log segment pinning
-4. replay from snapshot to the last sequenced command
-5. startup validation before middleware admits new commands
+- `snapshot_json()` / `restore_snapshot_json()`
+- `save_snapshot(path)` writes a temporary file and renames it atomically
+- `load_snapshot(path)` rejects unknown versions
+
+Still required for production:
+
+1. checksum and corruption detection
+2. snapshot cadence and command-log segment pinning
+3. replay from snapshot to the last sequenced command
+4. startup validation before middleware admits new commands
 
 ## Failure policy
 

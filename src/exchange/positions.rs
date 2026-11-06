@@ -8,7 +8,7 @@ use crate::exchange::protocol::{Hedge, Offset, Side};
 use std::collections::HashMap;
 
 /// One side of a gross position, split by trading day bucket.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Position {
     pub today: u64,
     pub yesterday: u64,
@@ -22,7 +22,7 @@ impl Position {
 }
 
 /// Key for one account's position bucket.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct PositionKey {
     pub account_id: u64,
     pub side: Side,
@@ -41,7 +41,7 @@ impl PositionKey {
 }
 
 /// Key for close-quantity reservations made by accepted close orders.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct CloseKey {
     pub position: PositionKey,
     pub offset: Offset,

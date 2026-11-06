@@ -17,7 +17,7 @@ pub enum PublicEventType {
 }
 
 /// Trading phase carried by session-switch events.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ExchangePhase {
     Closed,
     PreOpen,
