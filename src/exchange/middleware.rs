@@ -39,7 +39,10 @@ impl MiddlewareSequencer {
         self.sessions.close(session_id)
     }
 
-    pub fn open_or_takeover(&mut self, info: SessionInfo) -> Result<Option<u64>, ()> {
+    pub fn open_or_takeover(
+        &mut self,
+        info: SessionInfo,
+    ) -> Result<Option<u64>, crate::exchange::session::SessionOpenError> {
         self.sessions.open_or_takeover(info)
     }
 

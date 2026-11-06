@@ -6,6 +6,10 @@
 
 use std::collections::HashMap;
 
+/// Rejection for a zero or duplicate session id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionOpenError;
+
 /// One authenticated exchange session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SessionInfo {
@@ -45,9 +49,9 @@ impl SessionRegistry {
     ///
     /// # Errors
     /// Returns `false` for a zero or duplicate session id.
-    pub fn open_or_takeover(&mut self, info: SessionInfo) -> Result<Option<u64>, ()> {
+    pub fn open_or_takeover(&mut self, info: SessionInfo) -> Result<Option<u64>, SessionOpenError> {
         if info.session_id == 0 || self.sessions.contains_key(&info.session_id) {
-            return Err(());
+            return Err(SessionOpenError);
         }
         let replaced = self
             .sessions
