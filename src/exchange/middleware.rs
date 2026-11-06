@@ -7,6 +7,7 @@
 
 use crate::exchange::protocol::{Command, CommandType};
 use crate::exchange::schedule::{ScheduleDriver, TradingSchedule};
+use crate::exchange::session::{SessionInfo, SessionRegistry};
 use crate::exchange::transport::{CommandProducer, CommandTransportError};
 
 /// Single-writer middleware command sequencer.
@@ -14,6 +15,7 @@ pub struct MiddlewareSequencer {
     producer: CommandProducer,
     next_global_seq: u64,
     schedule: Option<ScheduleDriver>,
+    sessions: SessionRegistry,
 }
 
 impl MiddlewareSequencer {
@@ -23,7 +25,34 @@ impl MiddlewareSequencer {
             producer,
             next_global_seq: 1,
             schedule: None,
+            sessions: SessionRegistry::new(),
         }
+    }
+
+    pub fn open_session(&mut self, info: SessionInfo) -> bool {
+        self.sessions.open(info)
+    }
+
+    pub fn close_session(&mut self, session_id: u64) -> bool {
+        self.sessions.close(session_id)
+    }
+
+    #[must_use]
+    pub fn session(&self, session_id: u64) -> Option<SessionInfo> {
+        self.sessions.get(session_id)
+    }
+
+    /// Submits only when the command's session is open and active.
+    pub fn submit_for_session(&mut self, command: Command) -> Result<u64, CommandTransportError> {
+        let session = self
+            .sessions
+            .get(command.session_id)
+            .filter(|session| session.active)
+            .ok_or(CommandTransportError::Unauthorized)?;
+        if session.member_id != command.member_id {
+            return Err(CommandTransportError::Unauthorized);
+        }
+        self.submit(command)
     }
 
     /// Attaches the trading schedule used to emit SessionControl commands.
@@ -134,6 +163,47 @@ mod tests {
             trigger_type: TriggerType::None,
             cancel_order_id: 0,
         }
+    }
+
+    #[test]
+    fn session_gate_checks_open_and_member() {
+        use crate::exchange::session::SessionInfo;
+
+        let path = temp_path("session-gate");
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let mut middleware = MiddlewareSequencer::new(producer);
+        assert!(middleware.open_session(SessionInfo {
+            session_id: 1,
+            gateway_id: 1,
+            member_id: 10,
+            user_id: 20,
+            seat_id: 30,
+            last_private_seq: 0,
+            active: true,
+        }));
+        let mut order = command(1, Side::Buy, 50_000, 1);
+        order.session_id = 1;
+        order.member_id = 10;
+        assert_eq!(middleware.submit_for_session(order).unwrap(), 1);
+
+        let mut wrong_member = command(2, Side::Buy, 50_000, 1);
+        wrong_member.session_id = 1;
+        wrong_member.member_id = 11;
+        assert!(matches!(
+            middleware.submit_for_session(wrong_member),
+            Err(CommandTransportError::Unauthorized)
+        ));
+
+        middleware.close_session(1);
+        let mut after_close = command(3, Side::Buy, 50_000, 1);
+        after_close.session_id = 1;
+        after_close.member_id = 10;
+        assert!(matches!(
+            middleware.submit_for_session(after_close),
+            Err(CommandTransportError::Unauthorized)
+        ));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

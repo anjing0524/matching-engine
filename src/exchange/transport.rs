@@ -24,6 +24,7 @@ pub struct CommandConsumer {
 #[derive(Debug)]
 pub enum CommandTransportError {
     Full,
+    Unauthorized,
     Decode(ProtocolError),
     Io(io::Error),
 }
