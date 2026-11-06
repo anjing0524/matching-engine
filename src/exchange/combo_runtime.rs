@@ -70,12 +70,14 @@ impl ComboRuntime {
         if command.combo_id == 0 {
             return false;
         }
+        let mut reject_reason = None;
         let accepted = match command.command_type {
             CommandType::NewOrder => {
                 if command.price_ticks < 0 {
+                    reject_reason = Some("invalid combo spread");
                     false
                 } else {
-                    self.engine.queue(
+                    match self.engine.queue_checked(
                         command.client_order_id.max(1),
                         u64::from(command.user_id),
                         command.side,
@@ -83,7 +85,13 @@ impl ComboRuntime {
                         command.quantity,
                         command.offset,
                         command.hedge,
-                    )
+                    ) {
+                        Ok(()) => true,
+                        Err(reason) => {
+                            reject_reason = Some(reason.as_str());
+                            false
+                        }
+                    }
                 }
             }
             CommandType::Cancel => {
@@ -92,9 +100,14 @@ impl ComboRuntime {
                 } else {
                     command.cancel_order_id
                 };
-                self.engine.cancel(order_id)
+                if self.engine.cancel(order_id) {
+                    true
+                } else {
+                    reject_reason = Some("combo order not found");
+                    false
+                }
             }
-            _ => false,
+            _ => return false,
         };
         let (status, remaining) = match (command.command_type, accepted) {
             (CommandType::NewOrder, true) => (PrivateStatus::Accepted, command.quantity),
@@ -113,8 +126,7 @@ impl ComboRuntime {
             status,
             filled_delta: 0,
             remaining,
-            reason: matches!(status, PrivateStatus::Rejected)
-                .then(|| "combo command rejected".to_string()),
+            reason: reject_reason.map(str::to_string),
         });
         accepted
     }

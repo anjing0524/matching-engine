@@ -21,6 +21,27 @@ pub struct ComboFillEvent {
     pub fill: ComboFill,
 }
 
+/// Why a combination order was rejected before entering the queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComboRejectReason {
+    UserQuantityLimit,
+    MarginInsufficient,
+    ClosePositionUnavailable,
+    InvalidOrder,
+}
+
+impl ComboRejectReason {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UserQuantityLimit => "combo open quantity limit exceeded",
+            Self::MarginInsufficient => "insufficient combo margin",
+            Self::ClosePositionUnavailable => "insufficient closeable leg position",
+            Self::InvalidOrder => "invalid or duplicate combo order",
+        }
+    }
+}
+
 /// Public projection of a combination fill: no member identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ComboPublicFill {
@@ -159,11 +180,27 @@ impl ComboEngine {
         offset: Offset,
         hedge: Hedge,
     ) -> bool {
+        self.queue_checked(order_id, user_id, side, spread, qty, offset, hedge)
+            .is_ok()
+    }
+
+    /// Queues a combo order and returns a precise rejection reason.
+    #[allow(clippy::too_many_arguments)]
+    pub fn queue_checked(
+        &mut self,
+        order_id: u64,
+        user_id: u64,
+        side: Side,
+        spread: u64,
+        qty: u64,
+        offset: Offset,
+        hedge: Hedge,
+    ) -> Result<(), ComboRejectReason> {
         if self.exceeds_limit(user_id, qty) {
-            return false;
+            return Err(ComboRejectReason::UserQuantityLimit);
         }
         if !self.reserve_margin(order_id, user_id, spread, qty) {
-            return false;
+            return Err(ComboRejectReason::MarginInsufficient);
         }
         if offset == Offset::Open {
             let accepted = self
@@ -171,10 +208,10 @@ impl ComboEngine {
                 .push(order_id, user_id, side, spread, qty, offset, hedge);
             if accepted {
                 self.add_open_qty(user_id, qty);
-            } else {
-                self.release_margin(order_id);
+                return Ok(());
             }
-            return accepted;
+            self.release_margin(order_id);
+            return Err(ComboRejectReason::InvalidOrder);
         }
         let (leg1_position, leg2_position) = match side {
             Side::Buy => (Side::Sell, Side::Buy),
@@ -188,7 +225,7 @@ impl ComboEngine {
             .is_err()
         {
             self.release_margin(order_id);
-            return false;
+            return Err(ComboRejectReason::ClosePositionUnavailable);
         }
         if self
             .leg2_frozen
@@ -197,7 +234,7 @@ impl ComboEngine {
         {
             self.leg1_frozen.release(leg1_key, qty);
             self.release_margin(order_id);
-            return false;
+            return Err(ComboRejectReason::ClosePositionUnavailable);
         }
         if !self
             .queue
@@ -206,12 +243,12 @@ impl ComboEngine {
             self.leg1_frozen.release(leg1_key, qty);
             self.leg2_frozen.release(leg2_key, qty);
             self.release_margin(order_id);
-            return false;
+            return Err(ComboRejectReason::InvalidOrder);
         }
         self.close_reservations
             .insert(order_id, (leg1_key, leg2_key, qty));
         self.add_open_qty(user_id, qty);
-        true
+        Ok(())
     }
 
     /// Cancels a queued combo order and releases any close reservation.
@@ -494,6 +531,28 @@ mod tests {
         assert_eq!(fill.quantity, 5);
         assert_eq!(engine.leg1_positions().get(leg1_key).total(), 0);
         assert_eq!(engine.leg2_positions().get(leg2_key).total(), 0);
+    }
+
+    #[test]
+    fn queue_checked_reports_reason() {
+        use crate::exchange::margin::ComboMarginConfig;
+        use crate::exchange::protocol::{Hedge, Offset};
+
+        let mut engine = ComboEngine::new(
+            ContractSpec::new("LEG1", 1, 1_000, 100_000),
+            ContractSpec::new("LEG2", 1, 1, 100_000),
+        )
+        .with_max_open_qty_per_user(1)
+        .with_margin_config(ComboMarginConfig::new(10, 1_000));
+        engine.set_margin_balance(1, 100_000);
+        assert_eq!(
+            engine.queue_checked(1, 1, Side::Buy, 1_000, 2, Offset::Open, Hedge::Spec),
+            Err(ComboRejectReason::UserQuantityLimit)
+        );
+        assert_eq!(
+            engine.queue_checked(1, 1, Side::Buy, 1_000, 1, Offset::CloseToday, Hedge::Spec),
+            Err(ComboRejectReason::ClosePositionUnavailable)
+        );
     }
 
     #[test]
