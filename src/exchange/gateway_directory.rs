@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpStream};
+use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use std::time::Instant;
@@ -83,6 +85,23 @@ impl GatewayDirectory {
         healthy
     }
 
+    /// Re-probes every endpoint and refreshes the cache.
+    #[must_use]
+    pub fn refresh_health(&self, timeout: Duration) -> Vec<(SocketAddr, bool)> {
+        let now = Instant::now();
+        let results: Vec<_> = self
+            .endpoints
+            .iter()
+            .map(|endpoint| (*endpoint, probe(*endpoint, timeout)))
+            .collect();
+        if let Ok(mut cache) = self.health.lock() {
+            for (endpoint, healthy) in &results {
+                cache.insert(*endpoint, (*healthy, now));
+            }
+        }
+        results
+    }
+
     /// Drops cached health state.
     pub fn clear_health_cache(&self) {
         if let Ok(mut cache) = self.health.lock() {
@@ -111,6 +130,36 @@ impl GatewayDirectory {
 
 fn probe(endpoint: SocketAddr, timeout: Duration) -> bool {
     TcpStream::connect_timeout(&endpoint, timeout).is_ok()
+}
+
+/// Background health refresher for a shared directory.
+pub struct HealthMonitor {
+    shutdown: Arc<AtomicBool>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl HealthMonitor {
+    pub fn start(directory: Arc<GatewayDirectory>, interval: Duration, timeout: Duration) -> Self {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&shutdown);
+        let join = std::thread::Builder::new()
+            .name("gateway-health".to_string())
+            .spawn(move || {
+                while !flag.load(Ordering::Acquire) {
+                    let _ = directory.refresh_health(timeout);
+                    std::thread::sleep(interval);
+                }
+            })
+            .ok();
+        Self { shutdown, join }
+    }
+
+    pub fn stop(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -158,5 +207,23 @@ mod tests {
             Duration::from_millis(50),
             Duration::from_secs(5)
         ));
+    }
+    #[test]
+    fn health_monitor_refreshes_cache() {
+        let live = TcpListener::bind("127.0.0.1:0").unwrap();
+        let live_addr = live.local_addr().unwrap();
+        let directory = Arc::new(GatewayDirectory::new([live_addr.to_string()]).unwrap());
+        let mut monitor = HealthMonitor::start(
+            Arc::clone(&directory),
+            Duration::from_millis(10),
+            Duration::from_millis(100),
+        );
+        std::thread::sleep(Duration::from_millis(40));
+        assert!(directory.is_healthy_cached(
+            live_addr,
+            Duration::from_millis(50),
+            Duration::from_secs(1)
+        ));
+        monitor.stop();
     }
 }
