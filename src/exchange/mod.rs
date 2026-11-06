@@ -29,6 +29,7 @@ pub mod private_events;
 pub mod private_replay;
 pub mod protocol;
 pub mod public_events;
+pub mod rate_limit;
 pub mod repair;
 pub mod runner;
 pub mod schedule;

@@ -9,6 +9,7 @@ use crate::exchange::gateway_server::{GatewayEvent, GatewayServerHandle};
 use crate::exchange::middleware::MiddlewareSequencer;
 use crate::exchange::private_events::PrivateEvent;
 use crate::exchange::private_replay::PrivateReplayBuffer;
+use crate::exchange::rate_limit::TokenBucket;
 use crate::exchange::session::SessionInfo;
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
@@ -21,6 +22,8 @@ pub struct GatewayRuntime {
     last_seen: HashMap<u64, Instant>,
     private_replay: PrivateReplayBuffer,
     pending_replay: HashMap<u64, Vec<PrivateEvent>>,
+    rate_limit: Option<(f64, f64)>,
+    buckets: HashMap<u64, TokenBucket>,
     errors: u64,
 }
 
@@ -42,8 +45,17 @@ impl GatewayRuntime {
             last_seen: HashMap::new(),
             private_replay: PrivateReplayBuffer::new(replay_capacity),
             pending_replay: HashMap::new(),
+            rate_limit: None,
+            buckets: HashMap::new(),
             errors: 0,
         }
+    }
+
+    /// Enables a per-connection token bucket for command frames.
+    #[must_use]
+    pub fn with_rate_limit(mut self, capacity: f64, refill_per_sec: f64) -> Self {
+        self.rate_limit = Some((capacity, refill_per_sec));
+        self
     }
 
     /// Drains all pending gateway events. Returns the number of frame/closed
@@ -63,6 +75,7 @@ impl GatewayRuntime {
                 GatewayEvent::Closed { connection_id } => {
                     processed += 1;
                     self.last_seen.remove(&connection_id);
+                    self.buckets.remove(&connection_id);
                     self.middleware.close_session(connection_id);
                 }
             }
@@ -98,6 +111,16 @@ impl GatewayRuntime {
                 }
             }
             GatewayFrame::Command(mut command) => {
+                if let Some((capacity, refill)) = self.rate_limit {
+                    let bucket = self
+                        .buckets
+                        .entry(connection_id)
+                        .or_insert_with(|| TokenBucket::new(capacity, refill));
+                    if !bucket.try_acquire() {
+                        self.errors += 1;
+                        return;
+                    }
+                }
                 command.session_id = connection_id;
                 if let Some(session) = self.middleware.session(connection_id) {
                     command.member_id = session.member_id;
@@ -323,6 +346,59 @@ mod tests {
         let replay = buffer.replay(2, 0);
         assert_eq!(replay.len(), 1);
         assert_eq!(replay[0].seq, 2);
+    }
+
+    #[test]
+    fn rate_limit_drops_excess_commands() {
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-gateway-rate-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let mut runtime = GatewayRuntime::new(middleware, events).with_rate_limit(1.0, 0.0);
+        let mut stream = TcpStream::connect(server.addr()).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        let mut first = command();
+        first.client_order_id = 1;
+        let mut second = command();
+        second.client_order_id = 2;
+        stream
+            .write_all(&GatewayFrame::Command(first).encode())
+            .unwrap();
+        stream
+            .write_all(&GatewayFrame::Command(second).encode())
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if consumer.recv().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        // Drain any already-polled second command, then verify no third arrives.
+        while consumer.recv().is_some() {}
+        for _ in 0..50 {
+            runtime.poll();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(consumer.recv().is_none());
+        assert!(runtime.errors() >= 1);
+        server.stop();
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
