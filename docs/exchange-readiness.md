@@ -64,7 +64,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] CRC32 checksum over snapshot payload
 - [x] Replay-from-snapshot helper and deterministic test
 - [x] Replay runbook and `exchange-core --snapshot` restore entry point
-- [ ] Automated command-log segment management
+- [x] Automated command-log rotation/retention
 - [x] Disk-full / mmap failure behavior documented; append errors fail fast
 
 ## Observability
