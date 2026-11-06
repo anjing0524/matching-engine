@@ -10,6 +10,7 @@ use crate::exchange::core::ExchangeCore;
 use crate::exchange::gateway_runtime::GatewayRuntime;
 use crate::exchange::gateway_server::GatewayServerHandle;
 use crate::exchange::market_data::MarketDataPublisher;
+use crate::exchange::metrics::ExchangeMetrics;
 use crate::exchange::plugins::PreTradePlugin;
 use crate::exchange::repair::{NackRequest, RepairBuffer, RepairServer};
 use crate::exchange::runner::CoreRunner;
@@ -28,6 +29,7 @@ pub struct ExchangeRuntime<P> {
     repair_server: Option<RepairServer>,
     public_sent: u64,
     repair_sent: u64,
+    metrics: ExchangeMetrics,
 }
 
 impl<P: PreTradePlugin> ExchangeRuntime<P> {
@@ -45,6 +47,7 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             repair_server: None,
             public_sent: 0,
             repair_sent: 0,
+            metrics: ExchangeMetrics::new(),
         }
     }
 
@@ -111,14 +114,19 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
     /// Returns `(gateway_events, commands_executed, private_events_sent)`.
     pub fn tick(&mut self) -> (usize, usize, usize) {
         let gateway_events = self.gateway.poll();
+        self.metrics.gateway_events += gateway_events as u64;
         for (connection_id, replay) in self.gateway.take_all_replays() {
             for event in replay {
-                let _ = self.server.send_private(connection_id, &event);
+                if self.server.send_private(connection_id, &event).is_ok() {
+                    self.metrics.replay_events_sent += 1;
+                }
             }
         }
         let commands = self.core.poll();
+        self.metrics.commands_executed += commands as u64;
         let private = self.core.drain_private();
         let sent = self.gateway.dispatch_private(&self.server, private);
+        self.metrics.private_events_sent += sent as u64;
         let public = self.core.drain_public();
         if let Some(buffer) = &mut self.repair_buffer {
             for event in &public {
@@ -134,25 +142,37 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             for event in public {
                 if publisher.send(&event).is_ok() {
                     self.public_sent += 1;
+                    self.metrics.public_events_sent += 1;
                 }
             }
         }
         if let Some(combo) = &mut self.combo {
             combo.poll_commands();
-            let _ = combo.tick_with_gateway(&mut self.gateway, &self.server);
+            let (combo_public, combo_private) =
+                combo.tick_with_gateway(&mut self.gateway, &self.server);
+            self.metrics.public_events_sent += combo_public as u64;
+            self.metrics.private_events_sent += combo_private as u64;
         }
         if let Some(server) = &self.repair_server {
-            self.repair_sent += server.poll_once().unwrap_or(0) as u64;
+            let repaired = server.poll_once().unwrap_or(0) as u64;
+            self.repair_sent += repaired;
+            self.metrics.repair_events_sent += repaired;
         }
         if let Some(timeout) = self.idle_timeout
             && self.last_expire.elapsed() >= timeout / 2
         {
             for connection_id in self.gateway.expire_idle(timeout) {
                 self.server.close(connection_id);
+                self.metrics.idle_sessions_expired += 1;
             }
             self.last_expire = Instant::now();
         }
         (gateway_events, commands, sent)
+    }
+
+    #[must_use]
+    pub fn metrics(&self) -> ExchangeMetrics {
+        self.metrics
     }
 
     #[must_use]
@@ -776,6 +796,10 @@ mod tests {
             }
             other => panic!("expected private event, got {other:?}"),
         }
+        let metrics = runtime.metrics();
+        assert!(metrics.gateway_events > 0);
+        assert_eq!(metrics.commands_executed, 1);
+        assert_eq!(metrics.private_events_sent, 1);
         let _ = std::fs::remove_file(&path);
     }
 }
