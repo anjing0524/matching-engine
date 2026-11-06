@@ -309,6 +309,7 @@ impl ExchangeCore {
     }
 
     /// Queues a combination order in the logical spread-price/FIFO queue.
+    #[allow(clippy::too_many_arguments)]
     pub fn submit_combo_order(
         &mut self,
         combo_id: u32,

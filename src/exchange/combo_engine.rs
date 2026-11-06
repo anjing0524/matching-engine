@@ -43,6 +43,7 @@ impl ComboEngine {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn queue(
         &mut self,
         order_id: u64,

@@ -38,6 +38,7 @@ impl ComboQueue {
 
     /// Queues an order, assigning its arrival sequence. Returns `false` for a
     /// duplicate order id or zero quantity.
+    #[allow(clippy::too_many_arguments)]
     pub fn push(
         &mut self,
         order_id: u64,
