@@ -15,7 +15,7 @@ use std::thread;
 use std::time::Duration;
 
 /// Event emitted by the gateway listener.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GatewayEvent {
     Frame {
         connection_id: u64,
@@ -174,7 +174,7 @@ mod tests {
             session_epoch: 4,
             last_private_seq: 5,
         };
-        stream.write_all(&login.encode()).unwrap();
+        stream.write_all(&login.clone().encode()).unwrap();
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!(
             event,

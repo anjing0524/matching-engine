@@ -4,16 +4,19 @@
 //! between a gateway and middleware. TCP transport and session lifecycle sit
 //! above this codec; this slice only fixes the byte layout.
 
+use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
 use crate::exchange::protocol::{COMMAND_SLOT_SIZE, Command};
 
 pub const GATEWAY_FRAME_SIZE: usize = 264;
 const TAG_LOGIN: u8 = 1;
 const TAG_COMMAND: u8 = 2;
 const TAG_HEARTBEAT: u8 = 3;
+const TAG_PRIVATE_EVENT: u8 = 4;
 const PAYLOAD_OFFSET: usize = 4;
+const PRIVATE_REASON_MAX: usize = 48;
 
 /// One gateway→middleware frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GatewayFrame {
     Login {
         member_id: u32,
@@ -26,6 +29,7 @@ pub enum GatewayFrame {
     Heartbeat {
         seq: u64,
     },
+    PrivateEvent(PrivateEvent),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +68,29 @@ impl GatewayFrame {
             Self::Heartbeat { seq } => {
                 out[0] = TAG_HEARTBEAT;
                 out[PAYLOAD_OFFSET..PAYLOAD_OFFSET + 8].copy_from_slice(&seq.to_le_bytes());
+            }
+            Self::PrivateEvent(event) => {
+                out[0] = TAG_PRIVATE_EVENT;
+                let at = PAYLOAD_OFFSET;
+                out[at..at + 8].copy_from_slice(&event.seq.to_le_bytes());
+                out[at + 8..at + 16].copy_from_slice(&event.order_id.to_le_bytes());
+                out[at + 16..at + 24].copy_from_slice(&event.client_order_id.to_le_bytes());
+                out[at + 24..at + 32].copy_from_slice(&event.account_id.to_le_bytes());
+                out[at + 32] = match event.status {
+                    PrivateStatus::Accepted => 1,
+                    PrivateStatus::PartiallyFilled => 2,
+                    PrivateStatus::Filled => 3,
+                    PrivateStatus::Canceled => 4,
+                    PrivateStatus::Rejected => 5,
+                };
+                out[at + 40..at + 48].copy_from_slice(&event.filled_delta.to_le_bytes());
+                out[at + 48..at + 56].copy_from_slice(&event.remaining.to_le_bytes());
+                if let Some(reason) = &event.reason {
+                    let bytes = reason.as_bytes();
+                    let len = bytes.len().min(PRIVATE_REASON_MAX);
+                    out[at + 56] = len as u8;
+                    out[at + 57..at + 57 + len].copy_from_slice(&bytes[..len]);
+                }
             }
         }
         out
@@ -115,6 +142,50 @@ impl GatewayFrame {
                         .expect("8 bytes"),
                 ),
             }),
+            TAG_PRIVATE_EVENT => {
+                let at = PAYLOAD_OFFSET;
+                let status = match frame[at + 32] {
+                    1 => PrivateStatus::Accepted,
+                    2 => PrivateStatus::PartiallyFilled,
+                    3 => PrivateStatus::Filled,
+                    4 => PrivateStatus::Canceled,
+                    5 => PrivateStatus::Rejected,
+                    value => {
+                        return Err(GatewayFrameError {
+                            field: "private_status",
+                            value,
+                        });
+                    }
+                };
+                let reason_len = usize::from(frame[at + 56]).min(PRIVATE_REASON_MAX);
+                let reason = if reason_len == 0 {
+                    None
+                } else {
+                    Some(
+                        String::from_utf8_lossy(&frame[at + 57..at + 57 + reason_len]).into_owned(),
+                    )
+                };
+                Ok(Self::PrivateEvent(PrivateEvent {
+                    seq: u64::from_le_bytes(frame[at..at + 8].try_into().expect("8 bytes")),
+                    order_id: u64::from_le_bytes(
+                        frame[at + 8..at + 16].try_into().expect("8 bytes"),
+                    ),
+                    client_order_id: u64::from_le_bytes(
+                        frame[at + 16..at + 24].try_into().expect("8 bytes"),
+                    ),
+                    account_id: u64::from_le_bytes(
+                        frame[at + 24..at + 32].try_into().expect("8 bytes"),
+                    ),
+                    status,
+                    filled_delta: u64::from_le_bytes(
+                        frame[at + 40..at + 48].try_into().expect("8 bytes"),
+                    ),
+                    remaining: u64::from_le_bytes(
+                        frame[at + 48..at + 56].try_into().expect("8 bytes"),
+                    ),
+                    reason,
+                }))
+            }
             value => Err(GatewayFrameError {
                 field: "gateway_frame_tag",
                 value,
@@ -174,19 +245,35 @@ mod tests {
             session_epoch: 4,
             last_private_seq: 5,
         };
-        assert_eq!(GatewayFrame::decode(&frame.encode()), Ok(frame));
+        assert_eq!(GatewayFrame::decode(&frame.clone().encode()), Ok(frame));
     }
 
     #[test]
     fn command_roundtrips() {
         let frame = GatewayFrame::Command(command());
-        assert_eq!(GatewayFrame::decode(&frame.encode()), Ok(frame));
+        assert_eq!(GatewayFrame::decode(&frame.clone().encode()), Ok(frame));
     }
 
     #[test]
     fn heartbeat_roundtrips() {
         let frame = GatewayFrame::Heartbeat { seq: 42 };
-        assert_eq!(GatewayFrame::decode(&frame.encode()), Ok(frame));
+        assert_eq!(GatewayFrame::decode(&frame.clone().encode()), Ok(frame));
+    }
+
+    #[test]
+    fn private_event_roundtrips() {
+        let event = PrivateEvent {
+            seq: 11,
+            order_id: 12,
+            client_order_id: 13,
+            account_id: 14,
+            status: PrivateStatus::Rejected,
+            filled_delta: 0,
+            remaining: 0,
+            reason: Some("insufficient closeable position".to_string()),
+        };
+        let frame = GatewayFrame::PrivateEvent(event.clone());
+        assert_eq!(GatewayFrame::decode(&frame.clone().encode()), Ok(frame));
     }
 
     #[test]
