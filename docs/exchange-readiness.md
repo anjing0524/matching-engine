@@ -30,7 +30,8 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Seat permissions from the per-member credential registry
 - [x] Per-connection command rate limiting
 - [x] Same member/user/seat login takes over the previous session
-- [ ] Explicit multi-gateway failover and session drain policy
+- [x] Planned gateway session drain API
+- [ ] Automated cross-gateway failover and client redirection
 - [x] Split core/middleware binaries over shared-memory rings
 - [x] Standalone gateway TCP relay to middleware
 

@@ -173,6 +173,20 @@ impl GatewayRuntime {
         }
     }
 
+    /// Drains all sessions owned by a gateway before planned failover.
+    ///
+    /// Returns the drained connection ids; callers should close their TCP
+    /// connections. Retained private replay lets clients reconnect with
+    /// `last_private_seq`.
+    pub fn drain_gateway(&mut self, gateway_id: u32) -> Vec<u64> {
+        let drained = self.middleware.drain_gateway(gateway_id);
+        for connection_id in &drained {
+            self.last_seen.remove(connection_id);
+            self.buckets.remove(connection_id);
+        }
+        drained
+    }
+
     /// Closes sessions idle for at least `timeout`.
     ///
     /// Returns the connection ids that were expired. The caller should also

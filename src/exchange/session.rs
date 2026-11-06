@@ -73,6 +73,24 @@ impl SessionRegistry {
         Ok(replaced)
     }
 
+    /// Marks every active session on `gateway_id` inactive.
+    ///
+    /// Returns the drained session ids; records are retained for audit/reconnect.
+    pub fn drain_gateway(&mut self, gateway_id: u32) -> Vec<u64> {
+        let drained: Vec<u64> = self
+            .sessions
+            .values()
+            .filter(|session| session.active && session.gateway_id == gateway_id)
+            .map(|session| session.session_id)
+            .collect();
+        for session_id in &drained {
+            if let Some(session) = self.sessions.get_mut(session_id) {
+                session.active = false;
+            }
+        }
+        drained
+    }
+
     /// Marks a session closed; the record is retained for audit/reconnect.
     pub fn close(&mut self, session_id: u64) -> bool {
         let Some(session) = self.sessions.get_mut(&session_id) else {
@@ -169,6 +187,19 @@ mod tests {
         let mut replacement = session(2);
         replacement.gateway_id = 2;
         assert_eq!(registry.open_or_takeover(replacement), Ok(Some(1)));
+        assert!(!registry.get(1).unwrap().active);
+        assert!(registry.get(2).unwrap().active);
+        assert_eq!(registry.active_count(), 1);
+    }
+
+    #[test]
+    fn draining_gateway_closes_only_its_sessions() {
+        let mut registry = SessionRegistry::new();
+        registry.open(session(1));
+        let mut other = session(2);
+        other.gateway_id = 2;
+        registry.open(other);
+        assert_eq!(registry.drain_gateway(1), vec![1]);
         assert!(!registry.get(1).unwrap().active);
         assert!(registry.get(2).unwrap().active);
         assert_eq!(registry.active_count(), 1);

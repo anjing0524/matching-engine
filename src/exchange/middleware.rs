@@ -46,6 +46,10 @@ impl MiddlewareSequencer {
         self.sessions.open_or_takeover(info)
     }
 
+    pub fn drain_gateway(&mut self, gateway_id: u32) -> Vec<u64> {
+        self.sessions.drain_gateway(gateway_id)
+    }
+
     #[must_use]
     pub fn session(&self, session_id: u64) -> Option<SessionInfo> {
         self.sessions.get(session_id)
