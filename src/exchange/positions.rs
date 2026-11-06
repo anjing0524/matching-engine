@@ -74,6 +74,18 @@ impl Positions {
     }
 
     #[must_use]
+    pub fn snapshot(&self) -> Vec<(PositionKey, Position)> {
+        self.positions
+            .iter()
+            .map(|(key, value)| (*key, *value))
+            .collect()
+    }
+
+    pub fn restore(&mut self, entries: impl IntoIterator<Item = (PositionKey, Position)>) {
+        self.positions = entries.into_iter().collect();
+    }
+
+    #[must_use]
     pub fn get(&self, key: PositionKey) -> Position {
         self.positions.get(&key).copied().unwrap_or_default()
     }
@@ -136,6 +148,18 @@ impl FrozenClose {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> Vec<(CloseKey, u64)> {
+        self.reserved
+            .iter()
+            .map(|(key, value)| (*key, *value))
+            .collect()
+    }
+
+    pub fn restore(&mut self, entries: impl IntoIterator<Item = (CloseKey, u64)>) {
+        self.reserved = entries.into_iter().collect();
     }
 
     #[must_use]

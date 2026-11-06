@@ -86,7 +86,7 @@ pub enum OrderStatus {
 ///
 /// The order book owns price/FIFO state; this table carries the business
 /// attributes needed to update positions and release close reservations.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrderMeta {
     pub client_order_id: u64,
     pub account_id: u64,
@@ -96,6 +96,29 @@ pub struct OrderMeta {
     pub price_ticks: u64,
     pub remaining: u64,
     pub status: OrderStatus,
+}
+
+/// In-memory core snapshot for the continuous book and business state.
+///
+/// Combo queues and call-auction staging are intentionally outside this slice;
+/// callers must drain them before snapshotting. Ephemeral event buffers are not
+/// snapshotted because they are already consumed by middleware.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CoreSnapshot {
+    pub spec: ContractSpec,
+    pub symbol: SymbolId,
+    pub resting_orders: Vec<crate::domain::orderbook::RestingOrder>,
+    pub next_order_id: u64,
+    pub orders: Vec<(u64, OrderMeta)>,
+    pub positions: Vec<(PositionKey, crate::exchange::positions::Position)>,
+    pub frozen_close: Vec<(CloseKey, u64)>,
+    pub phase: ExchangePhase,
+    pub trading_day: u32,
+    pub next_trade_id: u64,
+    pub private_seq: u64,
+    pub public_seq: u64,
+    pub last_tick_seq: u64,
+    pub last_exchange_ts_ns: u64,
 }
 
 /// The deterministic core state machine for one contract.
@@ -145,6 +168,60 @@ impl ExchangeCore {
             last_tick_seq: 0,
             last_exchange_ts_ns: 0,
         }
+    }
+
+    /// Captures continuous-book and business state.
+    ///
+    /// Call `snapshot` only when combo queues and auction staging are empty.
+    #[must_use]
+    pub fn snapshot(&self) -> CoreSnapshot {
+        CoreSnapshot {
+            spec: self.book.spec().clone(),
+            symbol: self.symbol,
+            resting_orders: self.book.snapshot_orders(),
+            next_order_id: self.book.next_order_id(),
+            orders: self.orders.iter().map(|(id, meta)| (*id, *meta)).collect(),
+            positions: self.positions.snapshot(),
+            frozen_close: self.frozen_close.snapshot(),
+            phase: self.phase,
+            trading_day: self.trading_day,
+            next_trade_id: self.next_trade_id,
+            private_seq: self.private_seq,
+            public_seq: self.public_seq,
+            last_tick_seq: self.last_tick_seq,
+            last_exchange_ts_ns: self.last_exchange_ts_ns,
+        }
+    }
+
+    /// Restores a previously captured snapshot.
+    ///
+    /// # Errors
+    /// Returns a reason when the snapshot's resting orders cannot be rebuilt.
+    pub fn restore_snapshot(&mut self, snapshot: CoreSnapshot) -> Result<(), String> {
+        let book = TickBasedOrderBook::restore(
+            snapshot.spec.clone(),
+            &snapshot.resting_orders,
+            snapshot.next_order_id,
+        )?;
+        self.book = book;
+        self.symbol = snapshot.symbol;
+        self.orders = snapshot.orders.into_iter().collect();
+        self.public_orders = self.orders.keys().copied().collect();
+        self.positions.restore(snapshot.positions);
+        self.frozen_close.restore(snapshot.frozen_close);
+        self.phase = snapshot.phase;
+        self.trading_day = snapshot.trading_day;
+        self.next_trade_id = snapshot.next_trade_id;
+        self.private_seq = snapshot.private_seq;
+        self.public_seq = snapshot.public_seq;
+        self.last_tick_seq = snapshot.last_tick_seq;
+        self.last_exchange_ts_ns = snapshot.last_exchange_ts_ns;
+        self.private_events.clear();
+        self.public_events.clear();
+        self.auction_orders.clear();
+        self.auction_meta.clear();
+        self.combo_queues.clear();
+        Ok(())
     }
 
     #[must_use]
@@ -1704,5 +1781,32 @@ mod tests {
         };
 
         assert_eq!(run(), run());
+    }
+    #[test]
+    fn snapshot_restores_book_orders_and_positions() {
+        use crate::exchange::positions::PositionKey;
+
+        let mut core = core();
+        let resting = core.submit_limit(order(1, OrderType::Buy, 49_000, 5));
+        let resting_id = resting
+            .iter()
+            .find_map(|event| match event {
+                CoreEvent::Accepted { order_id, .. } => Some(*order_id),
+                _ => None,
+            })
+            .unwrap();
+        let long_key = PositionKey::new(1, Side::Buy, Hedge::Spec);
+        core.positions_mut().apply_open(long_key, 3).unwrap();
+
+        let snapshot = core.snapshot();
+        let _ = core.submit_limit(order(1, OrderType::Buy, 48_000, 5));
+        core.positions_mut().apply_open(long_key, 2).unwrap();
+        assert_eq!(core.positions().get(long_key).today, 5);
+
+        core.restore_snapshot(snapshot.clone()).unwrap();
+        assert_eq!(core.positions().get(long_key).today, 3);
+        assert_eq!(core.phase(), snapshot.phase);
+        assert_eq!(core.snapshot(), snapshot);
+        let _ = resting_id;
     }
 }

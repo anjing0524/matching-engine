@@ -51,7 +51,8 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Fail-fast: malformed frames disconnect the gateway connection
 - [x] No per-message application ack; private replay uses `last_private_seq`
 - [x] Core is a single failure domain; no consensus/leader election
-- [ ] Documented core crash recovery runbook (core currently has no snapshot)
+- [x] In-memory core snapshot for continuous book and business state
+- [ ] Versioned persistent snapshot format and replay runbook
 - [ ] Disk-full / mmap failure behavior for shared-memory and result logs
 
 ## Observability
