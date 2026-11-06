@@ -80,18 +80,14 @@ impl CommandProducer {
 impl CommandConsumer {
     /// Pops one command; `None` means the ring is empty.
     pub fn recv(&self) -> Option<Result<Command, ProtocolError>> {
-        let mut bytes = Vec::with_capacity(COMMAND_SLOT_SIZE);
-        if !self.ring.try_pop_into(&mut bytes) {
-            return None;
-        }
-        if bytes.len() != COMMAND_SLOT_SIZE {
+        let mut slot = [0u8; COMMAND_SLOT_SIZE];
+        let len = self.ring.try_pop_into_slice(&mut slot)?;
+        if len != COMMAND_SLOT_SIZE {
             return Some(Err(ProtocolError {
                 field: "command_slot",
-                value: bytes.len() as u8,
+                value: len as u8,
             }));
         }
-        let mut slot = [0u8; COMMAND_SLOT_SIZE];
-        slot.copy_from_slice(&bytes);
         Some(Command::decode(&slot))
     }
 
@@ -153,18 +149,14 @@ impl PublicEventProducer {
 impl PublicEventConsumer {
     /// Pops one public event; `None` means empty.
     pub fn recv(&self) -> Option<Result<PublicEvent, ProtocolError>> {
-        let mut bytes = Vec::with_capacity(PUBLIC_EVENT_SLOT_SIZE);
-        if !self.ring.try_pop_into(&mut bytes) {
-            return None;
-        }
         let mut slot = [0u8; PUBLIC_EVENT_SLOT_SIZE];
-        if bytes.len() != PUBLIC_EVENT_SLOT_SIZE {
+        let len = self.ring.try_pop_into_slice(&mut slot)?;
+        if len != PUBLIC_EVENT_SLOT_SIZE {
             return Some(Err(ProtocolError {
                 field: "public_slot",
-                value: bytes.len() as u8,
+                value: len as u8,
             }));
         }
-        slot.copy_from_slice(&bytes);
         Some(decode_public_event(&slot))
     }
 }
@@ -299,18 +291,14 @@ impl PrivateEventProducer {
 impl PrivateEventConsumer {
     /// Pops one private event; `None` means empty.
     pub fn recv(&self) -> Option<Result<PrivateEvent, ProtocolError>> {
-        let mut bytes = Vec::with_capacity(PRIVATE_EVENT_SLOT_SIZE);
-        if !self.ring.try_pop_into(&mut bytes) {
-            return None;
-        }
         let mut slot = [0u8; PRIVATE_EVENT_SLOT_SIZE];
-        if bytes.len() != PRIVATE_EVENT_SLOT_SIZE {
+        let len = self.ring.try_pop_into_slice(&mut slot)?;
+        if len != PRIVATE_EVENT_SLOT_SIZE {
             return Some(Err(ProtocolError {
                 field: "private_slot",
-                value: bytes.len() as u8,
+                value: len as u8,
             }));
         }
-        slot.copy_from_slice(&bytes);
         Some(decode_private_event(&slot))
     }
 }

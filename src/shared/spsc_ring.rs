@@ -204,6 +204,32 @@ impl SpscRing {
         true
     }
 
+    /// Pops one payload into a fixed stack buffer.
+    ///
+    /// Returns the stored payload length; the caller validates it against the
+    /// expected slot size. Returns `None` when the ring is empty.
+    #[must_use]
+    pub fn try_pop_into_slice(&self, out: &mut [u8]) -> Option<usize> {
+        let tail = self.tail().load(Ordering::Relaxed);
+        let head = self.head().load(Ordering::Acquire);
+        if tail == head {
+            return None;
+        }
+        let index = tail % self.capacity;
+        let slot = unsafe { self.slot_ptr(index) };
+        let len = unsafe { ptr::read(slot as *const u32) } as usize;
+        if len > self.slot_size {
+            self.tail().store(tail.wrapping_add(1), Ordering::Release);
+            return Some(len);
+        }
+        let copy_len = len.min(out.len());
+        unsafe {
+            ptr::copy_nonoverlapping(slot.add(SLOT_HEADER), out.as_mut_ptr(), copy_len);
+        }
+        self.tail().store(tail.wrapping_add(1), Ordering::Release);
+        Some(len)
+    }
+
     /// Approximate occupancy.
     #[must_use]
     pub fn len(&self) -> u64 {
@@ -257,6 +283,18 @@ mod tests {
             assert_eq!(out, vec![i]);
         }
         assert!(ring.is_empty());
+    }
+
+    #[test]
+    fn test_ring_pop_into_stack_slice() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("ring");
+        let ring = SpscRing::create(&path, 4, 8).unwrap();
+        ring.try_push(&[1, 2, 3, 4]).unwrap();
+        let mut out = [0u8; 8];
+        assert_eq!(ring.try_pop_into_slice(&mut out), Some(4));
+        assert_eq!(&out[..4], &[1, 2, 3, 4]);
+        assert_eq!(ring.try_pop_into_slice(&mut out), None);
     }
 
     #[test]
