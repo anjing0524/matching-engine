@@ -720,7 +720,7 @@ impl ExchangeCore {
             );
         }
 
-        let trades: Vec<(u64, u64, u64)> = events
+        let trades: smallvec::SmallVec<[(u64, u64, u64); 8]> = events
             .iter()
             .filter_map(|event| match event {
                 CoreEvent::Trade {
@@ -849,42 +849,54 @@ impl ExchangeCore {
 
     /// Applies one fill to an order's position and remaining quantity.
     fn apply_fill(&mut self, order_id: u64, quantity: u64) {
-        let Some(mut meta) = self.orders.remove(&order_id) else {
+        let Some((client_order_id, account_id, side, offset, hedge, remaining)) = ({
+            let Some(meta) = self.orders.get_mut(&order_id) else {
+                return;
+            };
+            let updated = meta.remaining.saturating_sub(quantity);
+            meta.remaining = updated;
+            meta.status = if updated == 0 {
+                OrderStatus::Filled
+            } else {
+                OrderStatus::PartiallyFilled
+            };
+            Some((
+                meta.client_order_id,
+                meta.account_id,
+                meta.side,
+                meta.offset,
+                meta.hedge,
+                updated,
+            ))
+        }) else {
             return;
         };
-        let position_side = if meta.offset == Offset::Open {
-            meta.side
+        let position_side = if offset == Offset::Open {
+            side
         } else {
-            meta.side.opposite()
+            side.opposite()
         };
-        let key = PositionKey::new(meta.account_id, position_side, meta.hedge);
-        if meta.offset == Offset::Open {
+        let key = PositionKey::new(account_id, position_side, hedge);
+        if offset == Offset::Open {
             let _ = self.positions.apply_open(key, quantity);
         } else {
-            let _ = self.positions.apply_close(key, meta.offset, quantity);
+            let _ = self.positions.apply_close(key, offset, quantity);
             self.frozen_close
-                .release(CloseKey::new(key, meta.offset), quantity);
+                .release(CloseKey::new(key, offset), quantity);
         }
-        meta.remaining = meta.remaining.saturating_sub(quantity);
-        meta.status = if meta.remaining == 0 {
-            OrderStatus::Filled
-        } else {
-            OrderStatus::PartiallyFilled
-        };
         self.push_private(
             order_id,
-            meta.client_order_id,
-            meta.account_id,
-            if meta.remaining == 0 {
+            client_order_id,
+            account_id,
+            if remaining == 0 {
                 PrivateStatus::Filled
             } else {
                 PrivateStatus::PartiallyFilled
             },
             quantity,
-            meta.remaining,
+            remaining,
             None,
         );
-        self.orders.insert(order_id, meta);
     }
 
     /// Returns the lifecycle status of an order accepted through the business
