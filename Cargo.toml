@@ -68,6 +68,10 @@ harness = false
 name = "latency_percentiles"
 harness = false
 
+[[bench]]
+name = "exchange_core_benchmark"
+harness = false
+
 # Performance profile
 [profile.release]
 opt-level = 3           # maximum performance
