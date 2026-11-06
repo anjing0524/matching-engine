@@ -116,6 +116,69 @@ impl ComboExecutor {
         })
     }
 
+    /// Sells the spread (sell leg1, buy leg2) atomically.
+    ///
+    /// # Errors
+    /// Returns an error without mutating either book when liquidity or spread
+    /// is insufficient.
+    pub fn execute_sell(
+        &mut self,
+        spread_limit_ticks: u64,
+        quantity: u64,
+    ) -> Result<ComboFill, ComboExecError> {
+        let bid1 = self
+            .leg1
+            .best_bid()
+            .ok_or(ComboExecError::MissingLiquidity)?;
+        let ask2 = self
+            .leg2
+            .best_ask()
+            .ok_or(ComboExecError::MissingLiquidity)?;
+        let spread =
+            i64::try_from(bid1).unwrap_or(i64::MAX) - i64::try_from(ask2).unwrap_or(i64::MAX);
+        if spread < i64::try_from(spread_limit_ticks).unwrap_or(i64::MIN) {
+            return Err(ComboExecError::SpreadNotSatisfied);
+        }
+        let available = self
+            .available_at(&self.leg1, bid1, OrderType::Buy)
+            .min(self.available_at(&self.leg2, ask2, OrderType::Sell));
+        if available < quantity {
+            return Err(ComboExecError::MissingLiquidity);
+        }
+        let snapshot1 = LegSnapshot {
+            orders: self.leg1.snapshot_orders(),
+            next_order_id: self.leg1.next_order_id(),
+        };
+        let snapshot2 = LegSnapshot {
+            orders: self.leg2.snapshot_orders(),
+            next_order_id: self.leg2.next_order_id(),
+        };
+        let filled1 = sweep(
+            &mut self.leg1,
+            OrderType::Sell,
+            self.leg1_spec.min_price,
+            quantity,
+            1,
+        );
+        let filled2 = sweep(
+            &mut self.leg2,
+            OrderType::Buy,
+            self.leg2_spec.max_price,
+            quantity,
+            2,
+        );
+        if filled1 != quantity || filled2 != quantity {
+            self.restore(snapshot1, snapshot2);
+            return Err(ComboExecError::LegUnderfilled);
+        }
+        Ok(ComboFill {
+            quantity,
+            leg1_price: bid1,
+            leg2_price: ask2,
+            spread_ticks: spread,
+        })
+    }
+
     fn available_at(&self, book: &TickBasedOrderBook, price: u64, side: OrderType) -> u64 {
         book.snapshot_orders()
             .into_iter()
@@ -175,6 +238,40 @@ mod tests {
             .insert_resting_order(3, OrderType::Buy, 100, 5, 5, 2)
             .unwrap();
         executor
+    }
+
+    fn sell_executor() -> ComboExecutor {
+        let leg1 = ContractSpec::new("LEG1", 1, 1_000, 100_000);
+        let leg2 = ContractSpec::new("LEG2", 1, 1, 100_000);
+        let mut executor = ComboExecutor::new(leg1, leg2);
+        executor
+            .leg1
+            .insert_resting_order(2, OrderType::Buy, 50_000, 5, 5, 1)
+            .unwrap();
+        executor
+            .leg2
+            .insert_resting_order(3, OrderType::Sell, 100, 5, 5, 2)
+            .unwrap();
+        executor
+    }
+
+    #[test]
+    fn sells_both_legs_atomically() {
+        let mut executor = sell_executor();
+        let fill = executor.execute_sell(49_000, 5).unwrap();
+        assert_eq!(fill.quantity, 5);
+        assert_eq!(fill.spread_ticks, 49_900);
+        assert_eq!(executor.leg1.best_bid(), None);
+        assert_eq!(executor.leg2.best_ask(), None);
+    }
+
+    #[test]
+    fn rejects_sell_when_spread_is_too_narrow() {
+        let mut executor = sell_executor();
+        let error = executor.execute_sell(50_000, 5).unwrap_err();
+        assert_eq!(error, ComboExecError::SpreadNotSatisfied);
+        assert_eq!(executor.leg1.best_bid(), Some(50_000));
+        assert_eq!(executor.leg2.best_ask(), Some(100));
     }
 
     #[test]
