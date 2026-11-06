@@ -54,6 +54,10 @@ struct Args {
     /// Address clients should reconnect to after session takeover.
     #[arg(long)]
     redirect_target: Option<String>,
+    /// Comma-separated gateway endpoints; the first healthy one is used when
+    /// --redirect-target is absent.
+    #[arg(long)]
+    redirect_endpoints: Option<String>,
     /// Append accepted commands to this replay log segment.
     #[arg(long)]
     command_log: Option<String>,
@@ -131,7 +135,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(token) = args.auth_token {
         gateway = gateway.with_auth_token(token);
     }
-    if let Some(target) = args.redirect_target {
+    let redirect_target = args.redirect_target.clone().or_else(|| {
+        args.redirect_endpoints.as_deref().and_then(|endpoints| {
+            let directory = matching_engine::exchange::gateway_directory::GatewayDirectory::new(
+                endpoints.split(',').map(str::to_string),
+            )
+            .ok()?;
+            directory
+                .first_healthy(Duration::from_millis(200))
+                .map(|address| address.to_string())
+        })
+    });
+    if let Some(target) = redirect_target {
         gateway = gateway.with_redirect_target(target);
     }
     let publisher = match (&args.multicast_group, args.multicast_port) {

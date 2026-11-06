@@ -16,6 +16,7 @@ pub mod config;
 pub mod core;
 pub mod exchange_runtime;
 pub mod gateway;
+pub mod gateway_directory;
 pub mod gateway_proxy;
 pub mod gateway_runtime;
 pub mod gateway_server;

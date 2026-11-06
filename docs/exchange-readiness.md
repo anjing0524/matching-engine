@@ -32,7 +32,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Same member/user/seat login takes over the previous session
 - [x] Planned gateway session drain API
 - [x] Redirect frame for displaced sessions
-- [ ] Automated gateway health checks and traffic shifting
+- [x] TCP health probes and healthy redirect endpoint selection
 - [x] Split core/middleware binaries over shared-memory rings
 - [x] Standalone gateway TCP relay to middleware
 
