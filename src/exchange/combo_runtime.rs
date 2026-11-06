@@ -189,7 +189,6 @@ mod tests {
     use super::*;
     use crate::domain::orderbook::ContractSpec;
     use crate::exchange::combo_market_data::ComboMarketDataSubscriber;
-    use crate::exchange::protocol::Side;
     use crate::exchange::protocol::{Hedge, Offset, Side};
     use crate::shared::protocol::OrderType;
 
