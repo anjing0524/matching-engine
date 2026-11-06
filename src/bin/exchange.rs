@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use matching_engine::domain::orderbook::ContractSpec;
 use matching_engine::exchange::core::ExchangeCore;
 use matching_engine::exchange::exchange_runtime::ExchangeRuntime;
+use matching_engine::exchange::gateway_directory::{GatewayDirectory, HealthMonitor};
 use matching_engine::exchange::gateway_runtime::GatewayRuntime;
 use matching_engine::exchange::gateway_server::start as start_gateway;
 use matching_engine::exchange::market_data::MarketDataPublisher;
@@ -110,12 +111,20 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(token) = args.auth_token {
         gateway_runtime = gateway_runtime.with_auth_token(token);
     }
+    let health_directory = args.redirect_endpoints.as_deref().and_then(|endpoints| {
+        GatewayDirectory::new(endpoints.split(',').map(str::to_string))
+            .ok()
+            .map(Arc::new)
+    });
+    let mut health_monitor = health_directory.as_ref().map(|directory| {
+        HealthMonitor::start(
+            Arc::clone(directory),
+            Duration::from_secs(1),
+            Duration::from_millis(200),
+        )
+    });
     let redirect_target = args.redirect_target.clone().or_else(|| {
-        args.redirect_endpoints.as_deref().and_then(|endpoints| {
-            let directory = matching_engine::exchange::gateway_directory::GatewayDirectory::new(
-                endpoints.split(',').map(str::to_string),
-            )
-            .ok()?;
+        health_directory.as_ref().and_then(|directory| {
             directory
                 .first_healthy_cached(Duration::from_millis(200), Duration::from_secs(5))
                 .map(|address| address.to_string())
@@ -175,6 +184,9 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
         std::thread::sleep(Duration::from_millis(1));
     }
     metrics_server.stop();
+    if let Some(monitor) = &mut health_monitor {
+        monitor.stop();
+    }
     for path in [&core_path, &combo_path] {
         let _ = std::fs::remove_file(path);
     }

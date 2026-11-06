@@ -11,6 +11,7 @@ use matching_engine::exchange::transport::{
     open_private_event_consumer, open_public_event_consumer,
 };
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -135,12 +136,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(token) = args.auth_token {
         gateway = gateway.with_auth_token(token);
     }
+    let health_directory = args.redirect_endpoints.as_deref().and_then(|endpoints| {
+        matching_engine::exchange::gateway_directory::GatewayDirectory::new(
+            endpoints.split(',').map(str::to_string),
+        )
+        .ok()
+        .map(Arc::new)
+    });
+    let mut health_monitor = health_directory.as_ref().map(|directory| {
+        matching_engine::exchange::gateway_directory::HealthMonitor::start(
+            Arc::clone(directory),
+            Duration::from_secs(1),
+            Duration::from_millis(200),
+        )
+    });
     let redirect_target = args.redirect_target.clone().or_else(|| {
-        args.redirect_endpoints.as_deref().and_then(|endpoints| {
-            let directory = matching_engine::exchange::gateway_directory::GatewayDirectory::new(
-                endpoints.split(',').map(str::to_string),
-            )
-            .ok()?;
+        health_directory.as_ref().and_then(|directory| {
             directory
                 .first_healthy_cached(Duration::from_millis(200), Duration::from_secs(5))
                 .map(|address| address.to_string())
@@ -206,6 +217,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
         std::thread::sleep(Duration::from_micros(100));
+    }
+    if let Some(monitor) = &mut health_monitor {
+        monitor.stop();
     }
     Ok(())
 }
