@@ -167,12 +167,16 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut metrics_server = metrics_server::start(&args.metrics_listen, metrics)?;
-    println!(
-        "gateway={} metrics={} multicast={}",
-        gateway_addr,
-        metrics_server.addr(),
-        args.multicast_group.is_some()
-    );
+    {
+        use std::io::Write;
+        println!(
+            "gateway={} metrics={} multicast={}",
+            gateway_addr,
+            metrics_server.addr(),
+            args.multicast_group.is_some()
+        );
+        let _ = std::io::stdout().flush();
+    }
 
     let mut ticks = 0u64;
     loop {
