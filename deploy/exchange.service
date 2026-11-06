@@ -1,0 +1,27 @@
+[Unit]
+Description=Exchange single-process runtime (gateway + middleware + core)
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=exchange
+Group=exchange
+EnvironmentFile=/etc/exchange/exchange.env
+ExecStart=/opt/exchange/bin/exchange run \
+  --listen ${EXCHANGE_GATEWAY_LISTEN} \
+  --metrics-listen ${EXCHANGE_METRICS_LISTEN} \
+  --idle-timeout-secs ${EXCHANGE_GATEWAY_IDLE_TIMEOUT}
+Restart=on-failure
+RestartSec=2s
+LimitNOFILE=1048576
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/run/exchange /var/lib/exchange /tmp
+KillSignal=SIGTERM
+TimeoutStopSec=20s
+
+[Install]
+WantedBy=multi-user.target

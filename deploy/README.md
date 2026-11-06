@@ -1,9 +1,12 @@
 # Deployment templates
 
-These are **templates**, not a complete packaging story. The repository does not
-yet provide `exchange-core`, `exchange-middleware`, or `exchange-gateway`
-binaries; the units assume those entry points are installed under
-`/opt/exchange/bin` and configured via `/etc/exchange/*.env`.
+These are **templates**, not a complete packaging story.
+
+- `exchange.service` runs the implemented single-process runtime:
+  `/opt/exchange/bin/exchange run`.
+- `exchange-core.service`, `exchange-middleware.service`, and
+  `exchange-gateway.service` are for the future split-process deployment; the
+  repository does not yet provide those three binaries.
 
 ## Install
 
