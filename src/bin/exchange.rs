@@ -60,6 +60,9 @@ struct RunArgs {
     /// Optional shared login token.
     #[arg(long)]
     auth_token: Option<u64>,
+    /// Address clients should reconnect to after session takeover.
+    #[arg(long)]
+    redirect_target: Option<String>,
     /// Append accepted commands to this replay log segment.
     #[arg(long)]
     command_log: Option<String>,
@@ -102,6 +105,9 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
         GatewayRuntime::with_replay_capacity(middleware, gateway_events, 4096);
     if let Some(token) = args.auth_token {
         gateway_runtime = gateway_runtime.with_auth_token(token);
+    }
+    if let Some(target) = args.redirect_target {
+        gateway_runtime = gateway_runtime.with_redirect_target(target);
     }
 
     let spec = ContractSpec::new("BTCUSDT", 1, 1, 1_000_000);

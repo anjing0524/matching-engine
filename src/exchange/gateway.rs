@@ -15,6 +15,8 @@ const TAG_HEARTBEAT: u8 = 3;
 const TAG_PRIVATE_EVENT: u8 = 4;
 const TAG_COMBO_PRIVATE: u8 = 5;
 const TAG_ACK: u8 = 6;
+const TAG_REDIRECT: u8 = 7;
+const REDIRECT_MAX: usize = 128;
 const PAYLOAD_OFFSET: usize = 4;
 const PRIVATE_REASON_MAX: usize = 48;
 
@@ -37,6 +39,9 @@ pub enum GatewayFrame {
     ComboPrivate(ComboPrivateFill),
     Ack {
         private_seq: u64,
+    },
+    Redirect {
+        address: String,
     },
 }
 
@@ -79,6 +84,13 @@ impl GatewayFrame {
             Self::Heartbeat { seq } => {
                 out[0] = TAG_HEARTBEAT;
                 out[PAYLOAD_OFFSET..PAYLOAD_OFFSET + 8].copy_from_slice(&seq.to_le_bytes());
+            }
+            Self::Redirect { address } => {
+                out[0] = TAG_REDIRECT;
+                let bytes = address.as_bytes();
+                let len = bytes.len().min(REDIRECT_MAX);
+                out[PAYLOAD_OFFSET] = len as u8;
+                out[PAYLOAD_OFFSET + 1..PAYLOAD_OFFSET + 1 + len].copy_from_slice(&bytes[..len]);
             }
             Self::Ack { private_seq } => {
                 out[0] = TAG_ACK;
@@ -228,6 +240,13 @@ impl GatewayFrame {
                         .expect("8 bytes"),
                 ),
             }),
+            TAG_REDIRECT => {
+                let len = usize::from(frame[PAYLOAD_OFFSET]).min(REDIRECT_MAX);
+                let address =
+                    String::from_utf8_lossy(&frame[PAYLOAD_OFFSET + 1..PAYLOAD_OFFSET + 1 + len])
+                        .into_owned();
+                Ok(Self::Redirect { address })
+            }
             TAG_COMBO_PRIVATE => {
                 let at = PAYLOAD_OFFSET;
                 let side = match frame[at + 24] {
@@ -367,6 +386,14 @@ mod tests {
             spread_ticks: 49_900,
         };
         let frame = GatewayFrame::ComboPrivate(fill);
+        assert_eq!(GatewayFrame::decode(&frame.clone().encode()), Ok(frame));
+    }
+
+    #[test]
+    fn redirect_roundtrips() {
+        let frame = GatewayFrame::Redirect {
+            address: "127.0.0.1:9000".to_string(),
+        };
         assert_eq!(GatewayFrame::decode(&frame.clone().encode()), Ok(frame));
     }
 

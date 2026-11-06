@@ -27,6 +27,8 @@ pub struct GatewayRuntime {
     buckets: HashMap<u64, TokenBucket>,
     auth_token: Option<u64>,
     credentials: Option<GatewayCredentials>,
+    redirect_target: Option<String>,
+    pending_redirects: HashMap<u64, String>,
     errors: u64,
 }
 
@@ -52,6 +54,8 @@ impl GatewayRuntime {
             buckets: HashMap::new(),
             auth_token: None,
             credentials: None,
+            redirect_target: None,
+            pending_redirects: HashMap::new(),
             errors: 0,
         }
     }
@@ -67,6 +71,13 @@ impl GatewayRuntime {
     #[must_use]
     pub fn with_credentials(mut self, credentials: GatewayCredentials) -> Self {
         self.credentials = Some(credentials);
+        self
+    }
+
+    /// Sets the address sent to clients displaced by a newer login.
+    #[must_use]
+    pub fn with_redirect_target(mut self, target: String) -> Self {
+        self.redirect_target = Some(target);
         self
     }
 
@@ -131,9 +142,17 @@ impl GatewayRuntime {
                     last_private_seq,
                     active: true,
                 };
-                if self.middleware.open_or_takeover(info).is_err() {
-                    self.errors += 1;
-                    return;
+                let replaced = match self.middleware.open_or_takeover(info) {
+                    Ok(replaced) => replaced,
+                    Err(_) => {
+                        self.errors += 1;
+                        return;
+                    }
+                };
+                if let Some(old) = replaced
+                    && let Some(target) = &self.redirect_target
+                {
+                    self.pending_redirects.insert(old, target.clone());
                 }
                 let replay = self.private_replay.replay(user_id.into(), last_private_seq);
                 if !replay.is_empty() {
@@ -169,8 +188,14 @@ impl GatewayRuntime {
             }
             GatewayFrame::Heartbeat { .. }
             | GatewayFrame::PrivateEvent(_)
-            | GatewayFrame::ComboPrivate(_) => {}
+            | GatewayFrame::ComboPrivate(_)
+            | GatewayFrame::Redirect { .. } => {}
         }
+    }
+
+    /// Takes queued redirects for displaced connections.
+    pub fn take_redirects(&mut self) -> HashMap<u64, String> {
+        std::mem::take(&mut self.pending_redirects)
     }
 
     /// Drains all sessions owned by a gateway before planned failover.
@@ -183,6 +208,10 @@ impl GatewayRuntime {
         for connection_id in &drained {
             self.last_seen.remove(connection_id);
             self.buckets.remove(connection_id);
+            if let Some(target) = &self.redirect_target {
+                self.pending_redirects
+                    .insert(*connection_id, target.clone());
+            }
         }
         drained
     }
@@ -449,6 +478,54 @@ mod tests {
         }
         assert!(!runtime.middleware_mut().session(1).unwrap().active);
         assert!(runtime.middleware_mut().session(2).unwrap().active);
+        server.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn takeover_queues_redirect_for_old_connection() {
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-gateway-redirect-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let mut runtime = GatewayRuntime::new(middleware, events)
+            .with_redirect_target("127.0.0.1:9000".to_string());
+        let login = GatewayFrame::Login {
+            member_id: 10,
+            user_id: 2,
+            seat_id: 3,
+            session_epoch: 1,
+            last_private_seq: 0,
+            auth_token: 0,
+        };
+        let mut first = TcpStream::connect(addr).unwrap();
+        first.write_all(&login.clone().encode()).unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.middleware_mut().session(1).is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let mut second = TcpStream::connect(addr).unwrap();
+        second.write_all(&login.encode()).unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.middleware_mut().session(2).is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let redirects = runtime.take_redirects();
+        assert_eq!(
+            redirects.get(&1).map(String::as_str),
+            Some("127.0.0.1:9000")
+        );
         server.stop();
         let _ = std::fs::remove_file(&path);
     }

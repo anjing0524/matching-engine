@@ -51,6 +51,9 @@ struct Args {
     result_log_retain: usize,
     #[arg(long)]
     auth_token: Option<u64>,
+    /// Address clients should reconnect to after session takeover.
+    #[arg(long)]
+    redirect_target: Option<String>,
     /// Append accepted commands to this replay log segment.
     #[arg(long)]
     command_log: Option<String>,
@@ -127,6 +130,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut gateway = GatewayRuntime::with_replay_capacity(middleware, events, 4096);
     if let Some(token) = args.auth_token {
         gateway = gateway.with_auth_token(token);
+    }
+    if let Some(target) = args.redirect_target {
+        gateway = gateway.with_redirect_target(target);
     }
     let publisher = match (&args.multicast_group, args.multicast_port) {
         (Some(group), Some(port)) => Some(MarketDataPublisher::bind_multicast_on(

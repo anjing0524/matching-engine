@@ -31,7 +31,8 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Per-connection command rate limiting
 - [x] Same member/user/seat login takes over the previous session
 - [x] Planned gateway session drain API
-- [ ] Automated cross-gateway failover and client redirection
+- [x] Redirect frame for displaced sessions
+- [ ] Automated gateway health checks and traffic shifting
 - [x] Split core/middleware binaries over shared-memory rings
 - [x] Standalone gateway TCP relay to middleware
 

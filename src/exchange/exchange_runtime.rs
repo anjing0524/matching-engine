@@ -149,6 +149,10 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
         let tick_start = Instant::now();
         let gateway_events = self.gateway.poll();
         self.metrics.gateway_events += gateway_events as u64;
+        for (connection_id, address) in self.gateway.take_redirects() {
+            let _ = self.server.send_redirect(connection_id, &address);
+            self.server.close(connection_id);
+        }
         for (connection_id, replay) in self.gateway.take_all_replays() {
             for event in replay {
                 if self.server.send_private(connection_id, &event).is_ok() {

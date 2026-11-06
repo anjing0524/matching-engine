@@ -86,6 +86,19 @@ impl GatewayServerHandle {
         self.send(connection_id, GatewayFrame::ComboPrivate(*fill))
     }
 
+    /// Sends a redirect frame to a gateway connection.
+    ///
+    /// # Errors
+    /// Returns an I/O error when the connection is unknown or the write fails.
+    pub fn send_redirect(&self, connection_id: u64, address: &str) -> io::Result<()> {
+        self.send(
+            connection_id,
+            GatewayFrame::Redirect {
+                address: address.to_string(),
+            },
+        )
+    }
+
     pub fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
         if let Some(join) = self.join.take() {
