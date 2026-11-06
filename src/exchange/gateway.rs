@@ -4,6 +4,7 @@
 //! between a gateway and middleware. TCP transport and session lifecycle sit
 //! above this codec; this slice only fixes the byte layout.
 
+use crate::exchange::combo_engine::ComboPrivateFill;
 use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
 use crate::exchange::protocol::{COMMAND_SLOT_SIZE, Command};
 
@@ -12,6 +13,7 @@ const TAG_LOGIN: u8 = 1;
 const TAG_COMMAND: u8 = 2;
 const TAG_HEARTBEAT: u8 = 3;
 const TAG_PRIVATE_EVENT: u8 = 4;
+const TAG_COMBO_PRIVATE: u8 = 5;
 const PAYLOAD_OFFSET: usize = 4;
 const PRIVATE_REASON_MAX: usize = 48;
 
@@ -30,6 +32,7 @@ pub enum GatewayFrame {
         seq: u64,
     },
     PrivateEvent(PrivateEvent),
+    ComboPrivate(ComboPrivateFill),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +71,21 @@ impl GatewayFrame {
             Self::Heartbeat { seq } => {
                 out[0] = TAG_HEARTBEAT;
                 out[PAYLOAD_OFFSET..PAYLOAD_OFFSET + 8].copy_from_slice(&seq.to_le_bytes());
+            }
+            Self::ComboPrivate(fill) => {
+                out[0] = TAG_COMBO_PRIVATE;
+                let at = PAYLOAD_OFFSET;
+                out[at..at + 8].copy_from_slice(&fill.seq.to_le_bytes());
+                out[at + 8..at + 16].copy_from_slice(&fill.order_id.to_le_bytes());
+                out[at + 16..at + 24].copy_from_slice(&fill.user_id.to_le_bytes());
+                out[at + 24] = match fill.side {
+                    crate::exchange::protocol::Side::Buy => 1,
+                    crate::exchange::protocol::Side::Sell => 2,
+                };
+                out[at + 32..at + 40].copy_from_slice(&fill.quantity.to_le_bytes());
+                out[at + 40..at + 48].copy_from_slice(&fill.leg1_price.to_le_bytes());
+                out[at + 48..at + 56].copy_from_slice(&fill.leg2_price.to_le_bytes());
+                out[at + 56..at + 64].copy_from_slice(&fill.spread_ticks.to_le_bytes());
             }
             Self::PrivateEvent(event) => {
                 out[0] = TAG_PRIVATE_EVENT;
@@ -186,6 +204,41 @@ impl GatewayFrame {
                     reason,
                 }))
             }
+            TAG_COMBO_PRIVATE => {
+                let at = PAYLOAD_OFFSET;
+                let side = match frame[at + 24] {
+                    1 => crate::exchange::protocol::Side::Buy,
+                    2 => crate::exchange::protocol::Side::Sell,
+                    value => {
+                        return Err(GatewayFrameError {
+                            field: "combo_side",
+                            value,
+                        });
+                    }
+                };
+                Ok(Self::ComboPrivate(ComboPrivateFill {
+                    seq: u64::from_le_bytes(frame[at..at + 8].try_into().expect("8 bytes")),
+                    order_id: u64::from_le_bytes(
+                        frame[at + 8..at + 16].try_into().expect("8 bytes"),
+                    ),
+                    user_id: u64::from_le_bytes(
+                        frame[at + 16..at + 24].try_into().expect("8 bytes"),
+                    ),
+                    side,
+                    quantity: u64::from_le_bytes(
+                        frame[at + 32..at + 40].try_into().expect("8 bytes"),
+                    ),
+                    leg1_price: u64::from_le_bytes(
+                        frame[at + 40..at + 48].try_into().expect("8 bytes"),
+                    ),
+                    leg2_price: u64::from_le_bytes(
+                        frame[at + 48..at + 56].try_into().expect("8 bytes"),
+                    ),
+                    spread_ticks: i64::from_le_bytes(
+                        frame[at + 56..at + 64].try_into().expect("8 bytes"),
+                    ),
+                }))
+            }
             value => Err(GatewayFrameError {
                 field: "gateway_frame_tag",
                 value,
@@ -273,6 +326,22 @@ mod tests {
             reason: Some("insufficient closeable position".to_string()),
         };
         let frame = GatewayFrame::PrivateEvent(event.clone());
+        assert_eq!(GatewayFrame::decode(&frame.clone().encode()), Ok(frame));
+    }
+
+    #[test]
+    fn combo_private_roundtrips() {
+        let fill = ComboPrivateFill {
+            seq: 3,
+            order_id: 4,
+            user_id: 5,
+            side: crate::exchange::protocol::Side::Sell,
+            quantity: 6,
+            leg1_price: 50_000,
+            leg2_price: 100,
+            spread_ticks: 49_900,
+        };
+        let frame = GatewayFrame::ComboPrivate(fill);
         assert_eq!(GatewayFrame::decode(&frame.clone().encode()), Ok(frame));
     }
 

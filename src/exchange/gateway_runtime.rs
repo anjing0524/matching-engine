@@ -86,7 +86,9 @@ impl GatewayRuntime {
                     self.errors += 1;
                 }
             }
-            GatewayFrame::Heartbeat { .. } | GatewayFrame::PrivateEvent(_) => {}
+            GatewayFrame::Heartbeat { .. }
+            | GatewayFrame::PrivateEvent(_)
+            | GatewayFrame::ComboPrivate(_) => {}
         }
     }
 

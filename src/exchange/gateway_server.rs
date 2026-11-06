@@ -4,6 +4,7 @@
 //! middleware. Session registration, authentication, and private responses are
 //! layered above this event stream; this slice only owns the accept/read loop.
 
+use crate::exchange::combo_engine::ComboPrivateFill;
 use crate::exchange::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
 use crate::exchange::private_events::PrivateEvent;
 use std::collections::HashMap;
@@ -71,6 +72,18 @@ impl GatewayServerHandle {
         {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
+    }
+
+    /// Sends one combination private fill to a gateway connection.
+    ///
+    /// # Errors
+    /// Returns an I/O error when the connection is unknown or the write fails.
+    pub fn send_combo_private(
+        &self,
+        connection_id: u64,
+        fill: &ComboPrivateFill,
+    ) -> io::Result<()> {
+        self.send(connection_id, GatewayFrame::ComboPrivate(*fill))
     }
 
     pub fn stop(&mut self) {
