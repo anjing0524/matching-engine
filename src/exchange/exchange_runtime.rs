@@ -220,6 +220,77 @@ mod tests {
     }
 
     #[test]
+    fn multiple_gateway_clients_fan_out_public_events() {
+        use crate::exchange::market_data::{MarketDataPublisher, MarketDataSubscriber};
+        use crate::exchange::protocol::{Command, CommandType, Hedge, Offset, Side};
+        use std::io::Write;
+
+        let path =
+            std::env::temp_dir().join(format!("matching-engine-fanout-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 1024).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let gateway = GatewayRuntime::new(middleware, events);
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let runner = CoreRunner::new(core, consumer, NoPlugins);
+        let subscriber = MarketDataSubscriber::bind("127.0.0.1:0").unwrap();
+        let publisher =
+            MarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap()).unwrap();
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_market_data(publisher);
+
+        let clients = 4u64;
+        let per_client = 25u64;
+        let mut streams = Vec::new();
+        for client in 0..clients {
+            let mut stream = TcpStream::connect(addr).unwrap();
+            stream
+                .write_all(
+                    &GatewayFrame::Login {
+                        member_id: client as u32 + 1,
+                        user_id: client as u32 + 1,
+                        seat_id: 1,
+                        session_epoch: 1,
+                        last_private_seq: 0,
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            for seq in 0..per_client {
+                let mut command = Command::zeroed();
+                command.command_type = CommandType::NewOrder;
+                command.client_order_id = client * per_client + seq + 1;
+                command.user_id = client as u32 + 1;
+                command.side = Side::Buy;
+                command.price_ticks = 50_000 + client as i64 * 100 + seq as i64;
+                command.quantity = 1;
+                command.offset = Offset::Open;
+                command.hedge = Hedge::Spec;
+                stream
+                    .write_all(&GatewayFrame::Command(command).encode())
+                    .unwrap();
+            }
+            streams.push(stream);
+        }
+
+        for _ in 0..2000 {
+            runtime.tick();
+            if runtime.public_sent() == clients * per_client {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(runtime.public_sent(), clients * per_client);
+        for _ in 0..clients * per_client {
+            subscriber.recv().unwrap();
+        }
+        drop(streams);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn combo_order_flows_gateway_to_public_transport() {
         use crate::exchange::combo_engine::ComboEngine;
         use crate::exchange::combo_market_data::{
