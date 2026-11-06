@@ -102,6 +102,20 @@ impl ComboQueue {
         self.locations.is_empty()
     }
 
+    /// Returns the best-priority order without removing it.
+    #[must_use]
+    pub fn peek_best(&self, side: Side) -> Option<ComboOrder> {
+        let price = match side {
+            Side::Buy => self.best_bid()?,
+            Side::Sell => self.best_ask()?,
+        };
+        let book = match side {
+            Side::Buy => &self.bids,
+            Side::Sell => &self.asks,
+        };
+        book.get(&price).and_then(|queue| queue.front()).copied()
+    }
+
     /// Pops the best-priority order on one side.
     pub fn pop_best(&mut self, side: Side) -> Option<ComboOrder> {
         let price = match side {
