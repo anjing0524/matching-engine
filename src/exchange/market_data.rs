@@ -16,6 +16,7 @@ use std::time::Duration;
 pub struct MarketDataPublisher {
     socket: UdpSocket,
     target: SocketAddr,
+    multicast: Option<(String, String, u16, std::net::Ipv4Addr)>,
 }
 
 impl MarketDataPublisher {
@@ -25,7 +26,11 @@ impl MarketDataPublisher {
     /// Returns an I/O error if bind fails.
     pub fn bind(local: &str, target: SocketAddr) -> io::Result<Self> {
         let socket = UdpSocket::bind(local)?;
-        Ok(Self { socket, target })
+        Ok(Self {
+            socket,
+            target,
+            multicast: None,
+        })
     }
 
     /// Binds a publisher targeting an IPv4 multicast group and port.
@@ -65,7 +70,33 @@ impl MarketDataPublisher {
         Ok(Self {
             socket,
             target: SocketAddr::from((group, port)),
+            multicast: Some((local.to_string(), group.to_string(), port, interface)),
         })
+    }
+
+    /// Rebinds a multicast publisher to a different local interface.
+    ///
+    /// # Errors
+    /// Returns an I/O error for unicast publishers or bind failure.
+    pub fn switch_interface(&mut self, interface: std::net::Ipv4Addr) -> io::Result<()> {
+        let Some((local, group, port, _)) = &self.multicast else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "publisher is not multicast",
+            ));
+        };
+        let replacement = Self::bind_multicast_on(local, group, *port, interface)?;
+        self.socket = replacement.socket;
+        self.target = replacement.target;
+        self.multicast = replacement.multicast;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn multicast_interface(&self) -> Option<std::net::Ipv4Addr> {
+        self.multicast
+            .as_ref()
+            .map(|(_, _, _, interface)| *interface)
     }
 
     /// Sends one public event packet.
@@ -209,6 +240,28 @@ mod tests {
         let subscriber = MarketDataSubscriber::bind_multicast(0, group).unwrap();
         let port = subscriber.local_addr().unwrap().port();
         let publisher = MarketDataPublisher::bind_multicast("0.0.0.0:0", group, port).unwrap();
+        publisher.send(&event()).unwrap();
+        assert_eq!(subscriber.recv().unwrap(), event());
+    }
+
+    #[test]
+    fn multicast_interface_can_switch() {
+        let subscriber = MarketDataSubscriber::bind_multicast(0, "239.255.42.98").unwrap();
+        let port = subscriber.local_addr().unwrap().port();
+        let mut publisher = MarketDataPublisher::bind_multicast_on(
+            "0.0.0.0:0",
+            "239.255.42.98",
+            port,
+            std::net::Ipv4Addr::LOCALHOST,
+        )
+        .unwrap();
+        assert_eq!(
+            publisher.multicast_interface(),
+            Some(std::net::Ipv4Addr::LOCALHOST)
+        );
+        publisher
+            .switch_interface(std::net::Ipv4Addr::LOCALHOST)
+            .unwrap();
         publisher.send(&event()).unwrap();
         assert_eq!(subscriber.recv().unwrap(), event());
     }

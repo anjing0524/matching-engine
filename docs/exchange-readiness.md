@@ -52,6 +52,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Size-based result-log rotation with bounded retention
 - [x] Per-server NACK rate limiting
 - [x] Multicast interface fallback list (startup bind)
+- [x] Runtime multicast interface switch API
 
 ## Failure semantics
 

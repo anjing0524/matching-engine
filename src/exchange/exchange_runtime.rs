@@ -118,6 +118,20 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
         self
     }
 
+    /// Switches the multicast publisher's local interface.
+    ///
+    /// # Errors
+    /// Returns an I/O error when no multicast publisher exists or rebinding fails.
+    pub fn switch_market_data_interface(
+        &mut self,
+        interface: std::net::Ipv4Addr,
+    ) -> std::io::Result<()> {
+        let publisher = self.market_data.as_mut().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "no market-data publisher")
+        })?;
+        publisher.switch_interface(interface)
+    }
+
     #[must_use]
     pub fn public_sent(&self) -> u64 {
         self.public_sent
