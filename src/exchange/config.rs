@@ -4,6 +4,8 @@
 //! market-data multicast. Transport-specific objects are still constructed by
 //! the caller; this struct only validates and carries values.
 
+use crate::exchange::market_data::MarketDataPublisher;
+use std::io;
 use std::time::Duration;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +30,21 @@ impl Default for ExchangeConfig {
 }
 
 impl ExchangeConfig {
+    /// Builds a multicast publisher when both multicast fields are configured.
+    ///
+    /// # Errors
+    /// Returns an I/O error for invalid config or socket bind failure.
+    pub fn multicast_publisher(&self, local: &str) -> io::Result<Option<MarketDataPublisher>> {
+        self.validate()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        match (&self.multicast_group, self.multicast_port) {
+            (Some(group), Some(port)) => Ok(Some(MarketDataPublisher::bind_multicast(
+                local, group, port,
+            )?)),
+            _ => Ok(None),
+        }
+    }
+
     /// Validates cross-field constraints.
     ///
     /// # Errors
@@ -77,6 +94,22 @@ mod tests {
             ..ExchangeConfig::default()
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn multicast_publisher_is_built_only_when_configured() {
+        assert!(
+            ExchangeConfig::default()
+                .multicast_publisher("127.0.0.1:0")
+                .unwrap()
+                .is_none()
+        );
+        let config = ExchangeConfig {
+            multicast_group: Some("239.1.1.1".to_string()),
+            multicast_port: Some(5000),
+            ..ExchangeConfig::default()
+        };
+        assert!(config.multicast_publisher("127.0.0.1:0").unwrap().is_some());
     }
 
     #[test]
