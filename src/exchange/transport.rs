@@ -4,6 +4,7 @@
 //! is the middleware sequencer; the consumer is the core. No syscalls are made
 //! on the hot path after the mapping is established.
 
+use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
 use crate::exchange::protocol::{COMMAND_SLOT_SIZE, Command, ProtocolError, Side};
 use crate::exchange::public_events::{PublicEvent, PublicEventType};
 use crate::shared::spsc_ring::{PushError, SpscRing};
@@ -247,9 +248,140 @@ fn decode_public_event(slot: &[u8; PUBLIC_EVENT_SLOT_SIZE]) -> Result<PublicEven
     })
 }
 
+/// Fixed slot size for private event transport.
+pub const PRIVATE_EVENT_SLOT_SIZE: usize = 128;
+const PRIVATE_EVENT_MAGIC: u32 = 0x5052_5631;
+const PRIVATE_REASON_MAX: usize = 48;
+
+/// Producer side of the private-event ring.
+pub struct PrivateEventProducer {
+    ring: SpscRing,
+}
+
+/// Consumer side of the private-event ring.
+pub struct PrivateEventConsumer {
+    ring: SpscRing,
+}
+
+/// Creates a file-backed private-event ring.
+///
+/// # Errors
+/// Returns an I/O error if the ring file cannot be created or opened.
+pub fn create_private_event_transport(
+    path: &Path,
+    capacity: u64,
+) -> io::Result<(PrivateEventProducer, PrivateEventConsumer)> {
+    let producer = SpscRing::create(path, capacity, PRIVATE_EVENT_SLOT_SIZE)?;
+    let consumer = SpscRing::open(path)?;
+    Ok((
+        PrivateEventProducer { ring: producer },
+        PrivateEventConsumer { ring: consumer },
+    ))
+}
+
+impl PrivateEventProducer {
+    /// Appends one private event.
+    pub fn send(&self, event: &PrivateEvent) -> Result<(), CommandTransportError> {
+        let bytes = encode_private_event(event);
+        self.ring.try_push(&bytes).map_err(|error| match error {
+            PushError::Full => CommandTransportError::Full,
+            PushError::TooLarge => CommandTransportError::Decode(ProtocolError {
+                field: "private_slot",
+                value: u8::MAX,
+            }),
+        })
+    }
+}
+
+impl PrivateEventConsumer {
+    /// Pops one private event; `None` means empty.
+    pub fn recv(&self) -> Option<Result<PrivateEvent, ProtocolError>> {
+        let mut bytes = Vec::with_capacity(PRIVATE_EVENT_SLOT_SIZE);
+        if !self.ring.try_pop_into(&mut bytes) {
+            return None;
+        }
+        let mut slot = [0u8; PRIVATE_EVENT_SLOT_SIZE];
+        if bytes.len() != PRIVATE_EVENT_SLOT_SIZE {
+            return Some(Err(ProtocolError {
+                field: "private_slot",
+                value: bytes.len() as u8,
+            }));
+        }
+        slot.copy_from_slice(&bytes);
+        Some(decode_private_event(&slot))
+    }
+}
+
+fn encode_private_event(event: &PrivateEvent) -> [u8; PRIVATE_EVENT_SLOT_SIZE] {
+    let mut out = [0u8; PRIVATE_EVENT_SLOT_SIZE];
+    out[0..4].copy_from_slice(&PRIVATE_EVENT_MAGIC.to_le_bytes());
+    out[4..12].copy_from_slice(&event.seq.to_le_bytes());
+    out[12..20].copy_from_slice(&event.order_id.to_le_bytes());
+    out[20..28].copy_from_slice(&event.client_order_id.to_le_bytes());
+    out[28..36].copy_from_slice(&event.account_id.to_le_bytes());
+    out[36] = match event.status {
+        PrivateStatus::Accepted => 1,
+        PrivateStatus::PartiallyFilled => 2,
+        PrivateStatus::Filled => 3,
+        PrivateStatus::Canceled => 4,
+        PrivateStatus::Rejected => 5,
+    };
+    out[40..48].copy_from_slice(&event.filled_delta.to_le_bytes());
+    out[48..56].copy_from_slice(&event.remaining.to_le_bytes());
+    if let Some(reason) = &event.reason {
+        let bytes = reason.as_bytes();
+        let len = bytes.len().min(PRIVATE_REASON_MAX);
+        out[57] = len as u8;
+        out[58..58 + len].copy_from_slice(&bytes[..len]);
+    }
+    out
+}
+
+fn decode_private_event(
+    slot: &[u8; PRIVATE_EVENT_SLOT_SIZE],
+) -> Result<PrivateEvent, ProtocolError> {
+    let magic = u32::from_le_bytes(slot[0..4].try_into().expect("4 bytes"));
+    if magic != PRIVATE_EVENT_MAGIC {
+        return Err(ProtocolError {
+            field: "private_magic",
+            value: slot[0],
+        });
+    }
+    let status = match slot[36] {
+        1 => PrivateStatus::Accepted,
+        2 => PrivateStatus::PartiallyFilled,
+        3 => PrivateStatus::Filled,
+        4 => PrivateStatus::Canceled,
+        5 => PrivateStatus::Rejected,
+        value => {
+            return Err(ProtocolError {
+                field: "private_status",
+                value,
+            });
+        }
+    };
+    let reason_len = usize::from(slot[57]).min(PRIVATE_REASON_MAX);
+    let reason = if reason_len == 0 {
+        None
+    } else {
+        Some(String::from_utf8_lossy(&slot[58..58 + reason_len]).into_owned())
+    };
+    Ok(PrivateEvent {
+        seq: u64::from_le_bytes(slot[4..12].try_into().expect("8 bytes")),
+        order_id: u64::from_le_bytes(slot[12..20].try_into().expect("8 bytes")),
+        client_order_id: u64::from_le_bytes(slot[20..28].try_into().expect("8 bytes")),
+        account_id: u64::from_le_bytes(slot[28..36].try_into().expect("8 bytes")),
+        status,
+        filled_delta: u64::from_le_bytes(slot[40..48].try_into().expect("8 bytes")),
+        remaining: u64::from_le_bytes(slot[48..56].try_into().expect("8 bytes")),
+        reason,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
     use crate::exchange::protocol::{
         CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType, VolumeCondition,
     };
@@ -327,6 +459,29 @@ mod tests {
             price_ticks: 50_000,
             quantity: 9,
             volume: 0,
+        };
+        producer.send(&event).unwrap();
+        assert_eq!(consumer.recv().unwrap().unwrap(), event);
+        assert!(consumer.recv().is_none());
+        drop(producer);
+        drop(consumer);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn private_event_roundtrips_through_shared_ring() {
+        let path = temp_path("private-events");
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create_private_event_transport(&path, 8).unwrap();
+        let event = PrivateEvent {
+            seq: 7,
+            order_id: 11,
+            client_order_id: 12,
+            account_id: 13,
+            status: PrivateStatus::Rejected,
+            filled_delta: 0,
+            remaining: 0,
+            reason: Some("insufficient closeable position".to_string()),
         };
         producer.send(&event).unwrap();
         assert_eq!(consumer.recv().unwrap().unwrap(), event);
