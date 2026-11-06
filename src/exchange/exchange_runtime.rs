@@ -9,6 +9,7 @@ use crate::exchange::gateway_runtime::GatewayRuntime;
 use crate::exchange::gateway_server::GatewayServerHandle;
 use crate::exchange::market_data::MarketDataPublisher;
 use crate::exchange::plugins::PreTradePlugin;
+use crate::exchange::repair::{NackRequest, RepairBuffer};
 use crate::exchange::runner::CoreRunner;
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,7 @@ pub struct ExchangeRuntime<P> {
     idle_timeout: Option<Duration>,
     last_expire: Instant,
     market_data: Option<MarketDataPublisher>,
+    repair_buffer: Option<RepairBuffer>,
     public_sent: u64,
 }
 
@@ -33,8 +35,22 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             idle_timeout: None,
             last_expire: Instant::now(),
             market_data: None,
+            repair_buffer: None,
             public_sent: 0,
         }
+    }
+
+    #[must_use]
+    pub fn with_repair_buffer(mut self, capacity: usize) -> Self {
+        self.repair_buffer = Some(RepairBuffer::new(capacity));
+        self
+    }
+
+    #[must_use]
+    pub fn repair(&self, request: NackRequest) -> Vec<crate::exchange::public_events::PublicEvent> {
+        self.repair_buffer
+            .as_ref()
+            .map_or_else(Vec::new, |buffer| buffer.repair(request))
     }
 
     #[must_use]
@@ -63,6 +79,11 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
         let private = self.core.drain_private();
         let sent = self.gateway.dispatch_private(&self.server, private);
         let public = self.core.drain_public();
+        if let Some(buffer) = &mut self.repair_buffer {
+            for event in &public {
+                buffer.push(*event);
+            }
+        }
         if let Some(publisher) = &self.market_data {
             for event in public {
                 if publisher.send(&event).is_ok() {
@@ -143,6 +164,63 @@ mod tests {
             trigger_type: TriggerType::None,
             cancel_order_id: 0,
         }
+    }
+
+    #[test]
+    fn runtime_public_events_fill_repair_buffer() {
+        use crate::exchange::repair::NackRequest;
+
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-exchange-runtime-repair-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 16).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let gateway = GatewayRuntime::new(middleware, events);
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let runner = CoreRunner::new(core, consumer, NoPlugins);
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_repair_buffer(16);
+
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        stream
+            .write_all(&GatewayFrame::Command(command()).encode())
+            .unwrap();
+        for _ in 0..100 {
+            runtime.tick();
+            if !runtime
+                .repair(NackRequest {
+                    from_seq: 1,
+                    to_seq: 1,
+                })
+                .is_empty()
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let repaired = runtime.repair(NackRequest {
+            from_seq: 1,
+            to_seq: 10,
+        });
+        assert_eq!(repaired.len(), 1);
+        assert_eq!(repaired[0].seq, 1);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
