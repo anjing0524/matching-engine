@@ -73,6 +73,6 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Validated `ExchangeConfig` and multicast publisher example
 - [x] Production configuration notes
 - [x] systemd unit templates and environment example
-- [x] Multi-stage Dockerfile and compose example (template, not CI-built)
+- [x] Multi-stage Alpine Dockerfile; image built and smoke-run locally
 - [ ] Core state snapshot/restore procedure
 - [ ] Rolling upgrade and compatibility policy
