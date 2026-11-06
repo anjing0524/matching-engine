@@ -15,6 +15,29 @@ pub enum PublicEventType {
     SessionSwitch,
 }
 
+/// Trading phase carried by session-switch events.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExchangePhase {
+    Closed,
+    PreOpen,
+    OpeningAuction,
+    Continuous,
+    Break,
+}
+
+impl ExchangePhase {
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::Closed => 0,
+            Self::PreOpen => 1,
+            Self::OpeningAuction => 2,
+            Self::Continuous => 3,
+            Self::Break => 4,
+        }
+    }
+}
+
 /// One public event in market-data sequence order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicEvent {

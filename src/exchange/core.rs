@@ -21,7 +21,7 @@ use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
 use crate::exchange::protocol::{
     Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, VolumeCondition,
 };
-use crate::exchange::public_events::{PublicEvent, PublicEventType};
+use crate::exchange::public_events::{ExchangePhase, PublicEvent, PublicEventType};
 use crate::shared::SymbolId;
 use crate::shared::protocol::{NewOrderRequest, OrderType};
 use std::collections::{HashMap, HashSet};
@@ -115,6 +115,8 @@ pub struct ExchangeCore {
     public_events: Vec<PublicEvent>,
     public_orders: HashSet<u64>,
     combo_queues: HashMap<u32, ComboQueue>,
+    phase: ExchangePhase,
+    trading_day: u32,
 }
 
 impl ExchangeCore {
@@ -136,6 +138,8 @@ impl ExchangeCore {
             public_events: Vec::new(),
             public_orders: HashSet::new(),
             combo_queues: HashMap::new(),
+            phase: ExchangePhase::Continuous,
+            trading_day: 1,
         }
     }
 
@@ -257,6 +261,37 @@ impl ExchangeCore {
             client_order_id: command.client_order_id,
             reason,
         }]
+    }
+
+    #[must_use]
+    pub fn phase(&self) -> ExchangePhase {
+        self.phase
+    }
+
+    #[must_use]
+    pub fn trading_day(&self) -> u32 {
+        self.trading_day
+    }
+
+    /// Switches the trading phase and emits a public SessionSwitch event.
+    pub fn set_phase(&mut self, phase: ExchangePhase, trading_day: u32) {
+        self.phase = phase;
+        self.trading_day = trading_day;
+        self.push_public_event(PublicEvent {
+            seq: 0,
+            event_type: PublicEventType::SessionSwitch,
+            exchange_ts_ns: 0,
+            phase: phase.code(),
+            instrument_id: 0,
+            order_id: 0,
+            trade_id: 0,
+            buy_order_id: 0,
+            sell_order_id: 0,
+            side: None,
+            price_ticks: 0,
+            quantity: 0,
+            volume: 0,
+        });
     }
 
     /// Queues a combination order in the logical spread-price/FIFO queue.
@@ -517,6 +552,12 @@ impl ExchangeCore {
     ) -> Vec<CoreEvent> {
         if command.command_type != CommandType::NewOrder {
             return self.execute(command);
+        }
+        if !matches!(
+            self.phase,
+            ExchangePhase::Continuous | ExchangePhase::OpeningAuction
+        ) {
+            return self.reject_private(&command, "trading phase rejects new orders".to_string());
         }
         if !matches!(command.price_type, PriceType::Limit | PriceType::Market) {
             return self.execute(command);
@@ -1481,6 +1522,32 @@ mod tests {
         let order_id = core.submit_combo_order(7, 1, Side::Sell, 90, 5).unwrap();
         assert!(core.cancel_combo_order(7, order_id));
         assert_eq!(core.combo_queue_len(7), 0);
+    }
+
+    #[test]
+    fn session_switch_emits_public_event() {
+        let mut core = core();
+        core.set_phase(ExchangePhase::Break, 2);
+        assert_eq!(core.phase(), ExchangePhase::Break);
+        assert_eq!(core.trading_day(), 2);
+        let public = core.drain_public_events();
+        assert_eq!(public.len(), 1);
+        assert_eq!(public[0].event_type, PublicEventType::SessionSwitch);
+        assert_eq!(public[0].phase, ExchangePhase::Break.code());
+    }
+
+    #[test]
+    fn closed_phase_rejects_new_orders() {
+        use crate::exchange::plugins::AvailableClosePlugin;
+        use crate::exchange::protocol::Offset;
+
+        let mut core = core();
+        core.set_phase(ExchangePhase::Closed, 1);
+        core.drain_public_events();
+        let mut buy = wire_command(Side::Buy, 50_000, 5);
+        buy.offset = Offset::Open;
+        let events = core.execute_with_plugins(buy, &AvailableClosePlugin);
+        assert!(matches!(events.as_slice(), [CoreEvent::Rejected { .. }]));
     }
 
     #[test]
