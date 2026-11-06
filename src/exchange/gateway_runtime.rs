@@ -7,6 +7,8 @@
 use crate::exchange::gateway::GatewayFrame;
 use crate::exchange::gateway_server::{GatewayEvent, GatewayServerHandle};
 use crate::exchange::middleware::MiddlewareSequencer;
+use crate::exchange::private_events::PrivateEvent;
+use crate::exchange::private_replay::PrivateReplayBuffer;
 use crate::exchange::session::SessionInfo;
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
@@ -17,6 +19,8 @@ pub struct GatewayRuntime {
     middleware: MiddlewareSequencer,
     events: Receiver<GatewayEvent>,
     last_seen: HashMap<u64, Instant>,
+    private_replay: PrivateReplayBuffer,
+    pending_replay: HashMap<u64, Vec<PrivateEvent>>,
     errors: u64,
 }
 
@@ -27,6 +31,8 @@ impl GatewayRuntime {
             middleware,
             events,
             last_seen: HashMap::new(),
+            private_replay: PrivateReplayBuffer::new(1024),
+            pending_replay: HashMap::new(),
             errors: 0,
         }
     }
@@ -75,6 +81,11 @@ impl GatewayRuntime {
                 };
                 if !self.middleware.open_session(info) {
                     self.errors += 1;
+                    return;
+                }
+                let replay = self.private_replay.replay(user_id.into(), last_private_seq);
+                if !replay.is_empty() {
+                    self.pending_replay.insert(connection_id, replay);
                 }
             }
             GatewayFrame::Command(mut command) => {
@@ -111,6 +122,16 @@ impl GatewayRuntime {
         expired
     }
 
+    /// Takes replay events queued for a newly logged-in connection.
+    pub fn take_replay(&mut self, connection_id: u64) -> Option<Vec<PrivateEvent>> {
+        self.pending_replay.remove(&connection_id)
+    }
+
+    /// Drains all queued replay batches.
+    pub fn take_all_replays(&mut self) -> HashMap<u64, Vec<PrivateEvent>> {
+        std::mem::take(&mut self.pending_replay)
+    }
+
     /// Routes combo private fills to the session whose user matches the fill.
     ///
     /// Returns how many fills were handed to a gateway downlink.
@@ -135,13 +156,14 @@ impl GatewayRuntime {
     ///
     /// Returns how many events were handed to a gateway downlink.
     pub fn dispatch_private(
-        &self,
+        &mut self,
         server: &GatewayServerHandle,
         events: impl IntoIterator<Item = crate::exchange::private_events::PrivateEvent>,
     ) -> usize {
         let mut sent = 0;
         for event in events {
             let user_id = u32::try_from(event.account_id).unwrap_or(u32::MAX);
+            self.private_replay.push(event.account_id, event.clone());
             if let Some(session) = self.middleware.session_by_user(user_id)
                 && server.send_private(session.session_id, &event).is_ok()
             {
@@ -260,6 +282,90 @@ mod tests {
             GatewayFrame::decode(&frame).unwrap(),
             GatewayFrame::ComboPrivate(fill)
         );
+        server.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reconnect_replays_private_events_after_ack() {
+        use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
+
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-gateway-replay-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let mut runtime = GatewayRuntime::new(middleware, events);
+
+        let mut first = TcpStream::connect(addr).unwrap();
+        first
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.middleware_mut().session_by_user(2).is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let event = |seq| PrivateEvent {
+            seq,
+            order_id: seq,
+            client_order_id: seq,
+            account_id: 2,
+            status: PrivateStatus::Accepted,
+            filled_delta: 0,
+            remaining: 1,
+            reason: None,
+        };
+        assert_eq!(runtime.dispatch_private(&server, [event(1), event(2)]), 2);
+        drop(first);
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.middleware_mut().session_by_user(2).is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        let mut second = TcpStream::connect(addr).unwrap();
+        second
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 1,
+                }
+                .encode(),
+            )
+            .unwrap();
+        let mut replay = None;
+        for _ in 0..50 {
+            runtime.poll();
+            if let Some(events) = runtime.take_replay(2) {
+                replay = Some(events);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let replay = replay.expect("replay batch");
+        assert_eq!(replay.len(), 1);
+        assert_eq!(replay[0].seq, 2);
         server.stop();
         let _ = std::fs::remove_file(&path);
     }

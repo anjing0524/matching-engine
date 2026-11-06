@@ -90,6 +90,11 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
     /// Returns `(gateway_events, commands_executed, private_events_sent)`.
     pub fn tick(&mut self) -> (usize, usize, usize) {
         let gateway_events = self.gateway.poll();
+        for (connection_id, replay) in self.gateway.take_all_replays() {
+            for event in replay {
+                let _ = self.server.send_private(connection_id, &event);
+            }
+        }
         let commands = self.core.poll();
         let private = self.core.drain_private();
         let sent = self.gateway.dispatch_private(&self.server, private);
