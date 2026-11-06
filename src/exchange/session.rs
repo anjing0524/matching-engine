@@ -66,6 +66,14 @@ impl SessionRegistry {
     }
 
     #[must_use]
+    pub fn find_active_by_user(&self, user_id: u32) -> Option<SessionInfo> {
+        self.sessions
+            .values()
+            .find(|session| session.active && session.user_id == user_id)
+            .copied()
+    }
+
+    #[must_use]
     pub fn active_count(&self) -> usize {
         self.sessions
             .values()

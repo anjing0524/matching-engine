@@ -5,7 +5,7 @@
 //! ring. Private downlink is a later slice.
 
 use crate::exchange::gateway::GatewayFrame;
-use crate::exchange::gateway_server::GatewayEvent;
+use crate::exchange::gateway_server::{GatewayEvent, GatewayServerHandle};
 use crate::exchange::middleware::MiddlewareSequencer;
 use crate::exchange::session::SessionInfo;
 use std::sync::mpsc::Receiver;
@@ -84,6 +84,26 @@ impl GatewayRuntime {
         }
     }
 
+    /// Routes private events to the session whose user matches the account.
+    ///
+    /// Returns how many events were handed to a gateway downlink.
+    pub fn dispatch_private(
+        &self,
+        server: &GatewayServerHandle,
+        events: impl IntoIterator<Item = crate::exchange::private_events::PrivateEvent>,
+    ) -> usize {
+        let mut sent = 0;
+        for event in events {
+            let user_id = u32::try_from(event.account_id).unwrap_or(u32::MAX);
+            if let Some(session) = self.middleware.session_by_user(user_id)
+                && server.send_private(session.session_id, &event).is_ok()
+            {
+                sent += 1;
+            }
+        }
+        sent
+    }
+
     #[must_use]
     pub fn errors(&self) -> u64 {
         self.errors
@@ -139,6 +159,61 @@ mod tests {
             trigger_type: TriggerType::None,
             cancel_order_id: 0,
         }
+    }
+
+    #[test]
+    fn private_event_routes_to_logged_in_gateway() {
+        use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
+        use std::io::Read;
+
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-gateway-private-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let mut runtime = GatewayRuntime::new(middleware, events);
+        let mut stream = TcpStream::connect(server.addr()).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.middleware_mut().session_by_user(2).is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let event = PrivateEvent {
+            seq: 1,
+            order_id: 2,
+            client_order_id: 3,
+            account_id: 2,
+            status: PrivateStatus::Accepted,
+            filled_delta: 0,
+            remaining: 5,
+            reason: None,
+        };
+        assert_eq!(runtime.dispatch_private(&server, [event.clone()]), 1);
+        let mut frame = [0u8; crate::exchange::gateway::GATEWAY_FRAME_SIZE];
+        stream.read_exact(&mut frame).unwrap();
+        assert_eq!(
+            GatewayFrame::decode(&frame).unwrap(),
+            GatewayFrame::PrivateEvent(event)
+        );
+        server.stop();
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

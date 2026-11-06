@@ -42,6 +42,11 @@ impl MiddlewareSequencer {
         self.sessions.get(session_id)
     }
 
+    #[must_use]
+    pub fn session_by_user(&self, user_id: u32) -> Option<SessionInfo> {
+        self.sessions.find_active_by_user(user_id)
+    }
+
     /// Submits only when the command's session is open and active.
     pub fn submit_for_session(&mut self, command: Command) -> Result<u64, CommandTransportError> {
         let session = self
