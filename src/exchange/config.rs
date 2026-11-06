@@ -15,6 +15,7 @@ pub struct ExchangeConfig {
     pub idle_timeout: Option<Duration>,
     pub multicast_group: Option<String>,
     pub multicast_port: Option<u16>,
+    pub multicast_interface: Option<String>,
 }
 
 impl Default for ExchangeConfig {
@@ -25,6 +26,7 @@ impl Default for ExchangeConfig {
             idle_timeout: Some(Duration::from_secs(30)),
             multicast_group: None,
             multicast_port: None,
+            multicast_interface: None,
         }
     }
 }
@@ -56,6 +58,11 @@ impl ExchangeConfig {
         if self.repair_buffer_capacity == 0 {
             return Err("repair_buffer_capacity must be positive");
         }
+        if let Some(interface) = &self.multicast_interface
+            && interface.parse::<std::net::Ipv4Addr>().is_err()
+        {
+            return Err("multicast_interface must be an IPv4 address");
+        }
         match (&self.multicast_group, self.multicast_port) {
             (Some(group), Some(_)) => {
                 if group.parse::<std::net::Ipv4Addr>().is_err() {
@@ -82,6 +89,15 @@ mod tests {
     fn incomplete_multicast_is_rejected() {
         let config = ExchangeConfig {
             multicast_group: Some("239.1.1.1".to_string()),
+            ..ExchangeConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn invalid_multicast_interface_is_rejected() {
+        let config = ExchangeConfig {
+            multicast_interface: Some("not-an-ip".to_string()),
             ..ExchangeConfig::default()
         };
         assert!(config.validate().is_err());

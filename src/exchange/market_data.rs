@@ -33,6 +33,19 @@ impl MarketDataPublisher {
     /// # Errors
     /// Returns an I/O error if bind/address parsing fails.
     pub fn bind_multicast(local: &str, group: &str, port: u16) -> io::Result<Self> {
+        Self::bind_multicast_on(local, group, port, std::net::Ipv4Addr::LOCALHOST)
+    }
+
+    /// Binds a multicast publisher on a specific local interface.
+    ///
+    /// # Errors
+    /// Returns an I/O error if bind/address parsing fails.
+    pub fn bind_multicast_on(
+        local: &str,
+        group: &str,
+        port: u16,
+        interface: std::net::Ipv4Addr,
+    ) -> io::Result<Self> {
         let group: std::net::Ipv4Addr = group
             .parse()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
@@ -47,7 +60,7 @@ impl MarketDataPublisher {
         socket.set_reuse_address(true)?;
         socket.bind(&local.into())?;
         socket.set_multicast_loop_v4(true)?;
-        socket.set_multicast_if_v4(&std::net::Ipv4Addr::LOCALHOST)?;
+        socket.set_multicast_if_v4(&interface)?;
         let socket: UdpSocket = socket.into();
         Ok(Self {
             socket,
@@ -104,6 +117,18 @@ impl MarketDataSubscriber {
     /// # Errors
     /// Returns an I/O error if bind/join fails.
     pub fn bind_multicast(port: u16, group: &str) -> io::Result<Self> {
+        Self::bind_multicast_on(port, group, std::net::Ipv4Addr::LOCALHOST)
+    }
+
+    /// Binds a multicast subscriber on a specific local interface.
+    ///
+    /// # Errors
+    /// Returns an I/O error if bind/join fails.
+    pub fn bind_multicast_on(
+        port: u16,
+        group: &str,
+        interface: std::net::Ipv4Addr,
+    ) -> io::Result<Self> {
         let group: std::net::Ipv4Addr = group
             .parse()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
@@ -115,7 +140,7 @@ impl MarketDataSubscriber {
         socket.set_reuse_address(true)?;
         socket.bind(&SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, port)).into())?;
         socket.set_multicast_loop_v4(true)?;
-        socket.join_multicast_v4(&group, &std::net::Ipv4Addr::LOCALHOST)?;
+        socket.join_multicast_v4(&group, &interface)?;
         let socket: UdpSocket = socket.into();
         socket.set_read_timeout(Some(Duration::from_secs(2)))?;
         Ok(Self { socket })
