@@ -4,6 +4,7 @@
 //! core command consumer, then routes core private events back to the matching
 //! gateway session.
 
+use crate::exchange::config::ExchangeConfig;
 use crate::exchange::core::ExchangeCore;
 use crate::exchange::gateway_runtime::GatewayRuntime;
 use crate::exchange::gateway_server::GatewayServerHandle;
@@ -77,6 +78,13 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
     #[must_use]
     pub fn public_sent(&self) -> u64 {
         self.public_sent
+    }
+
+    #[must_use]
+    pub fn with_config(mut self, config: ExchangeConfig) -> Self {
+        self.idle_timeout = config.idle_timeout;
+        self.repair_buffer = Some(RepairBuffer::new(config.repair_buffer_capacity));
+        self
     }
 
     #[must_use]
@@ -192,6 +200,39 @@ mod tests {
             trigger_type: TriggerType::None,
             cancel_order_id: 0,
         }
+    }
+
+    #[test]
+    fn config_builder_sets_repair_capacity_and_timeout() {
+        use crate::exchange::config::ExchangeConfig;
+
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-exchange-runtime-config-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let gateway = GatewayRuntime::new(middleware, events);
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let runner = CoreRunner::new(core, consumer, NoPlugins);
+        let runtime = ExchangeRuntime::new(gateway, runner, server).with_config(ExchangeConfig {
+            repair_buffer_capacity: 3,
+            idle_timeout: None,
+            ..ExchangeConfig::default()
+        });
+        assert_eq!(
+            runtime
+                .repair(NackRequest {
+                    from_seq: 1,
+                    to_seq: 1
+                })
+                .len(),
+            0
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

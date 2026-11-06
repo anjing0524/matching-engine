@@ -10,6 +10,7 @@ pub mod combo_engine;
 pub mod combo_exec;
 pub mod combo_market_data;
 pub mod combo_runtime;
+pub mod config;
 pub mod core;
 pub mod exchange_runtime;
 pub mod gateway;
