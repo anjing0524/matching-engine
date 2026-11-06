@@ -235,7 +235,7 @@ mod tests {
             .iter()
             .map(|path| read_segment(path).unwrap().len())
             .sum();
-        assert!(total >= 1 && total <= 5);
+        assert!((1..=5).contains(&total));
         let _ = std::fs::remove_dir_all(&directory);
     }
 
