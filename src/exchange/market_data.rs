@@ -28,6 +28,22 @@ impl MarketDataPublisher {
         Ok(Self { socket, target })
     }
 
+    /// Binds a publisher targeting an IPv4 multicast group and port.
+    ///
+    /// # Errors
+    /// Returns an I/O error if bind/address parsing fails.
+    pub fn bind_multicast(local: &str, group: &str, port: u16) -> io::Result<Self> {
+        let group: std::net::Ipv4Addr = group
+            .parse()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let socket = UdpSocket::bind(local)?;
+        socket.set_multicast_loop_v4(true)?;
+        Ok(Self {
+            socket,
+            target: SocketAddr::from((group, port)),
+        })
+    }
+
     /// Sends one public event packet.
     ///
     /// # Errors
@@ -70,6 +86,21 @@ impl MarketDataSubscriber {
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
         self.socket
             .join_multicast_v4(&group, &std::net::Ipv4Addr::UNSPECIFIED)
+    }
+
+    /// Binds a subscriber on all interfaces and joins an IPv4 multicast group.
+    ///
+    /// # Errors
+    /// Returns an I/O error if bind/join fails.
+    pub fn bind_multicast(port: u16, group: &str) -> io::Result<Self> {
+        let socket = UdpSocket::bind(("0.0.0.0", port))?;
+        socket.set_read_timeout(Some(Duration::from_secs(2)))?;
+        socket.set_multicast_loop_v4(true)?;
+        let group: std::net::Ipv4Addr = group
+            .parse()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        socket.join_multicast_v4(&group, &std::net::Ipv4Addr::UNSPECIFIED)?;
+        Ok(Self { socket })
     }
 
     /// Receives one public event.
@@ -116,6 +147,17 @@ mod tests {
             quantity: 9,
             volume: 0,
         }
+    }
+
+    #[test]
+    #[ignore = "requires a multicast-capable interface"]
+    fn multicast_publisher_and_subscriber() {
+        let group = "239.255.42.99";
+        let subscriber = MarketDataSubscriber::bind_multicast(0, group).unwrap();
+        let port = subscriber.local_addr().unwrap().port();
+        let publisher = MarketDataPublisher::bind_multicast("0.0.0.0:0", group, port).unwrap();
+        publisher.send(&event()).unwrap();
+        assert_eq!(subscriber.recv().unwrap(), event());
     }
 
     #[test]
