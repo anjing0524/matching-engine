@@ -85,9 +85,8 @@ pub fn read_segment(path: &Path) -> io::Result<Vec<Command>> {
         return Err(invalid("truncated command slot"));
     }
     let mut commands = Vec::with_capacity(payload.len() / COMMAND_SLOT_SIZE);
-    for slot in payload.chunks_exact(COMMAND_SLOT_SIZE) {
-        let slot: [u8; COMMAND_SLOT_SIZE] = slot.try_into().expect("slot size");
-        commands.push(Command::decode(&slot).map_err(|error| invalid(&format!("{error:?}")))?);
+    for slot in payload.as_chunks::<COMMAND_SLOT_SIZE>().0 {
+        commands.push(Command::decode(slot).map_err(|error| invalid(&format!("{error:?}")))?);
     }
     Ok(commands)
 }
