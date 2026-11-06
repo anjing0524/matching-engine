@@ -2,7 +2,8 @@
 
 Hardware: Apple M4, 10 logical cores, macOS, optimized `bench` profile.
 Benchmarks are un-pinned single-process runs; treat numbers as baselines, not
-service SLOs.
+service SLOs. Re-measured 2026-11-06 after the best-price, slot-pop, and snapshot
+optimizations; thermal/background load causes visible run-to-run variance.
 
 ## Reproduce
 
@@ -18,10 +19,10 @@ cargo test --release --test exchange_combo_soak
 
 | Workload | Result |
 |---|---|
-| crossing 200k commands | ~2.5–2.7M cmd/s |
-| resting 200k commands | ~1.8–2.0M cmd/s |
+| crossing 200k commands | ~2.2–2.7M cmd/s |
+| resting 200k commands | ~1.5–2.0M cmd/s |
 | middleware submit 200k | ~11–28M cmd/s |
-| core consume 200k via shared ring | ~2.5–2.7M cmd/s |
+| core consume 200k via shared ring | ~2.4–2.7M cmd/s |
 | end-to-end TCP fan-out, 4k orders / 8 clients | ~95k order/s |
 
 Key fixes that moved these numbers:
@@ -35,9 +36,9 @@ Key fixes that moved these numbers:
 
 | Workload | Result |
 |---|---|
-| combo queue | ~6.0M order/s |
+| combo queue | ~6.0–6.8M order/s |
 | combo cancel | ~5.4–8.1M cancel/s |
-| atomic two-leg fills | ~1.2–1.25M fill/s |
+| atomic two-leg fills | ~1.15–1.25M fill/s |
 
 `ComboExecutor` prechecks aggregate side quantity in O(1), reuses rollback
 snapshot buffers, and sweeps both leg books atomically.
