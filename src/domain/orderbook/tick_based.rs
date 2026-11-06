@@ -247,9 +247,13 @@ pub struct TickBasedOrderBook {
 
     /// 最优买价索引（缓存）
     best_bid_idx: Option<usize>,
+    /// Lowest populated bid index, used to bound downward searches.
+    bid_min_idx: Option<usize>,
 
     /// 最优卖价索引（缓存）
     best_ask_idx: Option<usize>,
+    /// Highest populated ask index, used to bound upward searches.
+    ask_max_idx: Option<usize>,
 
     /// 下一个订单ID
     next_order_id: u64,
@@ -280,7 +284,9 @@ impl TickBasedOrderBook {
             bid_bitmap: FastBitmap::new(num_levels),
             ask_bitmap: FastBitmap::new(num_levels),
             best_bid_idx: None,
+            bid_min_idx: None,
             best_ask_idx: None,
+            ask_max_idx: None,
             next_order_id: 1,
             spec,
             order_locations: OrderLocationMap::default(),
@@ -366,8 +372,6 @@ impl TickBasedOrderBook {
             current_idx = self.find_next_ask(idx);
         }
 
-        self.best_ask_idx = self.find_best_ask();
-
         if order.remaining_quantity > 0 {
             let rested = self.add_order(
                 BookSide::Bid,
@@ -434,8 +438,6 @@ impl TickBasedOrderBook {
 
             current_idx = self.find_next_bid(idx);
         }
-
-        self.best_bid_idx = self.find_best_bid();
 
         if order.remaining_quantity > 0 {
             let rested = self.add_order(
@@ -624,12 +626,18 @@ impl TickBasedOrderBook {
         match side {
             BookSide::Bid => {
                 self.bid_bitmap.set(idx, true);
+                if self.bid_min_idx.is_none_or(|min| idx < min) {
+                    self.bid_min_idx = Some(idx);
+                }
                 if self.best_bid_idx.is_none_or(|best| idx > best) {
                     self.best_bid_idx = Some(idx);
                 }
             }
             BookSide::Ask => {
                 self.ask_bitmap.set(idx, true);
+                if self.ask_max_idx.is_none_or(|max| idx > max) {
+                    self.ask_max_idx = Some(idx);
+                }
                 if self.best_ask_idx.is_none_or(|best| idx < best) {
                     self.best_ask_idx = Some(idx);
                 }
@@ -643,14 +651,30 @@ impl TickBasedOrderBook {
         match side {
             BookSide::Bid => {
                 self.bid_bitmap.set(idx, false);
+                if self.bid_min_idx == Some(idx) {
+                    self.bid_min_idx = if idx == 0 {
+                        None
+                    } else {
+                        self.bid_bitmap.find_prev_one(idx)
+                    };
+                }
                 if self.best_bid_idx == Some(idx) {
-                    self.best_bid_idx = self.find_best_bid();
+                    self.best_bid_idx = self
+                        .bid_min_idx
+                        .filter(|min| *min < idx)
+                        .map_or_else(|| self.bid_min_idx, |_| self.bid_bitmap.find_prev_one(idx));
                 }
             }
             BookSide::Ask => {
                 self.ask_bitmap.set(idx, false);
+                if self.ask_max_idx == Some(idx) {
+                    self.ask_max_idx = self.ask_bitmap.find_next_one(idx);
+                }
                 if self.best_ask_idx == Some(idx) {
-                    self.best_ask_idx = self.find_best_ask();
+                    self.best_ask_idx = self
+                        .ask_max_idx
+                        .filter(|max| *max > idx)
+                        .map_or_else(|| self.ask_max_idx, |_| self.ask_bitmap.find_next_one(idx));
                 }
             }
         }
@@ -672,28 +696,6 @@ impl TickBasedOrderBook {
             BookSide::Bid => &mut self.bid_levels[idx],
             BookSide::Ask => &mut self.ask_levels[idx],
         }
-    }
-
-    /// 查找最优买价 - O(n/64)位图索引 + 硬件指令
-    ///
-    /// 使用硬件指令快速查找最高有效位
-    /// - 买单: 从高到低，需要找到最后一个设置的bit
-    /// - 时间复杂度: O(n/64) + 硬件指令 leading_zeros
-    /// - 对于6000个价格层: 最多94个u64块比较
-    #[inline]
-    fn find_best_bid(&self) -> Option<usize> {
-        self.bid_bitmap.find_last_one()
-    }
-
-    /// 查找最优卖价 - O(n/64)位图索引 + 硬件指令
-    ///
-    /// 使用硬件指令快速查找最低有效位
-    /// - 卖单: 从低到高，需要找到第一个设置的bit
-    /// - 时间复杂度: O(n/64) + 硬件指令 trailing_zeros
-    /// - 对于6000个价格层: 最多94个u64块比较
-    #[inline]
-    fn find_best_ask(&self) -> Option<usize> {
-        self.ask_bitmap.find_first_one()
     }
 
     /// 查找下一个买价（向下）- 使用位图硬件指令
@@ -1929,5 +1931,37 @@ mod tests {
             assert_eq!(status.remaining_quantity, quantity);
             assert_eq!(status.status, OrderStatusType::Resting);
         }
+    }
+    #[test]
+    fn best_prices_survive_removing_extreme_levels() {
+        let spec = ContractSpec::new("BTCUSDT", 1, 1_000, 10_000);
+        let mut book = TickBasedOrderBook::new(spec);
+        book.insert_resting_order(1, OrderType::Buy, 2_000, 1, 1, 1)
+            .unwrap();
+        book.insert_resting_order(1, OrderType::Buy, 2_100, 1, 1, 2)
+            .unwrap();
+        book.insert_resting_order(1, OrderType::Buy, 2_200, 1, 1, 3)
+            .unwrap();
+        assert_eq!(book.best_bid(), Some(2_200));
+        book.cancel_order(3, 1).unwrap();
+        assert_eq!(book.best_bid(), Some(2_100));
+        book.cancel_order(1, 1).unwrap();
+        assert_eq!(book.best_bid(), Some(2_100));
+        book.cancel_order(2, 1).unwrap();
+        assert_eq!(book.best_bid(), None);
+
+        book.insert_resting_order(1, OrderType::Sell, 2_500, 1, 1, 4)
+            .unwrap();
+        book.insert_resting_order(1, OrderType::Sell, 2_600, 1, 1, 5)
+            .unwrap();
+        book.insert_resting_order(1, OrderType::Sell, 2_700, 1, 1, 6)
+            .unwrap();
+        assert_eq!(book.best_ask(), Some(2_500));
+        book.cancel_order(4, 1).unwrap();
+        assert_eq!(book.best_ask(), Some(2_600));
+        book.cancel_order(6, 1).unwrap();
+        assert_eq!(book.best_ask(), Some(2_600));
+        book.cancel_order(5, 1).unwrap();
+        assert_eq!(book.best_ask(), None);
     }
 }
