@@ -14,6 +14,7 @@ pub mod combo_runtime;
 pub mod command_log;
 pub mod config;
 pub mod core;
+pub mod event_fanout;
 pub mod exchange_runtime;
 pub mod gateway;
 pub mod gateway_directory;

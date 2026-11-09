@@ -7,12 +7,13 @@
 use crate::exchange::combo_runtime::{ComboRuntime, ComboRuntimeSnapshot};
 use crate::exchange::config::ExchangeConfig;
 use crate::exchange::core::{CoreSnapshot, ExchangeCore};
+use crate::exchange::event_fanout::EventFanout;
 use crate::exchange::gateway_runtime::GatewayRuntime;
 use crate::exchange::gateway_server::GatewayServerHandle;
 use crate::exchange::market_data::MarketDataPublisher;
 use crate::exchange::metrics::ExchangeMetrics;
 use crate::exchange::plugins::PreTradePlugin;
-use crate::exchange::repair::{NackRequest, RepairBuffer, RepairServer};
+use crate::exchange::repair::{NackRequest, RepairServer};
 use crate::exchange::result_log::{PrivateResultLog, PublicResultLog};
 use crate::exchange::runner::CoreRunner;
 use std::sync::{Arc, Mutex};
@@ -52,14 +53,8 @@ pub struct ExchangeRuntime<P> {
     server: GatewayServerHandle,
     idle_timeout: Option<Duration>,
     last_expire: Instant,
-    market_data: Option<MarketDataPublisher>,
     combo: Option<ComboRuntime>,
-    repair_buffer: Option<RepairBuffer>,
-    repair_server: Option<RepairServer>,
-    public_log: Option<PublicResultLog>,
-    private_log: Option<PrivateResultLog>,
-    public_sent: u64,
-    repair_sent: u64,
+    fanout: EventFanout,
     metrics: ExchangeMetrics,
     metrics_sink: Option<Arc<Mutex<ExchangeMetrics>>>,
 }
@@ -73,14 +68,8 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             server,
             idle_timeout: None,
             last_expire: Instant::now(),
-            market_data: None,
             combo: None,
-            repair_buffer: None,
-            repair_server: None,
-            public_log: None,
-            private_log: None,
-            public_sent: 0,
-            repair_sent: 0,
+            fanout: EventFanout::new(),
             metrics: ExchangeMetrics::new(),
             metrics_sink: None,
         }
@@ -88,32 +77,34 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
 
     #[must_use]
     pub fn with_result_logs(mut self, public: PublicResultLog, private: PrivateResultLog) -> Self {
-        self.public_log = Some(public);
-        self.private_log = Some(private);
+        self.fanout = self
+            .fanout
+            .with_public_log(public)
+            .with_private_log(private);
         self
     }
 
     #[must_use]
     pub fn with_public_result_log(mut self, public: PublicResultLog) -> Self {
-        self.public_log = Some(public);
+        self.fanout = self.fanout.with_public_log(public);
         self
     }
 
     #[must_use]
     pub fn with_private_result_log(mut self, private: PrivateResultLog) -> Self {
-        self.private_log = Some(private);
+        self.fanout = self.fanout.with_private_log(private);
         self
     }
 
     #[must_use]
     pub fn with_repair_server(mut self, server: RepairServer) -> Self {
-        self.repair_server = Some(server);
+        self.fanout = self.fanout.with_repair_server(server);
         self
     }
 
     #[must_use]
     pub fn repair_sent(&self) -> u64 {
-        self.repair_sent
+        self.fanout.repair_sent()
     }
 
     #[must_use]
@@ -128,20 +119,18 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
 
     #[must_use]
     pub fn with_repair_buffer(mut self, capacity: usize) -> Self {
-        self.repair_buffer = Some(RepairBuffer::new(capacity));
+        self.fanout = self.fanout.with_repair_buffer(capacity);
         self
     }
 
     #[must_use]
     pub fn repair(&self, request: NackRequest) -> Vec<crate::exchange::public_events::PublicEvent> {
-        self.repair_buffer
-            .as_ref()
-            .map_or_else(Vec::new, |buffer| buffer.repair(request))
+        self.fanout.repair(request)
     }
 
     #[must_use]
     pub fn with_market_data(mut self, publisher: MarketDataPublisher) -> Self {
-        self.market_data = Some(publisher);
+        self.fanout = self.fanout.with_market_data(publisher);
         self
     }
 
@@ -153,21 +142,20 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
         &mut self,
         interface: std::net::Ipv4Addr,
     ) -> std::io::Result<()> {
-        let publisher = self.market_data.as_mut().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "no market-data publisher")
-        })?;
-        publisher.switch_interface(interface)
+        self.fanout.switch_interface(interface)
     }
 
     #[must_use]
     pub fn public_sent(&self) -> u64 {
-        self.public_sent
+        self.fanout.public_sent()
     }
 
     #[must_use]
     pub fn with_config(mut self, config: ExchangeConfig) -> Self {
         self.idle_timeout = config.idle_timeout;
-        self.repair_buffer = Some(RepairBuffer::new(config.repair_buffer_capacity));
+        self.fanout = self
+            .fanout
+            .with_repair_buffer(config.repair_buffer_capacity);
         self
     }
 
@@ -218,39 +206,13 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
         let commands = self.core.poll();
         self.metrics.commands_executed += commands as u64;
         let private = self.core.drain_private();
-        if let Some(log) = &mut self.private_log {
-            for event in &private {
-                let _ = log.append(event);
-            }
-            let _ = log.sync();
-        }
+        self.fanout.log_private(&private);
         let sent = self.gateway.dispatch_private(&self.server, private);
         self.metrics.private_events_sent += sent as u64;
         let public = self.core.drain_public();
-        if let Some(log) = &mut self.public_log {
-            for event in &public {
-                let _ = log.append(event);
-            }
-            let _ = log.sync();
-        }
-        if let Some(buffer) = &mut self.repair_buffer {
-            for event in &public {
-                buffer.push(*event);
-            }
-        }
-        if let Some(server) = &mut self.repair_server {
-            for event in &public {
-                server.push(*event);
-            }
-        }
-        if let Some(publisher) = &self.market_data {
-            for event in public {
-                if publisher.send(&event).is_ok() {
-                    self.public_sent += 1;
-                    self.metrics.public_events_sent += 1;
-                }
-            }
-        }
+        let public_before = self.fanout.public_sent();
+        self.fanout.publish_public(&public);
+        self.metrics.public_events_sent += self.fanout.public_sent() - public_before;
         if let Some(combo) = &mut self.combo {
             combo.poll_commands();
             let (combo_public, combo_private) =
@@ -259,11 +221,8 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             self.metrics.private_events_sent += combo_private as u64;
             self.metrics.combo_queue_orders = combo.engine().queue_len() as u64;
         }
-        if let Some(server) = &mut self.repair_server {
-            let repaired = server.poll_once().unwrap_or(0) as u64;
-            self.repair_sent += repaired;
-            self.metrics.repair_events_sent += repaired;
-        }
+        let repaired = self.fanout.poll_repair();
+        self.metrics.repair_events_sent += repaired;
         if let Some(timeout) = self.idle_timeout
             && self.last_expire.elapsed() >= timeout / 2
         {
