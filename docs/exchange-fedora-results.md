@@ -68,6 +68,25 @@ cargo test --release --test exchange_tcp_load -- --ignored --nocapture
 public packets received: 64,000 / 64,000
 ```
 
+## Gateway split and real-NIC multicast
+
+- `cargo test --release --test exchange_split_smoke` ✅
+- `cargo test --release --test exchange_multi_gateway_smoke` ✅
+  (two standalone gateway relays → one middleware/core)
+- `EXCHANGE_MCAST_IFACE=10.92.252.146 cargo test --release --test multicast_nic -- --ignored` ✅
+  (publisher/subscriber on Wi-Fi NIC `wlp0s20f3`)
+
+## Docker build
+
+Attempted on Fedora; Docker Hub metadata resolution timed out:
+
+```text
+rust:1.99-alpine: dial tcp ... i/o timeout
+```
+
+No image was built on this host. Local image build was verified earlier on the
+Mac host.
+
 ## Split-process smoke
 
 ```text
