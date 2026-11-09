@@ -100,6 +100,13 @@ pub struct OrderMeta {
     pub status: OrderStatus,
 }
 
+/// Why a checked snapshot cannot be produced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnapshotError {
+    ComboQueuesNonEmpty,
+    AuctionStagingNonEmpty,
+}
+
 /// In-memory core snapshot for the continuous book and business state.
 ///
 /// Combo queues and call-auction staging are intentionally outside this slice;
@@ -224,6 +231,20 @@ impl ExchangeCore {
         }
     }
 
+    /// Captures a snapshot only when transient combo/auction state is empty.
+    ///
+    /// # Errors
+    /// Returns an error instead of silently omitting combo or auction state.
+    pub fn snapshot_checked(&self) -> Result<CoreSnapshot, SnapshotError> {
+        if self.combo_queues.values().any(|queue| !queue.is_empty()) {
+            return Err(SnapshotError::ComboQueuesNonEmpty);
+        }
+        if !self.auction_orders.is_empty() || !self.auction_meta.is_empty() {
+            return Err(SnapshotError::AuctionStagingNonEmpty);
+        }
+        Ok(self.snapshot())
+    }
+
     /// Restores a previously captured snapshot.
     ///
     /// # Errors
@@ -293,6 +314,8 @@ impl ExchangeCore {
     /// # Errors
     /// Returns an I/O error for serialization or file replacement failure.
     pub fn save_snapshot(&self, path: &Path) -> io::Result<()> {
+        self.snapshot_checked()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("{error:?}")))?;
         let json = self
             .snapshot_json()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -2042,5 +2065,17 @@ mod tests {
                 matches!(event, CoreEvent::Rejected { reason, .. } if reason.contains("auction"))
             }));
         }
+    }
+    #[test]
+    fn checked_snapshot_rejects_combo_queue() {
+        let mut core = core();
+        assert!(
+            core.submit_combo_order(7, 1, Side::Buy, 49_900, 1, Offset::Open, Hedge::Spec)
+                .is_some()
+        );
+        assert_eq!(
+            core.snapshot_checked(),
+            Err(SnapshotError::ComboQueuesNonEmpty)
+        );
     }
 }
