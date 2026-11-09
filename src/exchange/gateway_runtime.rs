@@ -194,6 +194,11 @@ impl GatewayRuntime {
     }
 
     /// Takes queued redirects for displaced connections.
+    #[must_use]
+    pub fn session_counts(&self) -> (usize, usize) {
+        self.middleware.session_counts()
+    }
+
     /// Prunes old closed session records after connection churn.
     pub fn prune_closed_sessions(&mut self, keep_closed: usize) -> usize {
         self.middleware.prune_closed_sessions(keep_closed)

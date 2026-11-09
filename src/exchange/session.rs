@@ -147,6 +147,14 @@ impl SessionRegistry {
     }
 
     #[must_use]
+    pub fn closed_count(&self) -> usize {
+        self.sessions
+            .values()
+            .filter(|session| !session.active)
+            .count()
+    }
+
+    #[must_use]
     pub fn active_count(&self) -> usize {
         self.sessions
             .values()

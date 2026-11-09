@@ -60,6 +60,11 @@ impl MiddlewareSequencer {
     }
 
     #[must_use]
+    pub fn session_counts(&self) -> (usize, usize) {
+        (self.sessions.active_count(), self.sessions.closed_count())
+    }
+
+    #[must_use]
     pub fn session(&self, session_id: u64) -> Option<SessionInfo> {
         self.sessions.get(session_id)
     }
