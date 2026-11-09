@@ -19,9 +19,10 @@ It does **not** capture:
 - combination queues
 - ephemeral private/public event buffers
 
-Callers must drain combo queues and auction staging before snapshotting.
-`save_snapshot` uses `snapshot_checked` and refuses to write when either is
-non-empty, instead of silently omitting state.
+Callers must drain combo queues before snapshotting. `save_snapshot` uses
+`snapshot_checked` and refuses to write when combo queues are non-empty.
+Auction staging (`auction_orders`, `auction_meta`, auction sequence) is included
+in the snapshot and round-tripped.
 
 ## Restore
 

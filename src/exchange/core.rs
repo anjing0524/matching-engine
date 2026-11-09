@@ -122,6 +122,9 @@ pub struct CoreSnapshot {
     pub positions: Vec<(PositionKey, crate::exchange::positions::Position)>,
     pub pending_open: Vec<(PositionKey, crate::exchange::positions::Position)>,
     pub frozen_close: Vec<(CloseKey, u64)>,
+    pub auction_orders: Vec<AuctionOrder>,
+    pub auction_meta: Vec<(u64, (u64, Side, Offset, Hedge))>,
+    pub auction_order_seq: u64,
     pub phase: ExchangePhase,
     pub trading_day: u32,
     pub next_trade_id: u64,
@@ -212,6 +215,12 @@ impl ExchangeCore {
                 key.offset as u8,
             )
         });
+        let mut auction_meta: Vec<_> = self
+            .auction_meta
+            .iter()
+            .map(|(id, meta)| (*id, *meta))
+            .collect();
+        auction_meta.sort_by_key(|(id, _)| *id);
         CoreSnapshot {
             spec: self.book.spec().clone(),
             symbol: self.symbol,
@@ -221,6 +230,9 @@ impl ExchangeCore {
             positions,
             pending_open,
             frozen_close,
+            auction_orders: self.auction_orders.clone(),
+            auction_meta,
+            auction_order_seq: self.auction_order_seq,
             phase: self.phase,
             trading_day: self.trading_day,
             next_trade_id: self.next_trade_id,
@@ -238,9 +250,6 @@ impl ExchangeCore {
     pub fn snapshot_checked(&self) -> Result<CoreSnapshot, SnapshotError> {
         if self.combo_queues.values().any(|queue| !queue.is_empty()) {
             return Err(SnapshotError::ComboQueuesNonEmpty);
-        }
-        if !self.auction_orders.is_empty() || !self.auction_meta.is_empty() {
-            return Err(SnapshotError::AuctionStagingNonEmpty);
         }
         Ok(self.snapshot())
     }
@@ -262,6 +271,9 @@ impl ExchangeCore {
         self.positions.restore(snapshot.positions);
         self.pending_open.restore(snapshot.pending_open);
         self.frozen_close.restore(snapshot.frozen_close);
+        self.auction_orders = snapshot.auction_orders;
+        self.auction_meta = snapshot.auction_meta.into_iter().collect();
+        self.auction_order_seq = snapshot.auction_order_seq;
         self.phase = snapshot.phase;
         self.trading_day = snapshot.trading_day;
         self.next_trade_id = snapshot.next_trade_id;
@@ -271,8 +283,6 @@ impl ExchangeCore {
         self.last_exchange_ts_ns = snapshot.last_exchange_ts_ns;
         self.private_events.clear();
         self.public_events.clear();
-        self.auction_orders.clear();
-        self.auction_meta.clear();
         self.combo_queues.clear();
         Ok(())
     }
@@ -2077,5 +2087,17 @@ mod tests {
             core.snapshot_checked(),
             Err(SnapshotError::ComboQueuesNonEmpty)
         );
+    }
+    #[test]
+    fn snapshot_roundtrips_auction_staging() {
+        let mut exchange = core();
+        exchange.begin_auction();
+        exchange.queue_auction_order(1, Side::Buy, 50_000, 3, Offset::Open, Hedge::Spec);
+        exchange.queue_auction_order(2, Side::Sell, 50_100, 2, Offset::Open, Hedge::Spec);
+        let snapshot = exchange.snapshot_checked().unwrap();
+        let mut restored = core();
+        let _ = restored.restore_snapshot(snapshot.clone());
+        assert_eq!(restored.auction_order_count(), 2);
+        assert_eq!(restored.snapshot(), snapshot);
     }
 }

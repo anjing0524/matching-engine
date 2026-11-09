@@ -7,7 +7,7 @@
 use crate::exchange::protocol::{Hedge, Offset, Side};
 
 /// One order collected during the call auction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AuctionOrder {
     pub order_id: u64,
     pub user_id: u64,
