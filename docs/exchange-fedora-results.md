@@ -48,13 +48,29 @@ snapshot only:  8 ns/snapshot
 
 ## Duration soak
 
+A 5-minute soak initially grew to ~30 GB RSS and was OOM-killed. Root causes
+were unfreed filled-order metadata and unbounded `CoreRunner` diagnostic
+`CoreEvent` retention. After fixes:
+
 ```bash
-EXCHANGE_SOAK_SECS=60 cargo test --release --test exchange_timed_soak -- --ignored --nocapture
+EXCHANGE_SOAK_SECS=300 /usr/bin/time -v <timed_soak_binary> --ignored --nocapture
 ```
 
 ```text
-68,500,000 commands in 62.37s -> 1,098,279 cmd/s
+5:00.05 wall time
+99% CPU
+Maximum resident set size: 155,700 KB
+exit status: 0
 ```
+
+A separate 60-second run after the fixes:
+
+```text
+128,400,000 commands in 60.03s -> 2,138,859 cmd/s
+```
+
+Earlier 60-second run before the fixes was ~1.10M cmd/s and memory grew without
+bound.
 
 ## TCP fan-out
 

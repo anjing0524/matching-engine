@@ -86,6 +86,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Nightly soak workflow and reproducible soak script
 - [x] First manual soak run green (core, combo, TCP/UDP)
 - [x] Duration-parameterized soak (`EXCHANGE_SOAK_SECS`)
+- [x] 5-minute target-machine soak with bounded RSS
 - [ ] Multi-hour soak on target hardware
 - [x] Performance baseline re-measured after optimizations
 - [x] End-to-end TCP fan-out with 32 concurrent clients / 64k orders
