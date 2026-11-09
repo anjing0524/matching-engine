@@ -19,7 +19,7 @@ Date: 2026-11-06
 | full runtime snapshot | `exchange_snapshot_file_roundtrip`, `binary_restores_runtime_snapshot` |
 | combo snapshot/restore | `snapshot_roundtrips_combo_queue`, `full_snapshot_restores_combo_runtime` |
 | reconnect churn pruning | `reconnect_churn_returns_to_zero_active_sessions` |
-| 30-minute soak | 3.9952B commands, 155,636 KB max RSS |
+| 1-hour soak | 7.2547B commands, 2.015M cmd/s, 155,524 KB max RSS |
 | combo queue + atomic fills | combo engine/execution tests |
 | combo command ring + private/public | `exchange_runtime` combo e2e test |
 | binary deployment smoke | `tests/exchange_binary_smoke.rs` |
