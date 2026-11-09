@@ -1119,6 +1119,10 @@ impl ExchangeCore {
         }) else {
             return;
         };
+        if remaining == 0 {
+            self.orders.remove(&order_id);
+            self.public_orders.remove(&order_id);
+        }
         let position_side = if offset == Offset::Open {
             side
         } else {
@@ -1127,6 +1131,7 @@ impl ExchangeCore {
         let key = PositionKey::new(account_id, position_side, hedge);
         if offset == Offset::Open {
             let _ = self.positions.apply_open(key, quantity);
+            self.pending_open.release_open(key, quantity);
         } else {
             let _ = self.positions.apply_close(key, offset, quantity);
             self.frozen_close
@@ -1525,16 +1530,15 @@ mod tests {
         sell.user_id = 2;
         sell.offset = Offset::Open;
         let events = core.execute_with_plugins(sell, &AvailableClosePlugin);
-        let incoming_id = match events
-            .iter()
-            .find(|event| matches!(event, CoreEvent::Trade { .. }))
-        {
-            Some(CoreEvent::Trade {
-                seller_order_id, ..
-            }) => *seller_order_id,
-            _ => panic!("expected trade"),
-        };
-        assert_eq!(core.order_status(incoming_id), Some(OrderStatus::Filled));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, CoreEvent::Trade { .. }))
+        );
+        let private = core.drain_private_events();
+        assert!(private.iter().any(|event| {
+            event.status == crate::exchange::private_events::PrivateStatus::Filled
+        }));
     }
 
     #[test]
