@@ -55,6 +55,10 @@ impl MiddlewareSequencer {
         self.sessions.drain_gateway(gateway_id)
     }
 
+    pub fn prune_closed_sessions(&mut self, keep_closed: usize) -> usize {
+        self.sessions.prune_closed(keep_closed)
+    }
+
     #[must_use]
     pub fn session(&self, session_id: u64) -> Option<SessionInfo> {
         self.sessions.get(session_id)

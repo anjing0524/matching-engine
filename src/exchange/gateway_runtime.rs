@@ -194,6 +194,11 @@ impl GatewayRuntime {
     }
 
     /// Takes queued redirects for displaced connections.
+    /// Prunes old closed session records after connection churn.
+    pub fn prune_closed_sessions(&mut self, keep_closed: usize) -> usize {
+        self.middleware.prune_closed_sessions(keep_closed)
+    }
+
     pub fn take_redirects(&mut self) -> HashMap<u64, String> {
         std::mem::take(&mut self.pending_redirects)
     }

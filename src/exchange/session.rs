@@ -125,6 +125,27 @@ impl SessionRegistry {
             .copied()
     }
 
+    /// Removes oldest closed session records, keeping at most `keep_closed`.
+    ///
+    /// Returns the number of removed records. Active sessions are never pruned.
+    pub fn prune_closed(&mut self, keep_closed: usize) -> usize {
+        let mut closed: Vec<u64> = self
+            .sessions
+            .values()
+            .filter(|session| !session.active)
+            .map(|session| session.session_id)
+            .collect();
+        if closed.len() <= keep_closed {
+            return 0;
+        }
+        closed.sort_unstable();
+        let remove = closed.len() - keep_closed;
+        for session_id in closed.into_iter().take(remove) {
+            self.sessions.remove(&session_id);
+        }
+        remove
+    }
+
     #[must_use]
     pub fn active_count(&self) -> usize {
         self.sessions
@@ -203,6 +224,18 @@ mod tests {
         assert!(!registry.get(1).unwrap().active);
         assert!(registry.get(2).unwrap().active);
         assert_eq!(registry.active_count(), 1);
+    }
+
+    #[test]
+    fn closed_sessions_are_pruned() {
+        let mut registry = SessionRegistry::new();
+        for id in 1..=3 {
+            registry.open(session(id));
+            registry.close(id);
+        }
+        assert_eq!(registry.prune_closed(1), 2);
+        assert_eq!(registry.len(), 1);
+        assert!(registry.get(3).is_some());
     }
 
     #[test]
