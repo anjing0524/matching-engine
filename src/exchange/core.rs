@@ -74,7 +74,62 @@ pub enum CoreEvent {
     },
 }
 
-/// Lifecycle status of an exchange order.
+/// One accepted resting order before it is projected into API events.
+#[derive(Clone, Copy, Debug)]
+struct AcceptedOrder {
+    order_id: u64,
+    user_id: u64,
+    side: OrderType,
+    price_ticks: u64,
+    remaining: u64,
+}
+
+/// One matching result before it is projected into public API events.
+#[derive(Debug, Default)]
+struct SubmitOutcome {
+    trades: smallvec::SmallVec<[CoreEvent; 8]>,
+    accepted: Option<AcceptedOrder>,
+    rejected: Option<String>,
+}
+
+impl SubmitOutcome {
+    fn events_into(&self, client_order_id: u64, out: &mut Vec<CoreEvent>) {
+        out.extend(self.trades.iter().cloned());
+        if let Some(accepted) = self.accepted {
+            out.push(CoreEvent::Accepted {
+                order_id: accepted.order_id,
+                user_id: accepted.user_id,
+                side: accepted.side,
+                price_ticks: accepted.price_ticks,
+                remaining_quantity: accepted.remaining,
+            });
+        }
+        if let Some(reason) = &self.rejected {
+            out.push(CoreEvent::Rejected {
+                client_order_id,
+                reason: reason.clone(),
+            });
+        }
+    }
+
+    fn incoming_id(&self, side: Side) -> Option<u64> {
+        self.accepted.map(|accepted| accepted.order_id).or_else(|| {
+            self.trades.iter().find_map(|event| match event {
+                CoreEvent::Trade {
+                    buyer_order_id,
+                    seller_order_id,
+                    ..
+                } => Some(match side {
+                    Side::Buy => *buyer_order_id,
+                    Side::Sell => *seller_order_id,
+                }),
+                _ => None,
+            })
+        })
+    }
+}
+
+/// Lifecycle status of an exchange order./// Lifecycle status of an exchange order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OrderStatus {
     Accepted,
@@ -674,12 +729,13 @@ impl ExchangeCore {
     /// kernel maps the command into the domain request and projects the result
     /// into protocol-neutral core events.
     pub fn submit_limit(&mut self, command: LimitOrderCommand) -> Vec<CoreEvent> {
+        let outcome = self.submit_limit_outcome(command);
         let mut events = Vec::new();
-        self.submit_limit_into(command, &mut events);
+        outcome.events_into(command.client_order_id, &mut events);
         events
     }
 
-    fn submit_limit_into(&mut self, command: LimitOrderCommand, events: &mut Vec<CoreEvent>) {
+    fn submit_limit_outcome(&mut self, command: LimitOrderCommand) -> SubmitOutcome {
         let request = NewOrderRequest {
             user_id: command.user_id,
             client_order_id: command.client_order_id,
@@ -689,37 +745,37 @@ impl ExchangeCore {
             quantity: command.quantity,
         };
 
+        let mut outcome = SubmitOutcome::default();
         match self.book.match_order(request) {
             crate::domain::orderbook::MatchOutcome::Filled { trades } => {
-                self.trade_events_into(trades, events);
+                self.trade_events_into(trades, &mut outcome.trades);
             }
             crate::domain::orderbook::MatchOutcome::Rested {
                 trades,
                 confirmation,
             } => {
-                self.trade_events_into(trades, events);
-                events.push(CoreEvent::Accepted {
+                self.trade_events_into(trades, &mut outcome.trades);
+                let remaining = self
+                    .book
+                    .get_order_status(confirmation.order_id)
+                    .map_or(command.quantity, |status| status.remaining_quantity);
+                outcome.accepted = Some(AcceptedOrder {
                     order_id: confirmation.order_id,
-                    user_id: confirmation.user_id,
+                    user_id: command.user_id,
                     side: command.side,
                     price_ticks: command.price_ticks,
-                    remaining_quantity: self
-                        .book
-                        .get_order_status(confirmation.order_id)
-                        .map_or(command.quantity, |status| status.remaining_quantity),
+                    remaining,
                 });
             }
             crate::domain::orderbook::MatchOutcome::Rejected { reason, trades } => {
-                self.trade_events_into(trades, events);
-                events.push(CoreEvent::Rejected {
-                    client_order_id: command.client_order_id,
-                    reason,
-                });
+                self.trade_events_into(trades, &mut outcome.trades);
+                outcome.rejected = Some(reason);
             }
         }
+        outcome
     }
 
-    /// Cancels a resting order. A missing/foreign order is rejected locally.
+    /// Cancels a resting order.    /// Cancels a resting order. A missing/foreign order is rejected locally.
     pub fn cancel(&mut self, command: CancelCommand) -> CoreEvent {
         match self.book.cancel_order(command.order_id, command.user_id) {
             Ok(()) => {
@@ -808,7 +864,6 @@ impl ExchangeCore {
         plugin: &P,
         out: &mut Vec<CoreEvent>,
     ) {
-        let start = out.len();
         if command.command_type != CommandType::NewOrder {
             out.extend(self.execute(command));
             return;
@@ -912,29 +967,16 @@ impl ExchangeCore {
             Some(key)
         };
 
-        self.submit_limit_into(
-            LimitOrderCommand {
-                user_id: u64::from(command.user_id),
-                client_order_id: command.client_order_id,
-                side,
-                price_ticks: matching_price,
-                quantity: command.quantity,
-            },
-            out,
-        );
-
-        let incoming_id = out[start..].iter().find_map(|event| match event {
-            CoreEvent::Accepted { order_id, .. } => Some(*order_id),
-            CoreEvent::Trade {
-                buyer_order_id,
-                seller_order_id,
-                ..
-            } => Some(match command.side {
-                Side::Buy => *buyer_order_id,
-                Side::Sell => *seller_order_id,
-            }),
-            _ => None,
+        let outcome = self.submit_limit_outcome(LimitOrderCommand {
+            user_id: u64::from(command.user_id),
+            client_order_id: command.client_order_id,
+            side,
+            price_ticks: matching_price,
+            quantity: command.quantity,
         });
+        outcome.events_into(command.client_order_id, out);
+
+        let incoming_id = outcome.incoming_id(command.side);
         if let Some(order_id) = incoming_id {
             self.orders.insert(
                 order_id,
@@ -951,10 +993,7 @@ impl ExchangeCore {
             );
         }
 
-        if let Some(reason) = out[start..].iter().find_map(|event| match event {
-            CoreEvent::Rejected { reason, .. } => Some(reason.clone()),
-            _ => None,
-        }) {
+        if let Some(reason) = &outcome.rejected {
             self.push_private(
                 0,
                 command.client_order_id,
@@ -962,60 +1001,45 @@ impl ExchangeCore {
                 PrivateStatus::Rejected,
                 0,
                 0,
-                Some(reason),
+                Some(reason.clone()),
             );
         }
-        if let Some((order_id, remaining_quantity)) =
-            out[start..].iter().find_map(|event| match event {
-                CoreEvent::Accepted {
-                    order_id,
-                    remaining_quantity,
-                    ..
-                } => Some((*order_id, *remaining_quantity)),
-                _ => None,
-            })
-        {
+        if let Some(accepted) = outcome.accepted {
             self.push_private(
-                order_id,
+                accepted.order_id,
                 command.client_order_id,
                 u64::from(command.user_id),
                 PrivateStatus::Accepted,
                 0,
-                remaining_quantity,
+                accepted.remaining,
                 None,
             );
             if command.offset == Offset::Open {
                 let _ = self.pending_open.apply_open(
                     PositionKey::new(u64::from(command.user_id), command.side, command.hedge),
-                    remaining_quantity,
+                    accepted.remaining,
                 );
             }
         }
 
-        let fills: smallvec::SmallVec<[(u64, u64, u64); 8]> = out[start..]
-            .iter()
-            .filter_map(|event| match event {
-                CoreEvent::Trade {
-                    buyer_order_id,
-                    seller_order_id,
-                    quantity,
-                    ..
-                } => Some((*buyer_order_id, *seller_order_id, *quantity)),
-                _ => None,
-            })
-            .collect();
-        for (buyer_order_id, seller_order_id, quantity) in fills {
-            self.apply_fill(buyer_order_id, quantity);
-            self.apply_fill(seller_order_id, quantity);
+        for event in &outcome.trades {
+            if let CoreEvent::Trade {
+                buyer_order_id,
+                seller_order_id,
+                quantity,
+                ..
+            } = event
+            {
+                self.apply_fill(*buyer_order_id, *quantity);
+                self.apply_fill(*seller_order_id, *quantity);
+            }
         }
 
-        let has_accepted = out[start..]
-            .iter()
-            .any(|event| matches!(event, CoreEvent::Accepted { .. }));
         if let Some(key) = close_key
-            && !has_accepted
+            && outcome.accepted.is_none()
         {
-            let filled = out[start..]
+            let filled = outcome
+                .trades
                 .iter()
                 .filter_map(|event| match event {
                     CoreEvent::Trade { quantity, .. } => Some(*quantity),
@@ -1026,15 +1050,7 @@ impl ExchangeCore {
                 .release(key, command.quantity.saturating_sub(filled));
         }
 
-        if let Some((order_id, remaining_quantity)) =
-            out[start..].iter().find_map(|event| match event {
-                CoreEvent::Accepted {
-                    order_id,
-                    remaining_quantity,
-                    ..
-                } => Some((*order_id, *remaining_quantity)),
-                _ => None,
-            })
+        if let Some(accepted) = outcome.accepted
             && command.price_type == PriceType::Limit
             && command.time_condition != TimeCondition::Ioc
         {
@@ -1044,18 +1060,18 @@ impl ExchangeCore {
                 exchange_ts_ns: command.exchange_ts_ns,
                 phase: 0,
                 instrument_id: command.instrument_id,
-                order_id,
+                order_id: accepted.order_id,
                 trade_id: 0,
                 buy_order_id: 0,
                 sell_order_id: 0,
                 side: Some(command.side),
                 price_ticks: command.price_ticks as u64,
-                quantity: remaining_quantity,
+                quantity: accepted.remaining,
                 volume: 0,
             });
-            self.public_orders.insert(order_id);
+            self.public_orders.insert(accepted.order_id);
         }
-        for event in &out[start..] {
+        for event in &outcome.trades {
             if let CoreEvent::Trade {
                 price_ticks,
                 quantity,
@@ -1251,15 +1267,15 @@ impl ExchangeCore {
         self.book.best_ask()
     }
 
-    fn trade_events_into(
+    fn trade_events_into<E: Extend<CoreEvent>>(
         &mut self,
         trades: smallvec::SmallVec<[crate::shared::protocol::TradeNotification; 8]>,
-        events: &mut Vec<CoreEvent>,
+        events: &mut E,
     ) {
         for trade in trades {
             let trade_id = self.next_trade_id;
             self.next_trade_id += 1;
-            events.push(CoreEvent::Trade {
+            events.extend([CoreEvent::Trade {
                 trade_id,
                 price_ticks: trade.matched_price,
                 quantity: trade.matched_quantity,
@@ -1267,7 +1283,7 @@ impl ExchangeCore {
                 buyer_order_id: trade.buyer_order_id,
                 seller_user_id: trade.seller_user_id,
                 seller_order_id: trade.seller_order_id,
-            });
+            }]);
         }
     }
 }
