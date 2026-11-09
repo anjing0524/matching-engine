@@ -1,16 +1,15 @@
 //! A high-performance futures matching engine.
 //!
-//! The crate is organized in layers with a one-way dependency flow:
+//! The crate currently exposes two runtimes:
 //!
-//! ```text
-//! interfaces → application → domain ← infrastructure
-//! ```
+//! - [`exchange`]: the futures exchange core (gateway/middleware/core,
+//!   deterministic matching, combo, snapshots). This is the production path.
+//! - the original persistent single-book matching service:
+//!   `interfaces → application → domain ← infrastructure`. It remains for
+//!   compatibility and its WAL/standby tooling.
 //!
-//! - [`domain`]: the order book and order validation (no I/O)
-//! - [`application`]: services that combine the order book with persistence
-//! - [`infrastructure`]: networking, WAL persistence, and observability
-//! - [`interfaces`]: CLI entry points
-//! - [`shared`]: protocol types and low-level utilities
+//! Do not mix the two stacks. Use [`exchange`] for the exchange deployment and
+//! the legacy modules only for the persistent service described in `README.md`.
 
 // Global allocator: jemalloc is typically 8-15% faster than the system
 // allocator under high concurrency.

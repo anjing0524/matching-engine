@@ -1,8 +1,16 @@
-//! Exchange core implementation slices.
+//! Futures exchange core.
 //!
-//! The current slice is a deterministic, single-contract continuous-auction
-//! kernel. Gateway/middleware transport and shared-memory integration are
-//! deliberately separate later slices; see `docs/exchange-core-architecture.md`.
+//! Ownership boundaries:
+//!
+//! - `core` / `auction` / `combo_*` / `positions`: deterministic business state;
+//!   no sockets, no wall clock.
+//! - `gateway_*` / `session` / `auth`: member sessions and command ingress.
+//! - `middleware` / `runner` / `transport`: sequencing, ring transport, and
+//!   command/result logs.
+//! - `event_fanout` / `market_data` / `repair` / `metrics`: output projection.
+//! - `exchange_runtime` / `combo_runtime`: composition and tick driving.
+//!
+//! See `docs/architecture-map.md` for the full map.
 
 pub mod auction;
 pub mod auth;

@@ -27,6 +27,19 @@ WAL，校验 CRC 与序列号连续性，任何损坏都会显式报错，而不
 | 网络 | 阻塞 `TcpConnection`/`TcpTransport`，每连接一个 OS 线程；`u32` 大端长度前缀 + 自研紧凑二进制编码；无 async runtime |
 | 可观测性 | Prometheus `/metrics`、`/health`、`/health/ready`、`/health/live`（默认 9090 端口） |
 
+
+## 运行时边界
+
+本仓库包含两套运行时：
+
+- **exchange**：期货交易所核心，gateway/middleware/core 拆分，生产路径。
+  入口：`exchange`、`exchange-middleware`、`exchange-core`、`exchange-gateway`。
+- **legacy persistent service**：原有单订单簿 + WAL + standby 服务，
+  入口：`matching-engine`、`gateway`、`standby` 等。
+
+两套运行时共享基础类型，但命令路径独立。新增交易所功能只改 `src/exchange`；
+不要把 exchange 命令接入 legacy 路径。完整边界见 [docs/architecture-map.md](docs/architecture-map.md)。
+
 ## 快速开始
 
 要求 Rust 1.99+（edition 2024）。
