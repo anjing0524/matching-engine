@@ -60,3 +60,25 @@ Debug-build soak times are not throughput targets; they are stability checks.
 - No long-running multi-hour soak.
 - No TCP + multicast fan-out load test.
 - Successful combo execution still snapshots both leg books for rollback.
+
+## Post-refactor Fedora baseline (2026-11-09)
+
+Machine: Intel i7-8559U, 8 logical CPUs, Rust 1.99.1.
+
+```text
+exchange core crossing: 1,771,223 cmd/s
+exchange core resting:  1,037,213 cmd/s
+middleware submit:      7,034,739 cmd/s
+core consume:           1,920,480 cmd/s
+combo queue:            7,624,631 order/s
+combo cancel:           7,338,229 cancel/s
+combo atomic fills:       870,727 fill/s
+60s soak:               2,121,725 cmd/s
+5-minute soak max RSS:    140,656 KB
+```
+
+These numbers include the kernel outcome projection, EventFanout, unified
+connection state, book trial execution, and canonical snapshot payload changes.
+Combo atomic fill throughput is lower than the pre-refactor copy/rollback
+baseline because each fill now performs a non-mutating trial pass; the trade is
+removal of whole-book copies and silent rollback.
