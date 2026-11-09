@@ -74,6 +74,14 @@ pub enum CoreEvent {
     },
 }
 
+struct DiscardEvents;
+
+impl Extend<CoreEvent> for DiscardEvents {
+    fn extend<T: IntoIterator<Item = CoreEvent>>(&mut self, iter: T) {
+        for _ in iter {}
+    }
+}
+
 /// One accepted resting order before it is projected into API events.
 #[derive(Clone, Copy, Debug)]
 struct AcceptedOrder {
@@ -93,22 +101,22 @@ struct SubmitOutcome {
 }
 
 impl SubmitOutcome {
-    fn events_into(&self, client_order_id: u64, out: &mut Vec<CoreEvent>) {
+    fn events_into<E: Extend<CoreEvent>>(&self, client_order_id: u64, out: &mut E) {
         out.extend(self.trades.iter().cloned());
         if let Some(accepted) = self.accepted {
-            out.push(CoreEvent::Accepted {
+            out.extend([CoreEvent::Accepted {
                 order_id: accepted.order_id,
                 user_id: accepted.user_id,
                 side: accepted.side,
                 price_ticks: accepted.price_ticks,
                 remaining_quantity: accepted.remaining,
-            });
+            }]);
         }
         if let Some(reason) = &self.rejected {
-            out.push(CoreEvent::Rejected {
+            out.extend([CoreEvent::Rejected {
                 client_order_id,
                 reason: reason.clone(),
-            });
+            }]);
         }
     }
 
@@ -458,11 +466,11 @@ impl ExchangeCore {
         });
     }
 
-    fn reject_private_into(
+    fn reject_private_into<E: Extend<CoreEvent>>(
         &mut self,
         command: &Command,
         reason: String,
-        events: &mut Vec<CoreEvent>,
+        events: &mut E,
     ) {
         self.push_private(
             0,
@@ -473,10 +481,10 @@ impl ExchangeCore {
             0,
             Some(reason.clone()),
         );
-        events.push(CoreEvent::Rejected {
+        events.extend([CoreEvent::Rejected {
             client_order_id: command.client_order_id,
             reason,
-        });
+        }]);
     }
 
     #[must_use]
@@ -803,13 +811,22 @@ impl ExchangeCore {
         events
     }
 
-    /// Appends the command's events into `out` without a per-command Vec.
-    #[allow(clippy::too_many_lines)]
-    pub fn execute_with_plugins_into<P: PreTradePlugin>(
+    /// Executes a command without materializing its `CoreEvent` view.
+    pub fn execute_with_plugins_discard<P: PreTradePlugin>(
         &mut self,
         command: Command,
         plugin: &P,
-        out: &mut Vec<CoreEvent>,
+    ) {
+        self.execute_with_plugins_into(command, plugin, &mut DiscardEvents);
+    }
+
+    /// Appends the command's events into `out` without a per-command Vec.
+    #[allow(clippy::too_many_lines)]
+    pub fn execute_with_plugins_into<P: PreTradePlugin, E: Extend<CoreEvent>>(
+        &mut self,
+        command: Command,
+        plugin: &P,
+        out: &mut E,
     ) {
         if command.command_type != CommandType::NewOrder {
             out.extend(self.execute(command));
@@ -1056,7 +1073,7 @@ impl ExchangeCore {
                 user_id: u64::from(command.user_id),
                 order_id,
             });
-            out.push(canceled);
+            out.extend([canceled]);
         }
     }
 

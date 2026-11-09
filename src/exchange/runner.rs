@@ -112,7 +112,8 @@ impl<P: PreTradePlugin> CoreRunner<P> {
         while let Some(result) = self.consumer.recv() {
             match result {
                 Ok(command) => {
-                    let _ = self.core.execute_with_plugins(command, &self.plugin);
+                    self.core
+                        .execute_with_plugins_discard(command, &self.plugin);
                     executed += 1;
                 }
                 Err(_) => {
