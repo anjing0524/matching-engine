@@ -266,6 +266,9 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
     /// # Errors
     /// Returns an error for invalid core snapshot data or combo runtime mismatch.
     pub fn restore_snapshot(&mut self, snapshot: ExchangeSnapshot) -> Result<(), String> {
+        if self.gateway.session_counts().0 > 0 {
+            return Err("cannot restore a snapshot while sessions are active".to_string());
+        }
         self.core.core_mut().restore_snapshot(snapshot.core)?;
         match (self.combo.as_mut(), snapshot.combo) {
             (Some(combo), Some(combo_snapshot)) => combo.restore_snapshot(combo_snapshot),
@@ -995,5 +998,42 @@ mod tests {
         assert_eq!(runtime.combo_mut().unwrap().engine().queue_len(), 1);
         let _ = std::fs::remove_file(&core_path);
         let _ = std::fs::remove_file(&combo_path);
+    }
+    #[test]
+    fn restore_is_rejected_with_active_sessions() {
+        use crate::exchange::session::SessionInfo;
+
+        let path =
+            std::env::temp_dir().join(format!("exchange-restore-active-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let gateway = GatewayRuntime::new(middleware, events);
+        let core = ExchangeCore::new(
+            ContractSpec::new("BTCUSDT", 1, 1, 1_000_000),
+            SymbolId::intern("BTCUSDT"),
+        );
+        let runner = CoreRunner::new(core, consumer, NoPlugins);
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server);
+        runtime
+            .gateway_mut()
+            .middleware_mut()
+            .open_or_takeover(SessionInfo {
+                session_id: 1,
+                gateway_id: 1,
+                member_id: 1,
+                user_id: 1,
+                seat_id: 1,
+                last_private_seq: 0,
+                active: true,
+            })
+            .unwrap();
+        let snapshot = ExchangeSnapshot {
+            core: runtime.core().snapshot(),
+            combo: None,
+        };
+        assert!(runtime.restore_snapshot(snapshot).is_err());
+        let _ = std::fs::remove_file(&path);
     }
 }
