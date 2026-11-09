@@ -228,6 +228,9 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
         if gateway_events > 0 {
             self.gateway.prune_closed_sessions(4096);
         }
+        let (active_sessions, closed_sessions) = self.gateway.session_counts();
+        self.metrics.active_sessions = active_sessions as u64;
+        self.metrics.closed_sessions = closed_sessions as u64;
         for (connection_id, address) in self.gateway.take_redirects() {
             let _ = self.server.send_redirect(connection_id, &address);
             self.server.close(connection_id);
@@ -282,6 +285,7 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
                 combo.tick_with_gateway(&mut self.gateway, &self.server);
             self.metrics.public_events_sent += combo_public as u64;
             self.metrics.private_events_sent += combo_private as u64;
+            self.metrics.combo_queue_orders = combo.engine().queue_len() as u64;
         }
         if let Some(server) = &mut self.repair_server {
             let repaired = server.poll_once().unwrap_or(0) as u64;

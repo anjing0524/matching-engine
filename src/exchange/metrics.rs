@@ -76,6 +76,9 @@ pub struct ExchangeMetrics {
     pub repair_events_sent: u64,
     pub idle_sessions_expired: u64,
     pub replay_events_sent: u64,
+    pub active_sessions: u64,
+    pub closed_sessions: u64,
+    pub combo_queue_orders: u64,
     pub tick_latency: LatencyHistogram,
 }
 
@@ -101,6 +104,19 @@ impl ExchangeMetrics {
             out.push_str("# TYPE ");
             out.push_str(name);
             out.push_str(" counter\n");
+            out.push_str(name);
+            out.push(' ');
+            out.push_str(&value.to_string());
+            out.push('\n');
+        }
+        for (name, value) in [
+            ("exchange_active_sessions", self.active_sessions),
+            ("exchange_closed_sessions", self.closed_sessions),
+            ("exchange_combo_queue_orders", self.combo_queue_orders),
+        ] {
+            out.push_str("# TYPE ");
+            out.push_str(name);
+            out.push_str(" gauge\n");
             out.push_str(name);
             out.push(' ');
             out.push_str(&value.to_string());
@@ -132,12 +148,17 @@ mod tests {
             repair_events_sent: 7,
             idle_sessions_expired: 8,
             replay_events_sent: 9,
+            active_sessions: 10,
+            closed_sessions: 11,
+            combo_queue_orders: 12,
             tick_latency: LatencyHistogram::default(),
         };
         let text = metrics.to_prometheus();
         assert!(text.contains("exchange_gateway_events_total 3\n"));
         assert!(text.contains("exchange_commands_total 4\n"));
         assert!(text.contains("exchange_public_events_total 6\n"));
+        assert!(text.contains("exchange_active_sessions 10\n"));
+        assert!(text.contains("exchange_combo_queue_orders 12\n"));
     }
 
     #[test]
