@@ -69,6 +69,15 @@ A separate 60-second run after the fixes:
 128,400,000 commands in 60.03s -> 2,138,859 cmd/s
 ```
 
+A 15-minute follow-up confirmed stable memory:
+
+```text
+15:00.02 wall time
+99% CPU
+Maximum resident set size: 155,744 KB
+exit status: 0
+```
+
 Earlier 60-second run before the fixes was ~1.10M cmd/s and memory grew without
 bound.
 
