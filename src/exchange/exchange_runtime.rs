@@ -992,4 +992,63 @@ mod tests {
         assert!(loaded.combo.is_none());
         let _ = std::fs::remove_file(path);
     }
+    #[test]
+    fn full_snapshot_restores_combo_runtime() {
+        use crate::exchange::combo_engine::ComboEngine;
+        use crate::exchange::combo_runtime::ComboRuntime;
+
+        let core_path = std::env::temp_dir().join(format!(
+            "exchange-full-snapshot-core-{}",
+            std::process::id()
+        ));
+        let combo_path = std::env::temp_dir().join(format!(
+            "exchange-full-snapshot-combo-{}",
+            std::process::id()
+        ));
+        for path in [&core_path, &combo_path] {
+            let _ = std::fs::remove_file(path);
+        }
+        let (core_producer, core_consumer) = create(&core_path, 16).unwrap();
+        let (combo_producer, _combo_consumer) = create(&combo_path, 16).unwrap();
+        let middleware =
+            MiddlewareSequencer::new(core_producer).with_combo_transport(combo_producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let gateway = GatewayRuntime::new(middleware, events);
+        let core = ExchangeCore::new(
+            ContractSpec::new("BTCUSDT", 1, 1, 1_000_000),
+            SymbolId::intern("BTCUSDT"),
+        );
+        let runner = CoreRunner::new(core, core_consumer, NoPlugins);
+        let engine = ComboEngine::new(
+            ContractSpec::new("LEG1", 1, 1, 100_000),
+            ContractSpec::new("LEG2", 1, 1, 100_000),
+        );
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server)
+            .with_combo_runtime(ComboRuntime::new(engine));
+
+        let mut command = Command::zeroed();
+        command.command_type = CommandType::NewOrder;
+        command.combo_id = 7;
+        command.client_order_id = 42;
+        command.user_id = 1;
+        command.side = Side::Buy;
+        command.price_ticks = 49_900;
+        command.quantity = 5;
+        command.offset = Offset::Open;
+        command.hedge = Hedge::Spec;
+        assert!(runtime.combo_mut().unwrap().submit_command(&command));
+        let snapshot = runtime.snapshot();
+
+        let mut cancel = Command::zeroed();
+        cancel.command_type = CommandType::Cancel;
+        cancel.combo_id = 7;
+        cancel.cancel_order_id = 42;
+        assert!(runtime.combo_mut().unwrap().submit_command(&cancel));
+        assert_eq!(runtime.combo_mut().unwrap().engine().queue_len(), 0);
+
+        runtime.restore_snapshot(snapshot).unwrap();
+        assert_eq!(runtime.combo_mut().unwrap().engine().queue_len(), 1);
+        let _ = std::fs::remove_file(&core_path);
+        let _ = std::fs::remove_file(&combo_path);
+    }
 }
