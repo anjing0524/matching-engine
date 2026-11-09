@@ -1,0 +1,77 @@
+# Fedora target-machine test results
+
+Date: 2026-11-09
+
+## Machine
+
+```text
+Host: fedora
+OS: Fedora 44, kernel 6.19.10-300.fc44.x86_64
+CPU: Intel(R) Core(TM) i7-8559U @ 2.70GHz
+Logical CPUs: 8
+Rust: 1.99.1 (updated with `rustup update stable`)
+Cargo: 1.99.1
+```
+
+Repository: `~/code/matching-engine`, cloned from `main` at `0827b96`.
+
+## Test suite
+
+- `cargo test --all-features`: pass
+- `cargo test --release --all-features`: pass
+- 1M command integration soak: pass
+
+## Benchmarks
+
+`cargo bench --bench exchange_core_benchmark`
+
+```text
+crossing: 200000 commands in 134.996ms -> 1,481,521 cmd/s
+resting:  200000 commands in 210.644ms ->   949,468 cmd/s
+```
+
+`cargo bench --bench exchange_middleware_benchmark`
+
+```text
+middleware submit: 200000 in 27.949ms -> 7,155,832 cmd/s
+core consume:      200000 in 114.543ms -> 1,746,063 cmd/s
+```
+
+`cargo bench --bench exchange_combo_benchmark`
+
+```text
+combo queue:    7,686,052 order/s
+combo cancel:   7,746,653 cancel/s
+atomic fills:   1,104,162 fill/s
+snapshot only:  8 ns/snapshot
+```
+
+## Duration soak
+
+```bash
+EXCHANGE_SOAK_SECS=60 cargo test --release --test exchange_timed_soak -- --ignored --nocapture
+```
+
+```text
+68,500,000 commands in 62.37s -> 1,098,279 cmd/s
+```
+
+## TCP fan-out
+
+```bash
+EXCHANGE_LOAD_CLIENTS=32 EXCHANGE_LOAD_ORDERS=2000 \
+cargo test --release --test exchange_tcp_load -- --ignored --nocapture
+```
+
+```text
+64,000 gateway orders in 358.71ms -> 178,417 order/s
+public packets received: 64,000 / 64,000
+```
+
+## Notes
+
+- This is a 4-core/8-thread laptop-class CPU, not a production server; numbers
+  are lower than the Apple M4 baseline and should not be treated as capacity
+  planning inputs.
+- No container build or multi-host run was performed on this host.
+- UDP fan-out was verified on loopback with a concurrently draining subscriber.
