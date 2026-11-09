@@ -836,6 +836,28 @@ impl TickBasedOrderBook {
         &self.spec
     }
 
+    /// Returns the quantity executable against resting orders at or better
+    /// than `limit_price` for a taker on `taker_side`.
+    ///
+    /// This is a non-mutating depth query used by FOK admission; it avoids
+    /// copying the book into a temporary order vector.
+    #[must_use]
+    pub fn executable_quantity(&self, taker_side: OrderType, limit_price: u64) -> u64 {
+        let mut total = 0u64;
+        for location in self.order_locations.values() {
+            let order = &self.nodes[location.node_idx as usize];
+            let crosses = match (taker_side, location.side) {
+                (OrderType::Buy, BookSide::Ask) => order.price <= limit_price,
+                (OrderType::Sell, BookSide::Bid) => order.price >= limit_price,
+                _ => false,
+            };
+            if crosses {
+                total = total.saturating_add(order.quantity);
+            }
+        }
+        total
+    }
+
     /// Total resting quantity on one side.
     #[must_use]
     pub fn side_quantity(&self, side: OrderType) -> u64 {
@@ -2055,5 +2077,23 @@ mod tests {
         };
         let _ = book.match_order(request);
         assert_eq!(book.side_quantity(OrderType::Buy), 2);
+    }
+    #[test]
+    fn executable_quantity_respects_limit_and_side() {
+        let spec = ContractSpec::new("BTCUSDT", 1, 1_000, 10_000);
+        let mut book = TickBasedOrderBook::new(spec);
+        book.insert_resting_order(1, OrderType::Sell, 2_500, 4, 4, 1)
+            .unwrap();
+        book.insert_resting_order(2, OrderType::Sell, 2_700, 5, 5, 2)
+            .unwrap();
+        book.insert_resting_order(3, OrderType::Buy, 2_100, 6, 6, 3)
+            .unwrap();
+        book.insert_resting_order(4, OrderType::Buy, 1_900, 7, 7, 4)
+            .unwrap();
+        assert_eq!(book.executable_quantity(OrderType::Buy, 2_600), 4);
+        assert_eq!(book.executable_quantity(OrderType::Buy, 2_800), 9);
+        assert_eq!(book.executable_quantity(OrderType::Sell, 2_000), 6);
+        assert_eq!(book.executable_quantity(OrderType::Sell, 1_800), 13);
+        assert_eq!(book.executable_quantity(OrderType::Buy, 2_000), 0);
     }
 }

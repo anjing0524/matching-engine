@@ -461,20 +461,11 @@ impl ExchangeCore {
     /// FOK is rare; using the public snapshot keeps the core book API simple.
     /// A production version should use a dedicated depth scan without allocating.
     fn can_fill(&self, side: Side, price_ticks: u64, quantity: u64) -> bool {
-        let mut available = 0u64;
-        for order in self.book.snapshot_orders() {
-            let crosses = match side {
-                Side::Buy => order.side == OrderType::Sell && order.price <= price_ticks,
-                Side::Sell => order.side == OrderType::Buy && order.price >= price_ticks,
-            };
-            if crosses {
-                available = available.saturating_add(order.quantity);
-                if available >= quantity {
-                    return true;
-                }
-            }
-        }
-        false
+        let taker_side = match side {
+            Side::Buy => OrderType::Buy,
+            Side::Sell => OrderType::Sell,
+        };
+        self.book.executable_quantity(taker_side, price_ticks) >= quantity
     }
 
     /// Drains public events produced since the last drain.
