@@ -235,9 +235,17 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             let _ = self.server.send_redirect(connection_id, &address);
             self.server.close(connection_id);
         }
-        for (connection_id, replay) in self.gateway.take_all_replays() {
+        for (connection_id, replay) in self.gateway.take_replay_batches() {
             for event in replay {
-                if self.server.send_private(connection_id, &event).is_ok() {
+                let sent = match &event {
+                    crate::exchange::private_replay::ReplayEvent::Core(event) => {
+                        self.server.send_private(connection_id, event)
+                    }
+                    crate::exchange::private_replay::ReplayEvent::Combo(event) => {
+                        self.server.send_combo_private(connection_id, event)
+                    }
+                };
+                if sent.is_ok() {
                     self.metrics.replay_events_sent += 1;
                 }
             }

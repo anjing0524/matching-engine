@@ -5,11 +5,12 @@
 //! ring. Private downlink is a later slice.
 
 use crate::exchange::auth::GatewayCredentials;
+use crate::exchange::combo_engine::ComboPrivateFill;
 use crate::exchange::gateway::GatewayFrame;
 use crate::exchange::gateway_server::{GatewayEvent, GatewayServerHandle};
 use crate::exchange::middleware::MiddlewareSequencer;
 use crate::exchange::private_events::PrivateEvent;
-use crate::exchange::private_replay::PrivateReplayBuffer;
+use crate::exchange::private_replay::{ComboPrivateReplayBuffer, PrivateReplayBuffer, ReplayEvent};
 use crate::exchange::rate_limit::TokenBucket;
 use crate::exchange::session::SessionInfo;
 use std::collections::HashMap;
@@ -22,7 +23,10 @@ pub struct GatewayRuntime {
     events: Receiver<GatewayEvent>,
     last_seen: HashMap<u64, Instant>,
     private_replay: PrivateReplayBuffer,
+    combo_replay: ComboPrivateReplayBuffer,
+    next_private_seq: HashMap<u64, u64>,
     pending_replay: HashMap<u64, Vec<PrivateEvent>>,
+    pending_combo_replay: HashMap<u64, Vec<ComboPrivateFill>>,
     rate_limit: Option<(f64, f64)>,
     buckets: HashMap<u64, TokenBucket>,
     auth_token: Option<u64>,
@@ -49,7 +53,10 @@ impl GatewayRuntime {
             events,
             last_seen: HashMap::new(),
             private_replay: PrivateReplayBuffer::new(replay_capacity),
+            combo_replay: ComboPrivateReplayBuffer::new(replay_capacity),
+            next_private_seq: HashMap::new(),
             pending_replay: HashMap::new(),
+            pending_combo_replay: HashMap::new(),
             rate_limit: None,
             buckets: HashMap::new(),
             auth_token: None,
@@ -154,9 +161,15 @@ impl GatewayRuntime {
                 {
                     self.pending_redirects.insert(old, target.clone());
                 }
-                let replay = self.private_replay.replay(user_id.into(), last_private_seq);
+                let user_id = u64::from(user_id);
+                let replay = self.private_replay.replay(user_id, last_private_seq);
                 if !replay.is_empty() {
                     self.pending_replay.insert(connection_id, replay);
+                }
+                let combo_replay = self.combo_replay.replay(user_id, last_private_seq);
+                if !combo_replay.is_empty() {
+                    self.pending_combo_replay
+                        .insert(connection_id, combo_replay);
                 }
             }
             GatewayFrame::Command(mut command) => {
@@ -242,6 +255,7 @@ impl GatewayRuntime {
             self.last_seen.remove(id);
             self.buckets.remove(id);
             self.pending_replay.remove(id);
+            self.pending_combo_replay.remove(id);
             self.pending_redirects.remove(id);
             self.middleware.close_session(*id);
         }
@@ -258,16 +272,49 @@ impl GatewayRuntime {
         std::mem::take(&mut self.pending_replay)
     }
 
+    /// Drains core and combo replay batches in per-user sequence order.
+    #[must_use]
+    pub fn take_replay_batches(&mut self) -> HashMap<u64, Vec<ReplayEvent>> {
+        let core = std::mem::take(&mut self.pending_replay);
+        let combo = std::mem::take(&mut self.pending_combo_replay);
+        let mut merged: HashMap<u64, Vec<ReplayEvent>> = HashMap::new();
+        for (connection_id, events) in core {
+            merged
+                .entry(connection_id)
+                .or_default()
+                .extend(events.into_iter().map(ReplayEvent::Core));
+        }
+        for (connection_id, events) in combo {
+            merged
+                .entry(connection_id)
+                .or_default()
+                .extend(events.into_iter().map(ReplayEvent::Combo));
+        }
+        for events in merged.values_mut() {
+            events.sort_by_key(ReplayEvent::seq);
+        }
+        merged
+    }
+
+    fn assign_private_seq(&mut self, user_id: u64) -> u64 {
+        let next = self.next_private_seq.entry(user_id).or_insert(1);
+        let seq = *next;
+        *next += 1;
+        seq
+    }
+
     /// Routes combo private fills to the session whose user matches the fill.
     ///
     /// Returns how many fills were handed to a gateway downlink.
     pub fn dispatch_combo_private(
-        &self,
+        &mut self,
         server: &GatewayServerHandle,
-        fills: impl IntoIterator<Item = crate::exchange::combo_engine::ComboPrivateFill>,
+        fills: impl IntoIterator<Item = ComboPrivateFill>,
     ) -> usize {
         let mut sent = 0;
-        for fill in fills {
+        for mut fill in fills {
+            fill.seq = self.assign_private_seq(fill.user_id);
+            self.combo_replay.push(fill.user_id, fill);
             let user_id = u32::try_from(fill.user_id).unwrap_or(u32::MAX);
             if let Some(session) = self.middleware.session_by_user(user_id)
                 && server.send_combo_private(session.session_id, &fill).is_ok()
@@ -287,7 +334,8 @@ impl GatewayRuntime {
         events: impl IntoIterator<Item = crate::exchange::private_events::PrivateEvent>,
     ) -> usize {
         let mut sent = 0;
-        for event in events {
+        for mut event in events {
+            event.seq = self.assign_private_seq(event.account_id);
             let user_id = u32::try_from(event.account_id).unwrap_or(u32::MAX);
             self.private_replay.push(event.account_id, event.clone());
             if let Some(session) = self.middleware.session_by_user(user_id)
@@ -868,6 +916,107 @@ mod tests {
         let replay = replay.expect("replay batch");
         assert_eq!(replay.len(), 1);
         assert_eq!(replay[0].seq, 2);
+        server.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn replay_merges_core_and_combo_sequences() {
+        use crate::exchange::combo_engine::ComboPrivateFill;
+        use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
+        use crate::exchange::private_replay::ReplayEvent;
+        use crate::exchange::protocol::Side;
+
+        let path = std::env::temp_dir().join(format!(
+            "matching-engine-gateway-combo-replay-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let mut runtime = GatewayRuntime::new(middleware, events);
+
+        let login = GatewayFrame::Login {
+            member_id: 10,
+            auth_token: 0,
+            user_id: 2,
+            seat_id: 3,
+            session_epoch: 1,
+            last_private_seq: 0,
+        };
+        let mut first = TcpStream::connect(addr).unwrap();
+        first.write_all(&login.encode()).unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.middleware_mut().session_by_user(2).is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        let core = PrivateEvent {
+            seq: 99,
+            order_id: 1,
+            client_order_id: 1,
+            account_id: 2,
+            status: PrivateStatus::Accepted,
+            filled_delta: 0,
+            remaining: 1,
+            reason: None,
+        };
+        let combo = ComboPrivateFill {
+            seq: 99,
+            order_id: 2,
+            user_id: 2,
+            side: Side::Buy,
+            quantity: 1,
+            leg1_price: 50_000,
+            leg2_price: 100,
+            spread_ticks: 49_900,
+        };
+        assert_eq!(runtime.dispatch_private(&server, [core]), 1);
+        assert_eq!(runtime.dispatch_combo_private(&server, [combo]), 1);
+
+        drop(first);
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime.middleware_mut().session_by_user(2).is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        let mut second = TcpStream::connect(addr).unwrap();
+        second
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    auth_token: 0,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        let mut replay = None;
+        for _ in 0..50 {
+            runtime.poll();
+            if let Some(events) = runtime.take_replay_batches().remove(&2) {
+                replay = Some(events);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let replay = replay.expect("merged replay");
+        assert_eq!(replay.len(), 2);
+        assert_eq!(replay[0].seq(), 1);
+        assert_eq!(replay[1].seq(), 2);
+        assert!(matches!(replay[0], ReplayEvent::Core(_)));
+        assert!(matches!(replay[1], ReplayEvent::Combo(_)));
         server.stop();
         let _ = std::fs::remove_file(&path);
     }
