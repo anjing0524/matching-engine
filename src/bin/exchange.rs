@@ -77,6 +77,9 @@ struct RunArgs {
     /// Persist private events to this result log.
     #[arg(long)]
     private_log: Option<String>,
+    /// Optional full runtime snapshot to restore before serving.
+    #[arg(long)]
+    snapshot: Option<String>,
     /// Rotate accepted commands into this directory.
     #[arg(long)]
     command_log_dir: Option<String>,
@@ -153,6 +156,12 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
     let metrics = Arc::new(Mutex::new(ExchangeMetrics::new()));
     let mut runtime = ExchangeRuntime::new(gateway_runtime, runner, gateway)
         .with_metrics_sink(Arc::clone(&metrics));
+    if let Some(path) = &args.snapshot {
+        let snapshot = matching_engine::exchange::exchange_runtime::ExchangeSnapshot::load(
+            std::path::Path::new(path),
+        )?;
+        runtime.restore_snapshot(snapshot)?;
+    }
     if args.idle_timeout_secs > 0 {
         runtime = runtime.with_idle_timeout(Duration::from_secs(args.idle_timeout_secs));
     }

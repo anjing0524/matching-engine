@@ -63,6 +63,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Versioned JSON snapshot with atomic file replacement
 - [x] Snapshot includes auction staging and combo queues
 - [x] ComboEngine snapshot covers queue, leg books, positions, and margin
+- [x] Full ExchangeSnapshot with version/CRC and `exchange run --snapshot`
 - [x] CRC32 checksum over snapshot payload
 - [x] Replay-from-snapshot helper and deterministic test
 - [x] Replay runbook and `exchange-core --snapshot` restore entry point

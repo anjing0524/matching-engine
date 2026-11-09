@@ -25,6 +25,61 @@ pub struct ExchangeSnapshot {
     pub combo: Option<ComboRuntimeSnapshot>,
 }
 
+const EXCHANGE_SNAPSHOT_VERSION: u32 = 1;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ExchangeSnapshotEnvelope {
+    version: u32,
+    snapshot: ExchangeSnapshot,
+    checksum: u32,
+}
+
+impl ExchangeSnapshot {
+    /// Writes a versioned, checksummed snapshot with atomic replacement.
+    ///
+    /// # Errors
+    /// Returns an I/O error on serialization or file replacement.
+    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let payload = serde_json::to_vec(self)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let envelope = ExchangeSnapshotEnvelope {
+            version: EXCHANGE_SNAPSHOT_VERSION,
+            snapshot: self.clone(),
+            checksum: crc32fast::hash(&payload),
+        };
+        let json = serde_json::to_vec(&envelope)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let temporary = path.with_extension("tmp");
+        std::fs::write(&temporary, json)?;
+        std::fs::rename(temporary, path)
+    }
+
+    /// Loads a snapshot written by [`ExchangeSnapshot::save`].
+    ///
+    /// # Errors
+    /// Returns an I/O error for read, JSON, version, or checksum failures.
+    pub fn load(path: &std::path::Path) -> std::io::Result<Self> {
+        let bytes = std::fs::read(path)?;
+        let envelope: ExchangeSnapshotEnvelope = serde_json::from_slice(&bytes)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        if envelope.version != EXCHANGE_SNAPSHOT_VERSION {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unsupported exchange snapshot version {}", envelope.version),
+            ));
+        }
+        let payload = serde_json::to_vec(&envelope.snapshot)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        if crc32fast::hash(&payload) != envelope.checksum {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "exchange snapshot checksum mismatch",
+            ));
+        }
+        Ok(envelope.snapshot)
+    }
+}
+
 /// Composite gateway/middleware/core runtime for one process.
 pub struct ExchangeRuntime<P> {
     gateway: GatewayRuntime,
@@ -916,5 +971,25 @@ mod tests {
         let shared = *metrics_sink.lock().unwrap();
         assert_eq!(shared.commands_executed, 1);
         let _ = std::fs::remove_file(&path);
+    }
+    #[test]
+    fn exchange_snapshot_file_roundtrip() {
+        let core = ExchangeCore::new(
+            ContractSpec::new("BTCUSDT", 1, 1, 1_000_000),
+            SymbolId::intern("BTCUSDT"),
+        );
+        let snapshot = ExchangeSnapshot {
+            core: core.snapshot(),
+            combo: None,
+        };
+        let path = std::env::temp_dir().join(format!(
+            "exchange-runtime-snapshot-{}.json",
+            std::process::id()
+        ));
+        snapshot.save(&path).unwrap();
+        let loaded = ExchangeSnapshot::load(&path).unwrap();
+        assert_eq!(loaded.core, snapshot.core);
+        assert!(loaded.combo.is_none());
+        let _ = std::fs::remove_file(path);
     }
 }

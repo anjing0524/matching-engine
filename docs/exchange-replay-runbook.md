@@ -49,3 +49,14 @@ exchange-core \
 - command ring is empty at cutover.
 - metrics show commands increasing and no rejected-command spike.
 - public sequence continues without a gap; NACK repair remains available.
+
+## Full runtime snapshot
+
+`exchange run --snapshot <path>` restores an `ExchangeSnapshot` containing the
+core book/business state and, when configured, combo queue/leg/positions/margin
+state. The file is versioned and CRC32-checked, and is written with atomic
+replacement by `ExchangeSnapshot::save`.
+
+Use the full runtime snapshot when combo and core state must be recovered
+together; use the split `exchange-core --snapshot` path only for core-only
+recovery.
