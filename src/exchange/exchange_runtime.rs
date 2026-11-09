@@ -175,6 +175,7 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             }
         }
         let commands = self.core.poll();
+        self.core.clear_events();
         self.metrics.commands_executed += commands as u64;
         let private = self.core.drain_private();
         if let Some(log) = &mut self.private_log {

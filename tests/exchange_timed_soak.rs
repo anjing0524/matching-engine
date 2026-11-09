@@ -67,6 +67,7 @@ fn timed_core_soak() {
             seq += 1;
         }
         total += runner.poll() as u64;
+        runner.clear_events();
         let _ = runner.drain_private();
         let _ = runner.drain_public();
     }

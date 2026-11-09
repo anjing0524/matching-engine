@@ -137,6 +137,11 @@ impl<P: PreTradePlugin> CoreRunner<P> {
         &mut self.core
     }
 
+    /// Clears diagnostic `CoreEvent`s without exposing them.
+    pub fn clear_events(&mut self) {
+        self.events.clear();
+    }
+
     pub fn drain_events(&mut self) -> Vec<CoreEvent> {
         std::mem::take(&mut self.events)
     }
