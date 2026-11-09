@@ -129,7 +129,7 @@ impl SubmitOutcome {
     }
 }
 
-/// Lifecycle status of an exchange order./// Lifecycle status of an exchange order.
+/// Lifecycle status of an exchange order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OrderStatus {
     Accepted,
@@ -181,13 +181,6 @@ pub struct CoreSnapshot {
     pub public_seq: u64,
     pub last_tick_seq: u64,
     pub last_exchange_ts_ns: u64,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct SnapshotEnvelope {
-    version: u32,
-    checksum: u32,
-    snapshot: CoreSnapshot,
 }
 
 /// Current on-disk snapshot format version.
@@ -337,14 +330,7 @@ impl ExchangeCore {
     /// # Errors
     /// Returns a JSON error if serialization fails.
     pub fn snapshot_json(&self) -> Result<String, serde_json::Error> {
-        let snapshot = self.snapshot();
-        let payload = serde_json::to_vec(&snapshot)?;
-        let checksum = crc32fast::hash(&payload);
-        serde_json::to_string(&SnapshotEnvelope {
-            version: SNAPSHOT_VERSION,
-            checksum,
-            snapshot,
-        })
+        crate::exchange::snapshot_file::encode(&self.snapshot(), SNAPSHOT_VERSION)
     }
 
     /// Restores a snapshot from versioned JSON.
@@ -352,16 +338,8 @@ impl ExchangeCore {
     /// # Errors
     /// Returns a reason for invalid JSON, a version mismatch, or a restore error.
     pub fn restore_snapshot_json(&mut self, json: &str) -> Result<(), String> {
-        let envelope: SnapshotEnvelope =
-            serde_json::from_str(json).map_err(|error| error.to_string())?;
-        if envelope.version != SNAPSHOT_VERSION {
-            return Err(format!("unsupported snapshot version {}", envelope.version));
-        }
-        let payload = serde_json::to_vec(&envelope.snapshot).map_err(|error| error.to_string())?;
-        if crc32fast::hash(&payload) != envelope.checksum {
-            return Err("snapshot checksum mismatch".to_string());
-        }
-        self.restore_snapshot(envelope.snapshot)
+        let snapshot = crate::exchange::snapshot_file::decode(json, SNAPSHOT_VERSION)?;
+        self.restore_snapshot(snapshot)
     }
 
     /// Atomically writes a versioned snapshot to `path`.
@@ -369,12 +347,7 @@ impl ExchangeCore {
     /// # Errors
     /// Returns an I/O error for serialization or file replacement failure.
     pub fn save_snapshot(&self, path: &Path) -> io::Result<()> {
-        let json = self
-            .snapshot_json()
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        let temporary = path.with_extension("tmp");
-        std::fs::write(&temporary, json)?;
-        std::fs::rename(temporary, path)
+        crate::exchange::snapshot_file::save(path, &self.snapshot(), SNAPSHOT_VERSION)
     }
 
     /// Loads a versioned snapshot from `path`.
@@ -382,24 +355,7 @@ impl ExchangeCore {
     /// # Errors
     /// Returns an I/O error for read/JSON/version failures.
     pub fn load_snapshot(path: &Path) -> io::Result<CoreSnapshot> {
-        let json = std::fs::read_to_string(path)?;
-        let envelope: SnapshotEnvelope = serde_json::from_str(&json)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if envelope.version != SNAPSHOT_VERSION {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unsupported snapshot version {}", envelope.version),
-            ));
-        }
-        let payload = serde_json::to_vec(&envelope.snapshot)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if crc32fast::hash(&payload) != envelope.checksum {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "snapshot checksum mismatch",
-            ));
-        }
-        Ok(envelope.snapshot)
+        crate::exchange::snapshot_file::load(path, SNAPSHOT_VERSION)
     }
 
     #[must_use]

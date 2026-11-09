@@ -27,31 +27,13 @@ pub struct ExchangeSnapshot {
 
 const EXCHANGE_SNAPSHOT_VERSION: u32 = 2;
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ExchangeSnapshotEnvelope {
-    version: u32,
-    snapshot: ExchangeSnapshot,
-    checksum: u32,
-}
-
 impl ExchangeSnapshot {
     /// Writes a versioned, checksummed snapshot with atomic replacement.
     ///
     /// # Errors
     /// Returns an I/O error on serialization or file replacement.
     pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
-        let payload = serde_json::to_vec(self)
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-        let envelope = ExchangeSnapshotEnvelope {
-            version: EXCHANGE_SNAPSHOT_VERSION,
-            snapshot: self.clone(),
-            checksum: crc32fast::hash(&payload),
-        };
-        let json = serde_json::to_vec(&envelope)
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-        let temporary = path.with_extension("tmp");
-        std::fs::write(&temporary, json)?;
-        std::fs::rename(temporary, path)
+        crate::exchange::snapshot_file::save(path, self, EXCHANGE_SNAPSHOT_VERSION)
     }
 
     /// Loads a snapshot written by [`ExchangeSnapshot::save`].
@@ -59,24 +41,7 @@ impl ExchangeSnapshot {
     /// # Errors
     /// Returns an I/O error for read, JSON, version, or checksum failures.
     pub fn load(path: &std::path::Path) -> std::io::Result<Self> {
-        let bytes = std::fs::read(path)?;
-        let envelope: ExchangeSnapshotEnvelope = serde_json::from_slice(&bytes)
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-        if envelope.version != EXCHANGE_SNAPSHOT_VERSION {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("unsupported exchange snapshot version {}", envelope.version),
-            ));
-        }
-        let payload = serde_json::to_vec(&envelope.snapshot)
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-        if crc32fast::hash(&payload) != envelope.checksum {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "exchange snapshot checksum mismatch",
-            ));
-        }
-        Ok(envelope.snapshot)
+        crate::exchange::snapshot_file::load(path, EXCHANGE_SNAPSHOT_VERSION)
     }
 }
 

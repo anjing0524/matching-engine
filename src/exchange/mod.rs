@@ -39,4 +39,5 @@ pub mod result_log;
 pub mod runner;
 pub mod schedule;
 pub mod session;
+pub mod snapshot_file;
 pub mod transport;
