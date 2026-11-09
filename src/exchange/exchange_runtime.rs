@@ -1057,6 +1057,8 @@ mod tests {
         assert!(runtime.combo_mut().unwrap().submit_command(&cancel));
         assert_eq!(runtime.combo_mut().unwrap().engine().queue_len(), 0);
 
+        let json = serde_json::to_string(&snapshot).unwrap();
+        let snapshot: ExchangeSnapshot = serde_json::from_str(&json).unwrap();
         runtime.restore_snapshot(snapshot).unwrap();
         assert_eq!(runtime.combo_mut().unwrap().engine().queue_len(), 1);
         let _ = std::fs::remove_file(&core_path);
