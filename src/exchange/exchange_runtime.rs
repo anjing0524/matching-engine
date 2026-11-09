@@ -990,6 +990,13 @@ mod tests {
         let loaded = ExchangeSnapshot::load(&path).unwrap();
         assert_eq!(loaded.core, snapshot.core);
         assert!(loaded.combo.is_none());
+
+        let corrupted = std::fs::read(&path).unwrap();
+        let mut corrupted = corrupted;
+        corrupted[20] ^= 0xff;
+        std::fs::write(&path, corrupted).unwrap();
+        assert!(ExchangeSnapshot::load(&path).is_err());
+
         let _ = std::fs::remove_file(path);
     }
     #[test]
