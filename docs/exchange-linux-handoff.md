@@ -10,6 +10,23 @@ cargo test --all-features
 docker build -f deploy/Dockerfile -t exchange-runtime:linux .
 ```
 
+### Docker Hub workaround (Fedora tested)
+
+When Docker Hub is unreachable, pull the same images from ECR Public and tag
+them locally, then build with host networking:
+
+```bash
+docker pull public.ecr.aws/docker/library/rust:1.99-alpine
+docker pull public.ecr.aws/docker/library/alpine:3.21
+docker tag public.ecr.aws/docker/library/rust:1.99-alpine rust:1.99-alpine
+docker tag public.ecr.aws/docker/library/alpine:3.21 alpine:3.21
+docker build --network host -f deploy/Dockerfile -t exchange-runtime:fedora .
+docker run --rm exchange-runtime:fedora --iterations 100
+```
+
+Verified on Fedora: image built (27 MB), container printed the gateway/metrics
+addresses and exited cleanly.
+
 Produces:
 
 - `target/release/exchange` — single-process gateway+middleware+core

@@ -125,14 +125,19 @@ public packets received: 64,000 / 64,000
 
 ## Docker build
 
-Attempted on Fedora; Docker Hub metadata resolution timed out:
+Docker Hub metadata resolution timed out from Fedora. Workaround:
+
+1. pull `rust:1.99-alpine` and `alpine:3.21` from `public.ecr.aws`
+2. tag them as the Dockerfile names
+3. `docker build --network host`
+
+Result:
 
 ```text
-rust:1.99-alpine: dial tcp ... i/o timeout
+exchange-runtime:fedora  27 MB
+container smoke: gateway=0.0.0.0:8000 metrics=0.0.0.0:9100
+exit status: 0
 ```
-
-No image was built on this host. Local image build was verified earlier on the
-Mac host.
 
 ## Split-process smoke
 
