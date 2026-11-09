@@ -197,7 +197,7 @@ impl MiddlewareSequencer {
 mod tests {
     use super::*;
     use crate::domain::orderbook::ContractSpec;
-    use crate::exchange::core::{CoreEvent, ExchangeCore};
+    use crate::exchange::core::ExchangeCore;
     use crate::exchange::plugins::NoPlugins;
     use crate::exchange::protocol::{
         Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
@@ -394,12 +394,7 @@ mod tests {
             2
         );
         assert_eq!(runner.poll(), 2);
-        let events = runner.drain_events();
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, CoreEvent::Trade { quantity: 5, .. }))
-        );
+        assert!(!runner.core().positions().snapshot().is_empty());
         assert_eq!(middleware.next_global_seq(), 3);
         let _ = std::fs::remove_file(&path);
     }

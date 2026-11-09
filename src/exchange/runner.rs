@@ -4,7 +4,7 @@
 //! through a static pre-trade plugin chain, and exposes the resulting private
 //! and public events. It is deliberately single-threaded and has no networking.
 
-use crate::exchange::core::{CoreEvent, ExchangeCore};
+use crate::exchange::core::ExchangeCore;
 use crate::exchange::plugins::PreTradePlugin;
 use crate::exchange::private_events::PrivateEvent;
 use crate::exchange::public_events::PublicEvent;
@@ -18,7 +18,7 @@ pub struct CoreRunner<P> {
     core: ExchangeCore,
     consumer: CommandConsumer,
     plugin: P,
-    events: Vec<CoreEvent>,
+    decode_errors: u64,
     public_producer: Option<PublicEventProducer>,
     private_producer: Option<PrivateEventProducer>,
     pending_public: VecDeque<PublicEvent>,
@@ -32,7 +32,7 @@ impl<P: PreTradePlugin> CoreRunner<P> {
             core,
             consumer,
             plugin,
-            events: Vec::new(),
+            decode_errors: 0,
             public_producer: None,
             private_producer: None,
             pending_public: VecDeque::new(),
@@ -112,15 +112,11 @@ impl<P: PreTradePlugin> CoreRunner<P> {
         while let Some(result) = self.consumer.recv() {
             match result {
                 Ok(command) => {
-                    self.core
-                        .execute_with_plugins_into(command, &self.plugin, &mut self.events);
+                    let _ = self.core.execute_with_plugins(command, &self.plugin);
                     executed += 1;
                 }
-                Err(error) => {
-                    self.events.push(CoreEvent::Rejected {
-                        client_order_id: 0,
-                        reason: format!("command decode error: {error:?}"),
-                    });
+                Err(_) => {
+                    self.decode_errors += 1;
                 }
             }
         }
@@ -137,13 +133,9 @@ impl<P: PreTradePlugin> CoreRunner<P> {
         &mut self.core
     }
 
-    /// Clears diagnostic `CoreEvent`s without exposing them.
-    pub fn clear_events(&mut self) {
-        self.events.clear();
-    }
-
-    pub fn drain_events(&mut self) -> Vec<CoreEvent> {
-        std::mem::take(&mut self.events)
+    #[must_use]
+    pub fn decode_errors(&self) -> u64 {
+        self.decode_errors
     }
 
     pub fn drain_private(&mut self) -> Vec<PrivateEvent> {
@@ -293,13 +285,8 @@ mod tests {
         producer.send(&command(1, Side::Buy, 50_000, 5)).unwrap();
         producer.send(&command(2, Side::Sell, 50_000, 5)).unwrap();
         assert_eq!(runner.poll(), 2);
-        let events = runner.drain_events();
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, CoreEvent::Trade { quantity: 5, .. }))
-        );
         assert!(runner.core().best_bid().is_none());
+        assert!(!runner.core().positions().snapshot().is_empty());
         drop(producer);
         let _ = std::fs::remove_file(&path);
     }

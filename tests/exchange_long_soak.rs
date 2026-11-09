@@ -60,7 +60,6 @@ fn five_million_commands_complete() {
             seq += 1;
         }
         assert_eq!(runner.poll() as u64, batch);
-        runner.clear_events();
         let _ = runner.drain_private();
         let _ = runner.drain_public();
     }
