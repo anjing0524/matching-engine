@@ -89,6 +89,17 @@ RSS sampler range: 113,736–143,540 KB
 exit status: 0
 ```
 
+A 1-hour run completed after the server was reachable again:
+
+```text
+7,254,700,000 commands in 3600.04s
+≈ 2,015,172 cmd/s
+Elapsed: 1:00:00
+Maximum resident set size: 155,524 KB
+RSS sampler range: 108,096–143,380 KB (60 samples)
+exit status: 0
+```
+
 Earlier 60-second run before the fixes was ~1.10M cmd/s and memory grew without
 bound.
 
