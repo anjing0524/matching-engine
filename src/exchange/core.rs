@@ -102,9 +102,9 @@ pub struct OrderMeta {
 
 /// In-memory core snapshot for the continuous book and business state.
 ///
-/// Combo queues and call-auction staging are intentionally outside this slice;
-/// callers must drain them before snapshotting. Ephemeral event buffers are not
-/// snapshotted because they are already consumed by middleware.
+/// Combo queues and call-auction staging are included in this snapshot.
+/// Ephemeral diagnostic event buffers are not snapshotted because they are
+/// already consumed by middleware.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CoreSnapshot {
     pub spec: ContractSpec,
@@ -136,7 +136,7 @@ struct SnapshotEnvelope {
 }
 
 /// Current on-disk snapshot format version.
-pub const SNAPSHOT_VERSION: u32 = 1;
+pub const SNAPSHOT_VERSION: u32 = 2;
 
 /// The deterministic core state machine for one contract.
 pub struct ExchangeCore {
@@ -191,7 +191,7 @@ impl ExchangeCore {
 
     /// Captures continuous-book and business state.
     ///
-    /// Call `snapshot` only when combo queues and auction staging are empty.
+    /// Captures the full continuous, combo, and auction state.
     #[must_use]
     pub fn snapshot(&self) -> CoreSnapshot {
         let mut orders: Vec<_> = self.orders.iter().map(|(id, meta)| (*id, *meta)).collect();

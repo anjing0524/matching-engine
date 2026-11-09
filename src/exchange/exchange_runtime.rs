@@ -25,7 +25,7 @@ pub struct ExchangeSnapshot {
     pub combo: Option<ComboRuntimeSnapshot>,
 }
 
-const EXCHANGE_SNAPSHOT_VERSION: u32 = 1;
+const EXCHANGE_SNAPSHOT_VERSION: u32 = 2;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ExchangeSnapshotEnvelope {

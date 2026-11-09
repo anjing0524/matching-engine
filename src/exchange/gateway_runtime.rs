@@ -240,6 +240,9 @@ impl GatewayRuntime {
             .collect();
         for id in &expired {
             self.last_seen.remove(id);
+            self.buckets.remove(id);
+            self.pending_replay.remove(id);
+            self.pending_redirects.remove(id);
             self.middleware.close_session(*id);
         }
         expired
@@ -367,7 +370,7 @@ mod tests {
         let (producer, _consumer) = create(&path, 8).unwrap();
         let middleware = MiddlewareSequencer::new(producer);
         let (mut server, events) = start("127.0.0.1:0").unwrap();
-        let mut runtime = GatewayRuntime::new(middleware, events);
+        let mut runtime = GatewayRuntime::new(middleware, events).with_rate_limit(10.0, 1.0);
         let mut stream = TcpStream::connect(server.addr()).unwrap();
         stream
             .write_all(
@@ -880,7 +883,7 @@ mod tests {
         let (producer, _consumer) = create(&path, 8).unwrap();
         let middleware = MiddlewareSequencer::new(producer);
         let (mut server, events) = start("127.0.0.1:0").unwrap();
-        let mut runtime = GatewayRuntime::new(middleware, events);
+        let mut runtime = GatewayRuntime::new(middleware, events).with_rate_limit(10.0, 1.0);
         let mut stream = TcpStream::connect(server.addr()).unwrap();
         stream
             .write_all(
@@ -902,8 +905,28 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(2));
         }
+        stream
+            .write_all(
+                &GatewayFrame::Command(crate::exchange::protocol::Command::zeroed()).encode(),
+            )
+            .unwrap();
+        let mut bucket_id = None;
+        for _ in 0..100 {
+            runtime.poll();
+            if let Some(id) = runtime.buckets.keys().next().copied() {
+                bucket_id = Some(id);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let bucket_id = bucket_id.expect("rate-limit bucket");
         std::thread::sleep(Duration::from_millis(5));
-        assert_eq!(runtime.expire_idle(Duration::from_millis(1)), vec![1]);
+        assert!(
+            runtime
+                .expire_idle(Duration::from_millis(1))
+                .contains(&bucket_id)
+        );
+        assert!(!runtime.buckets.contains_key(&bucket_id));
         assert!(runtime.middleware_mut().session_by_user(2).is_none());
         server.stop();
         let _ = std::fs::remove_file(&path);
