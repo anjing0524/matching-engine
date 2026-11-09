@@ -100,13 +100,6 @@ pub struct OrderMeta {
     pub status: OrderStatus,
 }
 
-/// Why a checked snapshot cannot be produced.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SnapshotError {
-    ComboQueuesNonEmpty,
-    AuctionStagingNonEmpty,
-}
-
 /// In-memory core snapshot for the continuous book and business state.
 ///
 /// Combo queues and call-auction staging are intentionally outside this slice;
@@ -125,6 +118,7 @@ pub struct CoreSnapshot {
     pub auction_orders: Vec<AuctionOrder>,
     pub auction_meta: Vec<(u64, (u64, Side, Offset, Hedge))>,
     pub auction_order_seq: u64,
+    pub combo_queues: Vec<(u32, ComboQueue)>,
     pub phase: ExchangePhase,
     pub trading_day: u32,
     pub next_trade_id: u64,
@@ -221,6 +215,12 @@ impl ExchangeCore {
             .map(|(id, meta)| (*id, *meta))
             .collect();
         auction_meta.sort_by_key(|(id, _)| *id);
+        let mut combo_queues: Vec<_> = self
+            .combo_queues
+            .iter()
+            .map(|(id, queue)| (*id, queue.clone()))
+            .collect();
+        combo_queues.sort_by_key(|(id, _)| *id);
         CoreSnapshot {
             spec: self.book.spec().clone(),
             symbol: self.symbol,
@@ -233,6 +233,7 @@ impl ExchangeCore {
             auction_orders: self.auction_orders.clone(),
             auction_meta,
             auction_order_seq: self.auction_order_seq,
+            combo_queues,
             phase: self.phase,
             trading_day: self.trading_day,
             next_trade_id: self.next_trade_id,
@@ -241,17 +242,6 @@ impl ExchangeCore {
             last_tick_seq: self.last_tick_seq,
             last_exchange_ts_ns: self.last_exchange_ts_ns,
         }
-    }
-
-    /// Captures a snapshot only when transient combo/auction state is empty.
-    ///
-    /// # Errors
-    /// Returns an error instead of silently omitting combo or auction state.
-    pub fn snapshot_checked(&self) -> Result<CoreSnapshot, SnapshotError> {
-        if self.combo_queues.values().any(|queue| !queue.is_empty()) {
-            return Err(SnapshotError::ComboQueuesNonEmpty);
-        }
-        Ok(self.snapshot())
     }
 
     /// Restores a previously captured snapshot.
@@ -274,6 +264,7 @@ impl ExchangeCore {
         self.auction_orders = snapshot.auction_orders;
         self.auction_meta = snapshot.auction_meta.into_iter().collect();
         self.auction_order_seq = snapshot.auction_order_seq;
+        self.combo_queues = snapshot.combo_queues.into_iter().collect();
         self.phase = snapshot.phase;
         self.trading_day = snapshot.trading_day;
         self.next_trade_id = snapshot.next_trade_id;
@@ -283,7 +274,6 @@ impl ExchangeCore {
         self.last_exchange_ts_ns = snapshot.last_exchange_ts_ns;
         self.private_events.clear();
         self.public_events.clear();
-        self.combo_queues.clear();
         Ok(())
     }
 
@@ -324,8 +314,6 @@ impl ExchangeCore {
     /// # Errors
     /// Returns an I/O error for serialization or file replacement failure.
     pub fn save_snapshot(&self, path: &Path) -> io::Result<()> {
-        self.snapshot_checked()
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("{error:?}")))?;
         let json = self
             .snapshot_json()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -2077,16 +2065,18 @@ mod tests {
         }
     }
     #[test]
-    fn checked_snapshot_rejects_combo_queue() {
-        let mut core = core();
+    fn snapshot_roundtrips_combo_queue() {
+        let mut exchange = core();
         assert!(
-            core.submit_combo_order(7, 1, Side::Buy, 49_900, 1, Offset::Open, Hedge::Spec)
+            exchange
+                .submit_combo_order(7, 1, Side::Buy, 49_900, 1, Offset::Open, Hedge::Spec)
                 .is_some()
         );
-        assert_eq!(
-            core.snapshot_checked(),
-            Err(SnapshotError::ComboQueuesNonEmpty)
-        );
+        let snapshot = exchange.snapshot();
+        let mut restored = core();
+        let _ = restored.restore_snapshot(snapshot.clone());
+        assert_eq!(restored.combo_queue_len(7), 1);
+        assert_eq!(restored.snapshot(), snapshot);
     }
     #[test]
     fn snapshot_roundtrips_auction_staging() {
@@ -2094,7 +2084,7 @@ mod tests {
         exchange.begin_auction();
         exchange.queue_auction_order(1, Side::Buy, 50_000, 3, Offset::Open, Hedge::Spec);
         exchange.queue_auction_order(2, Side::Sell, 50_100, 2, Offset::Open, Hedge::Spec);
-        let snapshot = exchange.snapshot_checked().unwrap();
+        let snapshot = exchange.snapshot();
         let mut restored = core();
         let _ = restored.restore_snapshot(snapshot.clone());
         assert_eq!(restored.auction_order_count(), 2);

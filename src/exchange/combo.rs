@@ -8,7 +8,7 @@ use crate::exchange::protocol::{Hedge, Offset, Side};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 /// One resting combination order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ComboOrder {
     pub order_id: u64,
     pub user_id: u64,
@@ -22,7 +22,7 @@ pub struct ComboOrder {
 }
 
 /// Price-time queue for one combination definition.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ComboQueue {
     bids: BTreeMap<u64, VecDeque<ComboOrder>>,
     asks: BTreeMap<u64, VecDeque<ComboOrder>>,
