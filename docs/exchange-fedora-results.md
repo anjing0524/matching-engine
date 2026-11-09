@@ -78,6 +78,17 @@ Maximum resident set size: 155,744 KB
 exit status: 0
 ```
 
+A 30-minute detached run completed:
+
+```text
+3,995,200,000 commands in 1800.03s
+≈ 2,219,519 cmd/s
+Elapsed: 30:00.04
+Maximum resident set size: 155,636 KB
+RSS sampler range: 113,736–143,540 KB
+exit status: 0
+```
+
 Earlier 60-second run before the fixes was ~1.10M cmd/s and memory grew without
 bound.
 
