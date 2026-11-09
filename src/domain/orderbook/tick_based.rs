@@ -858,6 +858,75 @@ impl TickBasedOrderBook {
         total
     }
 
+    /// Returns the worst price paid/received if `quantity` can be filled
+    /// against levels at or better than `limit_price`, without mutating.
+    ///
+    /// For a buy, the worst price is the highest ask touched; for a sell, the
+    /// lowest bid touched. Returns `None` when depth is insufficient.
+    #[must_use]
+    pub fn trial_execution(
+        &self,
+        taker_side: OrderType,
+        limit_price: u64,
+        quantity: u64,
+    ) -> Option<u64> {
+        if quantity == 0 {
+            return None;
+        }
+        let limit_idx = self.price_to_index(limit_price)?;
+        let mut remaining = quantity;
+        match taker_side {
+            OrderType::Buy => {
+                let mut idx = self.best_ask_idx?;
+                loop {
+                    let mut node = self.ask_levels[idx].head;
+                    while node != NONE {
+                        let order = &self.nodes[node as usize];
+                        if order.quantity >= remaining {
+                            return Some(order.price);
+                        }
+                        remaining -= order.quantity;
+                        node = order.next;
+                    }
+                    if idx >= limit_idx {
+                        return None;
+                    }
+                    idx += 1;
+                    while idx <= limit_idx && self.ask_levels[idx].head == NONE {
+                        idx += 1;
+                    }
+                    if idx > limit_idx {
+                        return None;
+                    }
+                }
+            }
+            OrderType::Sell => {
+                let mut idx = self.best_bid_idx?;
+                loop {
+                    let mut node = self.bid_levels[idx].head;
+                    while node != NONE {
+                        let order = &self.nodes[node as usize];
+                        if order.quantity >= remaining {
+                            return Some(order.price);
+                        }
+                        remaining -= order.quantity;
+                        node = order.next;
+                    }
+                    if idx == 0 || idx <= limit_idx {
+                        return None;
+                    }
+                    idx -= 1;
+                    while idx > limit_idx && self.bid_levels[idx].head == NONE {
+                        idx -= 1;
+                    }
+                    if idx < limit_idx {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
     /// Total resting quantity on one side.
     #[must_use]
     pub fn side_quantity(&self, side: OrderType) -> u64 {
@@ -2095,5 +2164,27 @@ mod tests {
         assert_eq!(book.executable_quantity(OrderType::Sell, 2_000), 6);
         assert_eq!(book.executable_quantity(OrderType::Sell, 1_800), 13);
         assert_eq!(book.executable_quantity(OrderType::Buy, 2_000), 0);
+    }
+    #[test]
+    fn trial_execution_returns_worst_price_or_none() {
+        let spec = ContractSpec::new("BTCUSDT", 1, 1_000, 10_000);
+        let mut book = TickBasedOrderBook::new(spec);
+        book.insert_resting_order(1, OrderType::Sell, 2_500, 4, 4, 1)
+            .unwrap();
+        book.insert_resting_order(2, OrderType::Sell, 2_700, 5, 5, 2)
+            .unwrap();
+        book.insert_resting_order(3, OrderType::Buy, 2_100, 6, 6, 3)
+            .unwrap();
+        book.insert_resting_order(4, OrderType::Buy, 1_900, 7, 7, 4)
+            .unwrap();
+        assert_eq!(book.trial_execution(OrderType::Buy, 2_600, 4), Some(2_500));
+        assert_eq!(book.trial_execution(OrderType::Buy, 2_600, 5), None);
+        assert_eq!(book.trial_execution(OrderType::Buy, 2_800, 9), Some(2_700));
+        assert_eq!(book.trial_execution(OrderType::Sell, 2_000, 6), Some(2_100));
+        assert_eq!(book.trial_execution(OrderType::Sell, 2_000, 7), None);
+        assert_eq!(
+            book.trial_execution(OrderType::Sell, 1_800, 13),
+            Some(1_900)
+        );
     }
 }
