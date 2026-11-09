@@ -68,6 +68,17 @@ cargo test --release --test exchange_tcp_load -- --ignored --nocapture
 public packets received: 64,000 / 64,000
 ```
 
+## Split-process smoke
+
+```text
+cargo test --release --test exchange_split_smoke
+1 passed
+```
+
+Starts separate `exchange-middleware` and `exchange-core` processes over shared
+ring files, logs in through the gateway listener, submits one order, and reads
+the private event back through middleware.
+
 ## Notes
 
 - This is a 4-core/8-thread laptop-class CPU, not a production server; numbers
