@@ -62,7 +62,6 @@ struct LevelQueue {
     head: u32,
     tail: u32,
     len: u32,
-    quantity: u64,
 }
 
 impl Default for LevelQueue {
@@ -71,7 +70,6 @@ impl Default for LevelQueue {
             head: NONE,
             tail: NONE,
             len: 0,
-            quantity: 0,
         }
     }
 }
@@ -370,10 +368,6 @@ impl TickBasedOrderBook {
 
                 order.remaining_quantity -= trade_qty;
                 self.ask_quantity = self.ask_quantity.saturating_sub(trade_qty);
-                self.level_mut(BookSide::Ask, idx).quantity = self
-                    .level(BookSide::Ask, idx)
-                    .quantity
-                    .saturating_sub(trade_qty);
                 self.nodes[node_idx].quantity = counter_quantity - trade_qty;
                 if counter_quantity == trade_qty {
                     self.unlink_order(BookSide::Ask, idx, head);
@@ -442,10 +436,6 @@ impl TickBasedOrderBook {
 
                 order.remaining_quantity -= trade_qty;
                 self.bid_quantity = self.bid_quantity.saturating_sub(trade_qty);
-                self.level_mut(BookSide::Bid, idx).quantity = self
-                    .level(BookSide::Bid, idx)
-                    .quantity
-                    .saturating_sub(trade_qty);
                 self.nodes[node_idx].quantity = counter_quantity - trade_qty;
                 if counter_quantity == trade_qty {
                     self.unlink_order(BookSide::Bid, idx, head);
@@ -581,7 +571,6 @@ impl TickBasedOrderBook {
             }
             level.tail = node_idx;
             level.len += 1;
-            level.quantity = level.quantity.saturating_add(quantity);
         }
 
         self.order_locations.insert(
@@ -617,9 +606,9 @@ impl TickBasedOrderBook {
     /// Unlinks `node_idx` from `side`/`idx`, updates the level and recycles the
     /// slab slot. O(1).
     fn unlink_order(&mut self, side: BookSide, idx: usize, node_idx: u32) {
-        let (prev, next, order_id, quantity) = {
+        let (prev, next, order_id) = {
             let node = &self.nodes[node_idx as usize];
-            (node.prev, node.next, node.order_id, node.quantity)
+            (node.prev, node.next, node.order_id)
         };
 
         if prev != NONE {
@@ -633,8 +622,6 @@ impl TickBasedOrderBook {
             self.level_mut(side, idx).tail = prev;
         }
         self.level_mut(side, idx).len -= 1;
-        self.level_mut(side, idx).quantity =
-            self.level(side, idx).quantity.saturating_sub(quantity);
         let empty = self.level(side, idx).len == 0;
 
         self.order_locations.remove(&order_id);
@@ -892,11 +879,15 @@ impl TickBasedOrderBook {
             OrderType::Buy => {
                 let mut idx = self.best_ask_idx?;
                 loop {
-                    let available = self.ask_levels[idx].quantity;
-                    if available >= remaining {
-                        return Some(self.index_to_price(idx));
+                    let mut node = self.ask_levels[idx].head;
+                    while node != NONE {
+                        let order = &self.nodes[node as usize];
+                        if order.quantity >= remaining {
+                            return Some(order.price);
+                        }
+                        remaining -= order.quantity;
+                        node = order.next;
                     }
-                    remaining -= available;
                     if idx >= limit_idx {
                         return None;
                     }
@@ -912,11 +903,15 @@ impl TickBasedOrderBook {
             OrderType::Sell => {
                 let mut idx = self.best_bid_idx?;
                 loop {
-                    let available = self.bid_levels[idx].quantity;
-                    if available >= remaining {
-                        return Some(self.index_to_price(idx));
+                    let mut node = self.bid_levels[idx].head;
+                    while node != NONE {
+                        let order = &self.nodes[node as usize];
+                        if order.quantity >= remaining {
+                            return Some(order.price);
+                        }
+                        remaining -= order.quantity;
+                        node = order.next;
                     }
-                    remaining -= available;
                     if idx == 0 || idx <= limit_idx {
                         return None;
                     }
