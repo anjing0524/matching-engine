@@ -189,13 +189,14 @@ health/flags
 ```text
 gateway_seq      每 gateway 会话本地递增
 global_seq       middleware 全局递增，进入 command log
-private_seq      每 session 递增，用于重连重发
+private_seq      每 user/session 在 gateway downlink 分配，用于重连重发
 market_data_seq  core public 事件全局递增
 trade_seq        core 成交递增，派生 trade_id
 ```
 
 - gateway 重连带 `session_epoch + last_private_seq`。
-- middleware 从 `last_private_seq+1` 重发 private。
+- gateway downlink 把 core 与 combo 的 private effects 合并后统一编号；重连时
+  `GatewayRuntime` 按同一个 `private_seq` 重发 core + combo 事件。
 - public gap 由 gateway 发 NACK，middleware 按 seq 补发。
 
 ## 9. 未决项

@@ -42,7 +42,7 @@
 ```
 
 - gateway 每条消息有 `gateway_seq`，middleware 存本地号并分配 `global_seq`。
-- private 每 session 一个 `private_seq`；gateway 重连带 `last_private_seq`，middleware 从下一条重发，gateway 去重。
+- private 每 session 一个 `private_seq`，在 gateway downlink 统一分配；core 与 combo 的 private effects 合并编号。重连带 `last_private_seq`，GatewayRuntime 重发 core + combo。
 - public 每条消息有 `market_data_seq`；gateway 发现 gap 发 NACK，middleware 从全天结果区补发。
 - TimeTick 每 250ms 一条，进入 command log；`SessionControl` 在交易节边界精确发送。
 - 不做 query 协议、不做 per-message ack、不做 Halt 广播、不做自动故障恢复。
@@ -135,7 +135,7 @@ IngressRecord:
 ## 9. 故障语义
 
 - 不做复杂控制面。
-- gateway/middleware 断线：gateway 重连，带 `last_private_seq`，middleware 重发。
+- gateway/middleware 断线：gateway 重连，带 `last_private_seq`，GatewayRuntime 重发合并后的 private 流。
 - 重连失败：认为故障，停止会员接入。
 - 时间源故障：全局停止，不广播 Halt，不自动恢复。
 - core 崩溃：从 command log 全量重放；恢复期间不接新命令。
