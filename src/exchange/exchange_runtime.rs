@@ -232,6 +232,7 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
             }
             self.last_expire = Instant::now();
         }
+        self.metrics.fanout_errors = self.fanout.sink_errors();
         let elapsed_ns = u64::try_from(tick_start.elapsed().as_nanos()).unwrap_or(u64::MAX);
         self.metrics.tick_latency.observe(elapsed_ns);
         if let Some(sink) = &self.metrics_sink

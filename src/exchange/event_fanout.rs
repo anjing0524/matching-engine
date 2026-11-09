@@ -19,6 +19,7 @@ pub struct EventFanout {
     market_data: Option<MarketDataPublisher>,
     public_sent: u64,
     repair_sent: u64,
+    sink_errors: u64,
 }
 
 impl EventFanout {
@@ -67,22 +68,35 @@ impl EventFanout {
         self.repair_sent
     }
 
+    #[must_use]
+    pub fn sink_errors(&self) -> u64 {
+        self.sink_errors
+    }
+
     pub fn log_private(&mut self, events: &[PrivateEvent]) {
         let Some(log) = &mut self.private_log else {
             return;
         };
         for event in events {
-            let _ = log.append(event);
+            if log.append(event).is_err() {
+                self.sink_errors += 1;
+            }
         }
-        let _ = log.sync();
+        if log.sync().is_err() {
+            self.sink_errors += 1;
+        }
     }
 
     pub fn publish_public(&mut self, events: &[PublicEvent]) {
         if let Some(log) = &mut self.public_log {
             for event in events {
-                let _ = log.append(event);
+                if log.append(event).is_err() {
+                    self.sink_errors += 1;
+                }
             }
-            let _ = log.sync();
+            if log.sync().is_err() {
+                self.sink_errors += 1;
+            }
         }
         if let Some(buffer) = &mut self.repair_buffer {
             for event in events {
@@ -96,8 +110,9 @@ impl EventFanout {
         }
         if let Some(publisher) = &self.market_data {
             for event in events {
-                if publisher.send(event).is_ok() {
-                    self.public_sent += 1;
+                match publisher.send(event) {
+                    Ok(()) => self.public_sent += 1,
+                    Err(_) => self.sink_errors += 1,
                 }
             }
         }
@@ -107,9 +122,17 @@ impl EventFanout {
         let Some(server) = &mut self.repair_server else {
             return 0;
         };
-        let repaired = server.poll_once().unwrap_or(0) as u64;
-        self.repair_sent += repaired;
-        repaired
+        match server.poll_once() {
+            Ok(repaired) => {
+                let repaired = repaired as u64;
+                self.repair_sent += repaired;
+                repaired
+            }
+            Err(_) => {
+                self.sink_errors += 1;
+                0
+            }
+        }
     }
 
     #[must_use]

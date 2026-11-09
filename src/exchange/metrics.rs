@@ -79,6 +79,7 @@ pub struct ExchangeMetrics {
     pub active_sessions: u64,
     pub closed_sessions: u64,
     pub combo_queue_orders: u64,
+    pub fanout_errors: u64,
     pub tick_latency: LatencyHistogram,
 }
 
@@ -113,6 +114,7 @@ impl ExchangeMetrics {
             ("exchange_active_sessions", self.active_sessions),
             ("exchange_closed_sessions", self.closed_sessions),
             ("exchange_combo_queue_orders", self.combo_queue_orders),
+            ("exchange_fanout_errors_total", self.fanout_errors),
         ] {
             out.push_str("# TYPE ");
             out.push_str(name);
@@ -151,6 +153,7 @@ mod tests {
             active_sessions: 10,
             closed_sessions: 11,
             combo_queue_orders: 12,
+            fanout_errors: 13,
             tick_latency: LatencyHistogram::default(),
         };
         let text = metrics.to_prometheus();
@@ -159,6 +162,7 @@ mod tests {
         assert!(text.contains("exchange_public_events_total 6\n"));
         assert!(text.contains("exchange_active_sessions 10\n"));
         assert!(text.contains("exchange_combo_queue_orders 12\n"));
+        assert!(text.contains("exchange_fanout_errors_total 13\n"));
     }
 
     #[test]
