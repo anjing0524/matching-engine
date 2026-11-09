@@ -17,22 +17,39 @@ use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
+/// Per-connection state owned by the gateway runtime.
+struct ConnectionState {
+    last_seen: Instant,
+    bucket: Option<TokenBucket>,
+    replay: Option<Vec<PrivateEvent>>,
+    combo_replay: Option<Vec<ComboPrivateFill>>,
+    redirect: Option<String>,
+}
+
+impl ConnectionState {
+    fn new() -> Self {
+        Self {
+            last_seen: Instant::now(),
+            bucket: None,
+            replay: None,
+            combo_replay: None,
+            redirect: None,
+        }
+    }
+}
+
 /// Drains gateway events and applies them to middleware.
 pub struct GatewayRuntime {
     middleware: MiddlewareSequencer,
     events: Receiver<GatewayEvent>,
-    last_seen: HashMap<u64, Instant>,
+    connections: HashMap<u64, ConnectionState>,
     private_replay: PrivateReplayBuffer,
     combo_replay: ComboPrivateReplayBuffer,
     next_private_seq: HashMap<u64, u64>,
-    pending_replay: HashMap<u64, Vec<PrivateEvent>>,
-    pending_combo_replay: HashMap<u64, Vec<ComboPrivateFill>>,
     rate_limit: Option<(f64, f64)>,
-    buckets: HashMap<u64, TokenBucket>,
     auth_token: Option<u64>,
     credentials: Option<GatewayCredentials>,
     redirect_target: Option<String>,
-    pending_redirects: HashMap<u64, String>,
     errors: u64,
 }
 
@@ -51,18 +68,14 @@ impl GatewayRuntime {
         Self {
             middleware,
             events,
-            last_seen: HashMap::new(),
+            connections: HashMap::new(),
             private_replay: PrivateReplayBuffer::new(replay_capacity),
             combo_replay: ComboPrivateReplayBuffer::new(replay_capacity),
             next_private_seq: HashMap::new(),
-            pending_replay: HashMap::new(),
-            pending_combo_replay: HashMap::new(),
             rate_limit: None,
-            buckets: HashMap::new(),
             auth_token: None,
             credentials: None,
             redirect_target: None,
-            pending_redirects: HashMap::new(),
             errors: 0,
         }
     }
@@ -106,13 +119,15 @@ impl GatewayRuntime {
                     frame,
                 } => {
                     processed += 1;
-                    self.last_seen.insert(connection_id, Instant::now());
+                    self.connections
+                        .entry(connection_id)
+                        .or_insert_with(ConnectionState::new)
+                        .last_seen = Instant::now();
                     self.handle_frame(connection_id, frame);
                 }
                 GatewayEvent::Closed { connection_id } => {
                     processed += 1;
-                    self.last_seen.remove(&connection_id);
-                    self.buckets.remove(&connection_id);
+                    self.connections.remove(&connection_id);
                     self.middleware.close_session(connection_id);
                 }
             }
@@ -159,25 +174,34 @@ impl GatewayRuntime {
                 if let Some(old) = replaced
                     && let Some(target) = &self.redirect_target
                 {
-                    self.pending_redirects.insert(old, target.clone());
+                    self.connections
+                        .entry(old)
+                        .or_insert_with(ConnectionState::new)
+                        .redirect = Some(target.clone());
                 }
                 let user_id = u64::from(user_id);
+                let state = self
+                    .connections
+                    .entry(connection_id)
+                    .or_insert_with(ConnectionState::new);
                 let replay = self.private_replay.replay(user_id, last_private_seq);
                 if !replay.is_empty() {
-                    self.pending_replay.insert(connection_id, replay);
+                    state.replay = Some(replay);
                 }
                 let combo_replay = self.combo_replay.replay(user_id, last_private_seq);
                 if !combo_replay.is_empty() {
-                    self.pending_combo_replay
-                        .insert(connection_id, combo_replay);
+                    state.combo_replay = Some(combo_replay);
                 }
             }
             GatewayFrame::Command(mut command) => {
                 if let Some((capacity, refill)) = self.rate_limit {
-                    let bucket = self
-                        .buckets
+                    let state = self
+                        .connections
                         .entry(connection_id)
-                        .or_insert_with(|| TokenBucket::new(capacity, refill));
+                        .or_insert_with(ConnectionState::new);
+                    let bucket = state
+                        .bucket
+                        .get_or_insert_with(|| TokenBucket::new(capacity, refill));
                     if !bucket.try_acquire() {
                         self.errors += 1;
                         return;
@@ -218,7 +242,13 @@ impl GatewayRuntime {
     }
 
     pub fn take_redirects(&mut self) -> HashMap<u64, String> {
-        std::mem::take(&mut self.pending_redirects)
+        let mut redirects = HashMap::new();
+        for (connection_id, state) in &mut self.connections {
+            if let Some(target) = state.redirect.take() {
+                redirects.insert(*connection_id, target);
+            }
+        }
+        redirects
     }
 
     /// Drains all sessions owned by a gateway before planned failover.
@@ -229,12 +259,10 @@ impl GatewayRuntime {
     pub fn drain_gateway(&mut self, gateway_id: u32) -> Vec<u64> {
         let drained = self.middleware.drain_gateway(gateway_id);
         for connection_id in &drained {
-            self.last_seen.remove(connection_id);
-            self.buckets.remove(connection_id);
-            if let Some(target) = &self.redirect_target {
-                self.pending_redirects
-                    .insert(*connection_id, target.clone());
-            }
+            let redirect = self.redirect_target.clone();
+            let mut state = ConnectionState::new();
+            state.redirect = redirect;
+            self.connections.insert(*connection_id, state);
         }
         drained
     }
@@ -246,17 +274,13 @@ impl GatewayRuntime {
     pub fn expire_idle(&mut self, timeout: Duration) -> Vec<u64> {
         let now = Instant::now();
         let expired: Vec<u64> = self
-            .last_seen
+            .connections
             .iter()
-            .filter(|(_, seen)| now.duration_since(**seen) >= timeout)
+            .filter(|(_, state)| now.duration_since(state.last_seen) >= timeout)
             .map(|(id, _)| *id)
             .collect();
         for id in &expired {
-            self.last_seen.remove(id);
-            self.buckets.remove(id);
-            self.pending_replay.remove(id);
-            self.pending_combo_replay.remove(id);
-            self.pending_redirects.remove(id);
+            self.connections.remove(id);
             self.middleware.close_session(*id);
         }
         expired
@@ -264,31 +288,39 @@ impl GatewayRuntime {
 
     /// Takes replay events queued for a newly logged-in connection.
     pub fn take_replay(&mut self, connection_id: u64) -> Option<Vec<PrivateEvent>> {
-        self.pending_replay.remove(&connection_id)
+        self.connections
+            .get_mut(&connection_id)
+            .and_then(|state| state.replay.take())
     }
 
     /// Drains all queued replay batches.
     pub fn take_all_replays(&mut self) -> HashMap<u64, Vec<PrivateEvent>> {
-        std::mem::take(&mut self.pending_replay)
+        let mut replays = HashMap::new();
+        for (connection_id, state) in &mut self.connections {
+            if let Some(replay) = state.replay.take() {
+                replays.insert(*connection_id, replay);
+            }
+        }
+        replays
     }
 
     /// Drains core and combo replay batches in per-user sequence order.
     #[must_use]
     pub fn take_replay_batches(&mut self) -> HashMap<u64, Vec<ReplayEvent>> {
-        let core = std::mem::take(&mut self.pending_replay);
-        let combo = std::mem::take(&mut self.pending_combo_replay);
         let mut merged: HashMap<u64, Vec<ReplayEvent>> = HashMap::new();
-        for (connection_id, events) in core {
-            merged
-                .entry(connection_id)
-                .or_default()
-                .extend(events.into_iter().map(ReplayEvent::Core));
-        }
-        for (connection_id, events) in combo {
-            merged
-                .entry(connection_id)
-                .or_default()
-                .extend(events.into_iter().map(ReplayEvent::Combo));
+        for (connection_id, state) in &mut self.connections {
+            if let Some(core) = state.replay.take() {
+                merged
+                    .entry(*connection_id)
+                    .or_default()
+                    .extend(core.into_iter().map(ReplayEvent::Core));
+            }
+            if let Some(combo) = state.combo_replay.take() {
+                merged
+                    .entry(*connection_id)
+                    .or_default()
+                    .extend(combo.into_iter().map(ReplayEvent::Combo));
+            }
         }
         for events in merged.values_mut() {
             events.sort_by_key(ReplayEvent::seq);
@@ -1062,7 +1094,11 @@ mod tests {
         let mut bucket_id = None;
         for _ in 0..100 {
             runtime.poll();
-            if let Some(id) = runtime.buckets.keys().next().copied() {
+            if let Some(id) = runtime
+                .connections
+                .iter()
+                .find_map(|(id, state)| state.bucket.as_ref().map(|_| *id))
+            {
                 bucket_id = Some(id);
                 break;
             }
@@ -1075,7 +1111,7 @@ mod tests {
                 .expire_idle(Duration::from_millis(1))
                 .contains(&bucket_id)
         );
-        assert!(!runtime.buckets.contains_key(&bucket_id));
+        assert!(!runtime.connections.contains_key(&bucket_id));
         assert!(runtime.middleware_mut().session_by_user(2).is_none());
         server.stop();
         let _ = std::fs::remove_file(&path);
