@@ -1,16 +1,12 @@
-//! Exchange core kernel skeleton.
+//! Deterministic exchange core kernel.
 //!
-//! This module is the first runtime slice of the gateway/middleware/core design
-//! in `docs/exchange-core-architecture.md`. It deliberately has no network,
-//! no persistence, and no shared memory: the goal is a deterministic,
-//! single-threaded command → matching → event kernel that later slices can wrap
-//! with the middleware transport.
+//! The kernel owns one contract's book, active orders, positions, frozen close,
+//! auction staging, and logical combo queues. It has no network, shared memory,
+//! wall clock, or background work; snapshots are explicit method calls.
 //!
-//! Scope of this slice:
-//! - one contract/order book;
-//! - limit orders only (market/FAK/FOK and combos come later);
-//! - explicit accepted / rejected / trade / canceled events;
-//! - deterministic replay: same command sequence produces the same events.
+//! Supported command shapes include limit/market/FAK/FOK, cancel, auction
+//! staging/uncross, and combo queue operations. The same command sequence always
+//! produces the same private/public projections.
 
 use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use crate::exchange::auction::{self, AuctionOrder, AuctionResult};
@@ -799,8 +795,8 @@ impl ExchangeCore {
     ///
     /// Close orders reserve `frozen_close` before reaching the book. A fully
     /// filled or rejected order releases the reservation immediately; a
-    /// resting order keeps it until it fills or is canceled. Fills do not yet
-    /// mutate positions in this slice.
+    /// resting order keeps it until it fills or is canceled. Fills update
+    /// positions and pending-open exposure.
     pub fn execute_with_plugins<P: PreTradePlugin>(
         &mut self,
         command: Command,
