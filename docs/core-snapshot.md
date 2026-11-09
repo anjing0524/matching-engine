@@ -21,6 +21,8 @@ It does **not** capture:
 
 Auction staging (`auction_orders`, `auction_meta`, auction sequence) and logical
 combo queues (`combo_queues`) are included in the snapshot and round-tripped.
+`ComboEngine` has a separate `ComboEngineSnapshot` covering its queue, both leg
+books, leg positions, frozen close, open-quantity limits, and margin state.
 `save_snapshot` writes the complete state without a separate drain step.
 
 ## Restore

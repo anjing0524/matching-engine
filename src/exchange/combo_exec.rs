@@ -205,6 +205,32 @@ impl ComboExecutor {
         })
     }
 
+    #[must_use]
+    pub fn snapshot_books(&self) -> (Vec<RestingOrder>, Vec<RestingOrder>, u64, u64) {
+        (
+            self.leg1.snapshot_orders(),
+            self.leg2.snapshot_orders(),
+            self.leg1.next_order_id(),
+            self.leg2.next_order_id(),
+        )
+    }
+
+    /// Restores both leg books from a snapshot.
+    ///
+    /// # Errors
+    /// Returns a reason when either book rejects its orders.
+    pub fn restore_books(
+        &mut self,
+        orders1: &[RestingOrder],
+        orders2: &[RestingOrder],
+        next1: u64,
+        next2: u64,
+    ) -> Result<(), String> {
+        self.leg1 = TickBasedOrderBook::restore(self.leg1_spec.clone(), orders1, next1)?;
+        self.leg2 = TickBasedOrderBook::restore(self.leg2_spec.clone(), orders2, next2)?;
+        Ok(())
+    }
+
     fn restore(&mut self, next1: u64, next2: u64) {
         let orders1 = std::mem::take(&mut self.snapshot1);
         let orders2 = std::mem::take(&mut self.snapshot2);

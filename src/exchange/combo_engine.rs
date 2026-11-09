@@ -4,11 +4,11 @@
 //! attempts atomic execution against the two leg books when the queue reaches a
 //! marketable spread.
 
-use crate::domain::orderbook::ContractSpec;
+use crate::domain::orderbook::{ContractSpec, RestingOrder};
 use crate::exchange::combo::ComboQueue;
 use crate::exchange::combo_exec::{ComboExecError, ComboExecutor, ComboFill};
 use crate::exchange::margin::ComboMarginConfig;
-use crate::exchange::positions::{CloseKey, FrozenClose, PositionKey, Positions};
+use crate::exchange::positions::{CloseKey, FrozenClose, Position, PositionKey, Positions};
 use crate::exchange::protocol::{Hedge, Offset, Side};
 
 /// One completed combination fill, suitable for private/public projection.
@@ -128,6 +128,27 @@ pub struct ComboEngine {
     margin_config: Option<ComboMarginConfig>,
     margin_balance: std::collections::HashMap<u64, u128>,
     margin_reservations: std::collections::HashMap<u64, u128>,
+}
+
+/// Serializable state for combo queue, leg books, positions, and margin.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ComboEngineSnapshot {
+    pub queue: ComboQueue,
+    pub leg1_orders: Vec<RestingOrder>,
+    pub leg2_orders: Vec<RestingOrder>,
+    pub leg1_next_order_id: u64,
+    pub leg2_next_order_id: u64,
+    pub leg1_positions: Vec<(PositionKey, Position)>,
+    pub leg2_positions: Vec<(PositionKey, Position)>,
+    pub leg1_frozen: Vec<(CloseKey, u64)>,
+    pub leg2_frozen: Vec<(CloseKey, u64)>,
+    pub close_reservations: Vec<(u64, (CloseKey, CloseKey, u64))>,
+    pub max_open_qty_per_user: Option<u64>,
+    pub open_qty_per_user: Vec<(u64, u64)>,
+    pub margin_config: Option<ComboMarginConfig>,
+    pub margin_balance: Vec<(u64, u128)>,
+    pub margin_reservations: Vec<(u64, u128)>,
+    pub next_event_seq: u64,
 }
 
 impl ComboEngine {
@@ -457,6 +478,78 @@ impl ComboEngine {
     }
 
     #[must_use]
+    pub fn snapshot(&self) -> ComboEngineSnapshot {
+        let (leg1_orders, leg2_orders, leg1_next_order_id, leg2_next_order_id) =
+            self.executor.snapshot_books();
+        let mut close_reservations: Vec<_> = self
+            .close_reservations
+            .iter()
+            .map(|(id, value)| (*id, *value))
+            .collect();
+        close_reservations.sort_by_key(|(id, _)| *id);
+        let mut open_qty: Vec<_> = self
+            .open_qty_per_user
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect();
+        open_qty.sort_by_key(|(id, _)| *id);
+        let mut margin_balance: Vec<_> =
+            self.margin_balance.iter().map(|(k, v)| (*k, *v)).collect();
+        margin_balance.sort_by_key(|(id, _)| *id);
+        let mut margin_reservations: Vec<_> = self
+            .margin_reservations
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect();
+        margin_reservations.sort_by_key(|(id, _)| *id);
+        ComboEngineSnapshot {
+            queue: self.queue.clone(),
+            leg1_orders,
+            leg2_orders,
+            leg1_next_order_id,
+            leg2_next_order_id,
+            leg1_positions: self.leg1_positions.snapshot(),
+            leg2_positions: self.leg2_positions.snapshot(),
+            leg1_frozen: self.leg1_frozen.snapshot(),
+            leg2_frozen: self.leg2_frozen.snapshot(),
+            close_reservations,
+            max_open_qty_per_user: self.max_open_qty_per_user,
+            open_qty_per_user: open_qty,
+            margin_config: self.margin_config,
+            margin_balance,
+            margin_reservations,
+            next_event_seq: self.next_event_seq,
+        }
+    }
+
+    /// Restores a combo engine snapshot.
+    ///
+    /// # Errors
+    /// Returns a reason when leg books reject their orders.
+    pub fn restore(&mut self, snapshot: ComboEngineSnapshot) -> Result<(), String> {
+        self.executor.restore_books(
+            &snapshot.leg1_orders,
+            &snapshot.leg2_orders,
+            snapshot.leg1_next_order_id,
+            snapshot.leg2_next_order_id,
+        )?;
+        self.queue = snapshot.queue;
+        self.leg1_positions.restore(snapshot.leg1_positions);
+        self.leg2_positions.restore(snapshot.leg2_positions);
+        self.leg1_frozen.restore(snapshot.leg1_frozen);
+        self.leg2_frozen.restore(snapshot.leg2_frozen);
+        self.close_reservations = snapshot.close_reservations.into_iter().collect();
+        self.max_open_qty_per_user = snapshot.max_open_qty_per_user;
+        self.open_qty_per_user = snapshot.open_qty_per_user.into_iter().collect();
+        self.margin_config = snapshot.margin_config;
+        self.margin_balance = snapshot.margin_balance.into_iter().collect();
+        self.margin_reservations = snapshot.margin_reservations.into_iter().collect();
+        self.next_event_seq = snapshot.next_event_seq;
+        self.events.clear();
+        Ok(())
+    }
+
+    #[must_use]
     pub fn executor(&self) -> &ComboExecutor {
         &self.executor
     }
@@ -717,5 +810,31 @@ mod tests {
         let fills = engine.run();
         assert_eq!(fills.len(), 1);
         assert_eq!(engine.queue_len(), 0);
+    }
+    #[test]
+    fn snapshot_roundtrips_queue_and_margin() {
+        let mut engine = ComboEngine::new(
+            ContractSpec::new("LEG1", 1, 1, 100_000),
+            ContractSpec::new("LEG2", 1, 1, 100_000),
+        )
+        .with_max_open_qty_per_user(10)
+        .with_margin_config(ComboMarginConfig::new(10, 1_000));
+        engine.set_margin_balance(1, 100_000);
+        assert!(
+            engine
+                .queue_checked(1, 1, Side::Buy, 1_000, 2, Offset::Open, Hedge::Spec)
+                .is_ok()
+        );
+        let snapshot = engine.snapshot();
+        let json = serde_json::to_string(&snapshot).unwrap();
+        let snapshot: ComboEngineSnapshot = serde_json::from_str(&json).unwrap();
+        let mut restored = ComboEngine::new(
+            ContractSpec::new("LEG1", 1, 1, 100_000),
+            ContractSpec::new("LEG2", 1, 1, 100_000),
+        );
+        restored.restore(snapshot).unwrap();
+        assert_eq!(restored.queue_len(), 1);
+        assert!(restored.cancel(1));
+        assert_eq!(restored.queue_len(), 0);
     }
 }

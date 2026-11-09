@@ -6,7 +6,7 @@
 //! rate.
 
 /// Margin parameters for one combination product.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ComboMarginConfig {
     pub multiplier: u64,
     pub rate_bps: u64,
