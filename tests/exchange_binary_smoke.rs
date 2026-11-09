@@ -1,10 +1,12 @@
 //! Deployment smoke test for the `exchange` binary.
 
+use matching_engine::exchange::command_log::read_segment;
 use matching_engine::exchange::gateway::GatewayFrame;
 use matching_engine::exchange::protocol::{
     Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
     VolumeCondition,
 };
+use matching_engine::exchange::result_log::{read_private_log, read_public_log};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::process::{Command as ProcessCommand, Stdio};
@@ -26,6 +28,10 @@ fn exchange_binary_accepts_order_and_serves_metrics() {
             "127.0.0.1:0",
             "--command-log",
             dir.join("commands.log").to_str().unwrap(),
+            "--public-log",
+            dir.join("public.log").to_str().unwrap(),
+            "--private-log",
+            dir.join("private.log").to_str().unwrap(),
         ])
         .stdout(Stdio::piped())
         .spawn()
@@ -99,5 +105,12 @@ fn exchange_binary_accepts_order_and_serves_metrics() {
 
     let _ = child.kill();
     let _ = child.wait();
+    assert!(!read_segment(&dir.join("commands.log")).unwrap().is_empty());
+    assert!(!read_public_log(&dir.join("public.log")).unwrap().is_empty());
+    assert!(
+        !read_private_log(&dir.join("private.log"))
+            .unwrap()
+            .is_empty()
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -103,7 +103,19 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
     let (cmd_producer, cmd_consumer) = create(&core_path, 1 << 16)?;
     let (combo_producer, _combo_consumer) = create(&combo_path, 1 << 12)?;
 
-    let middleware = MiddlewareSequencer::new(cmd_producer).with_combo_transport(combo_producer);
+    let mut middleware =
+        MiddlewareSequencer::new(cmd_producer).with_combo_transport(combo_producer);
+    if let Some(path) = &args.command_log {
+        middleware = middleware.with_command_log(std::path::Path::new(path))?;
+    }
+    if let Some(directory) = &args.command_log_dir {
+        middleware = middleware.with_rotating_command_log(
+            std::path::Path::new(directory),
+            "commands",
+            args.command_log_max_bytes,
+            args.command_log_retain,
+        )?;
+    }
     let (gateway, gateway_events) = start_gateway(&args.listen)?;
     let gateway_addr = gateway.addr();
     let mut gateway_runtime =
