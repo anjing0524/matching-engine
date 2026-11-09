@@ -89,6 +89,16 @@ RSS sampler range: 113,736–143,540 KB
 exit status: 0
 ```
 
+Post-refactor regression (kernel outcome projection, combo trials, unified
+snapshot codec, EventFanout, connection state):
+
+```text
+636,600,000 commands in 300.04s
+≈ 2,121,725 cmd/s
+Maximum resident set size: 140,656 KB
+exit status: 0
+```
+
 A 1-hour run completed after the server was reachable again:
 
 ```text
