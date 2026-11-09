@@ -9,10 +9,10 @@ use std::io;
 use std::path::Path;
 
 #[derive(serde::Serialize, serde::Deserialize)]
-struct Envelope<T> {
+struct Envelope {
     version: u32,
-    snapshot: T,
     checksum: u32,
+    payload: String,
 }
 
 /// Encodes one snapshot value with a version and CRC32 checksum.
@@ -20,11 +20,11 @@ struct Envelope<T> {
 /// # Errors
 /// Returns a JSON serialization error.
 pub fn encode<T: Serialize>(snapshot: &T, version: u32) -> Result<String, serde_json::Error> {
-    let payload = serde_json::to_vec(snapshot)?;
+    let payload = serde_json::to_string(snapshot)?;
     serde_json::to_string(&Envelope {
         version,
-        snapshot,
-        checksum: crc32fast::hash(&payload),
+        checksum: crc32fast::hash(payload.as_bytes()),
+        payload,
     })
 }
 
@@ -32,22 +32,18 @@ pub fn encode<T: Serialize>(snapshot: &T, version: u32) -> Result<String, serde_
 ///
 /// # Errors
 /// Returns a message for JSON, version, or checksum failures.
-pub fn decode<T: DeserializeOwned + Serialize>(
-    json: &str,
-    expected_version: u32,
-) -> Result<T, String> {
-    let envelope: Envelope<T> = serde_json::from_str(json).map_err(|error| error.to_string())?;
+pub fn decode<T: DeserializeOwned>(json: &str, expected_version: u32) -> Result<T, String> {
+    let envelope: Envelope = serde_json::from_str(json).map_err(|error| error.to_string())?;
     if envelope.version != expected_version {
         return Err(format!(
             "unsupported snapshot version {} (expected {expected_version})",
             envelope.version
         ));
     }
-    let payload = serde_json::to_vec(&envelope.snapshot).map_err(|error| error.to_string())?;
-    if crc32fast::hash(&payload) != envelope.checksum {
+    if crc32fast::hash(envelope.payload.as_bytes()) != envelope.checksum {
         return Err("snapshot checksum mismatch".to_string());
     }
-    Ok(envelope.snapshot)
+    serde_json::from_str(&envelope.payload).map_err(|error| error.to_string())
 }
 
 /// Writes a snapshot with atomic replacement.
@@ -67,7 +63,7 @@ pub fn save<T: Serialize>(path: &Path, snapshot: &T, version: u32) -> io::Result
 /// # Errors
 /// Returns an I/O error for read failures, or invalid data for JSON, version,
 /// or checksum failures.
-pub fn load<T: DeserializeOwned + Serialize>(path: &Path, expected_version: u32) -> io::Result<T> {
+pub fn load<T: DeserializeOwned>(path: &Path, expected_version: u32) -> io::Result<T> {
     let json = std::fs::read_to_string(path)?;
     decode(&json, expected_version)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
@@ -88,7 +84,7 @@ mod tests {
         assert_eq!(decode::<Value>(&json, 3).unwrap(), Value { id: 7 });
         assert!(decode::<Value>(&json, 2).is_err());
 
-        let corrupted = json.replacen("\"id\":7", "\"id\":8", 1);
+        let corrupted = json.replacen("\"payload\":\"", "\"payload\":\"x", 1);
         assert!(decode::<Value>(&corrupted, 3).is_err());
     }
 }

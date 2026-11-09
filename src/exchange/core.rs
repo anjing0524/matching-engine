@@ -184,7 +184,7 @@ pub struct CoreSnapshot {
 }
 
 /// Current on-disk snapshot format version.
-pub const SNAPSHOT_VERSION: u32 = 2;
+pub const SNAPSHOT_VERSION: u32 = 3;
 
 /// The deterministic core state machine for one contract.
 pub struct ExchangeCore {
