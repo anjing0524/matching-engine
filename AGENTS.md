@@ -1,3 +1,7 @@
+## Rust style
+
+Rust code must follow the [Google Rust Style Guide](https://google.github.io/styleguide/rustguide.html). Adherence is mandatory: apply it to every `.rs` file you create or modify.
+
 ## Agent skills
 
 ### Issue tracker
