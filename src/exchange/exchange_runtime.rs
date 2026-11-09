@@ -4,9 +4,9 @@
 //! core command consumer, then routes core private events back to the matching
 //! gateway session.
 
-use crate::exchange::combo_runtime::ComboRuntime;
+use crate::exchange::combo_runtime::{ComboRuntime, ComboRuntimeSnapshot};
 use crate::exchange::config::ExchangeConfig;
-use crate::exchange::core::ExchangeCore;
+use crate::exchange::core::{CoreSnapshot, ExchangeCore};
 use crate::exchange::gateway_runtime::GatewayRuntime;
 use crate::exchange::gateway_server::GatewayServerHandle;
 use crate::exchange::market_data::MarketDataPublisher;
@@ -17,6 +17,13 @@ use crate::exchange::result_log::{PrivateResultLog, PublicResultLog};
 use crate::exchange::runner::CoreRunner;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// Full runtime snapshot: core state plus optional combo state.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ExchangeSnapshot {
+    pub core: CoreSnapshot,
+    pub combo: Option<ComboRuntimeSnapshot>,
+}
 
 /// Composite gateway/middleware/core runtime for one process.
 pub struct ExchangeRuntime<P> {
@@ -253,6 +260,27 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
     #[must_use]
     pub fn core(&self) -> &ExchangeCore {
         self.core.core()
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> ExchangeSnapshot {
+        ExchangeSnapshot {
+            core: self.core.core().snapshot(),
+            combo: self.combo.as_ref().map(ComboRuntime::snapshot),
+        }
+    }
+
+    /// Restores core and combo state.
+    ///
+    /// # Errors
+    /// Returns an error for invalid core snapshot data or combo runtime mismatch.
+    pub fn restore_snapshot(&mut self, snapshot: ExchangeSnapshot) -> Result<(), String> {
+        self.core.core_mut().restore_snapshot(snapshot.core)?;
+        match (self.combo.as_mut(), snapshot.combo) {
+            (Some(combo), Some(combo_snapshot)) => combo.restore_snapshot(combo_snapshot),
+            (None, None) => Ok(()),
+            _ => Err("snapshot combo state does not match runtime configuration".to_string()),
+        }
     }
 
     pub fn gateway_mut(&mut self) -> &mut GatewayRuntime {

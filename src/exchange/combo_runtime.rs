@@ -3,13 +3,21 @@
 //! Runs the combination queue/executor and forwards successful fill events to
 //! the combo UDP publisher.
 
-use crate::exchange::combo_engine::ComboEngine;
+use crate::exchange::combo_engine::{ComboEngine, ComboEngineSnapshot};
 use crate::exchange::combo_market_data::ComboMarketDataPublisher;
 use crate::exchange::gateway_runtime::GatewayRuntime;
 use crate::exchange::gateway_server::GatewayServerHandle;
 use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
 use crate::exchange::protocol::{Command, CommandType};
 use crate::exchange::transport::CommandConsumer;
+
+/// Serializable combo runtime state.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ComboRuntimeSnapshot {
+    pub engine: ComboEngineSnapshot,
+    pub next_private_seq: u64,
+    pub public_sent: u64,
+}
 
 /// Composite combo engine plus optional public transport.
 pub struct ComboRuntime {
@@ -188,6 +196,32 @@ impl ComboRuntime {
         &self.engine
     }
 
+    #[must_use]
+    pub fn next_private_seq(&self) -> u64 {
+        self.next_private_seq
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> ComboRuntimeSnapshot {
+        ComboRuntimeSnapshot {
+            engine: self.engine.snapshot(),
+            next_private_seq: self.next_private_seq,
+            public_sent: self.public_sent,
+        }
+    }
+
+    /// Restores combo engine and private sequence state.
+    ///
+    /// # Errors
+    /// Returns an error when the saved leg books are invalid.
+    pub fn restore_snapshot(&mut self, snapshot: ComboRuntimeSnapshot) -> Result<(), String> {
+        self.engine.restore(snapshot.engine)?;
+        self.next_private_seq = snapshot.next_private_seq;
+        self.public_sent = snapshot.public_sent;
+        self.command_events.clear();
+        Ok(())
+    }
+
     pub fn engine_mut(&mut self) -> &mut ComboEngine {
         &mut self.engine
     }
@@ -321,5 +355,27 @@ mod tests {
         let fill = subscriber.recv().unwrap();
         assert_eq!(fill.quantity, 5);
         assert_eq!(fill.spread_ticks, 49_900);
+    }
+    #[test]
+    fn runtime_snapshot_restores_queue_and_sequence() {
+        let mut engine = ComboEngine::new(
+            ContractSpec::new("LEG1", 1, 1_000, 100_000),
+            ContractSpec::new("LEG2", 1, 1, 100_000),
+        )
+        .with_max_open_qty_per_user(10);
+        assert!(
+            engine
+                .queue_checked(42, 1, Side::Buy, 49_900, 5, Offset::Open, Hedge::Spec)
+                .is_ok()
+        );
+        let runtime = ComboRuntime::new(engine);
+        let snapshot = runtime.snapshot();
+        let mut restored = ComboRuntime::new(ComboEngine::new(
+            ContractSpec::new("LEG1", 1, 1_000, 100_000),
+            ContractSpec::new("LEG2", 1, 1, 100_000),
+        ));
+        restored.restore_snapshot(snapshot).unwrap();
+        assert_eq!(restored.engine().queue_len(), 1);
+        assert_eq!(restored.next_private_seq(), 1);
     }
 }
