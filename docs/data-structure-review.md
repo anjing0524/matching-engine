@@ -51,15 +51,34 @@ Fedora i7-8559U, `trading_core_benchmark`, sample-size 10.
 | crossing 200k | 1,902,807 cmd/s | 2,037,448 cmd/s |
 | resting 200k | 1,107,047 cmd/s | 1,162,600 cmd/s |
 
+A later run reached 2,230,429 cmd/s crossing and 1,230,076 cmd/s resting; the
+gap is benchmark variance, not a second change.
+
 The benchmark is a wall-clock harness, not a stabilised criterion benchmark;
 treat the numbers as directional.
 
+### 4. Removed persistent auction metadata
+
+`auction_orders: Vec<AuctionOrder>` already holds user/side/offset/hedge, so the
+persistent `auction_meta` map was removed. `uncross_auction` builds one transient
+lookup for the duration of the uncross. `CORE_SNAPSHOT_VERSION` is now `6`.
+
 ## Remaining data-structure candidates
 
-1. **Auction metadata duplication**
-   `auction_orders: Vec<AuctionOrder>` already holds user/side/offset/hedge,
-   while `auction_meta: HashMap<u64, ...>` repeats it. Build the lookup only for
-   the duration of `uncross_auction`; drop the persistent map.
+1. **Positions key hashing**
+   `Positions` and `FrozenClose` hash composite keys on every fill. A packed
+   `u64`/`u128` key or an account-indexed arena would remove struct hashing, but
+   account IDs can be sparse; measure before changing.
+
+2. **Event vectors**
+   Production already uses `execute_with_plugins_discard`; `CoreEvent` vectors
+   remain only on the test/API surface. Do not add more variants without a
+   discard path.
+
+3. **Gateway replay batching**
+   `take_all_replays` / `take_replay_batches` build temporary maps and re-merge
+   `ReplayEvent`s. A single downlink-owned queue would remove the temporary
+   allocations, but reconnect is not hot.
 
 2. **Positions key hashing**
    `Positions` and `FrozenClose` hash composite keys on every fill. A packed
