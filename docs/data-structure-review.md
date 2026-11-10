@@ -103,13 +103,32 @@ gateway drain. It now maintains:
 active_count / closed_count
 by_user: U64MixMap<u64>          user_id -> active session
 by_gateway: U64MixMap<Vec<u64>>  gateway_id -> active sessions
+by_identity: U128MixMap<u128, u64> (member,user,seat) -> active session
 closed_order: VecDeque<u64>      bounded pruning order
 ```
 
 This makes `session_counts` and `find_active_by_user` O(1) and
 `drain_gateway` O(sessions on that gateway) instead of O(all sessions).
 `find_active_by_user` is on the private-dispatch path, so this also removes a
-per-event scan.
+per-event scan. Login takeover resolves its `(member,user,seat)` key directly
+instead of scanning every session.
+
+### 9. Combo maps use the shared mixer
+
+`ComboQueue::locations` and the combo engine's close/margin maps are keyed by
+dense order/user IDs and now use `U64MixMap` instead of SipHash.
+
+### 10. Idle expiry profile
+
+An ignored test profiles 64k connections:
+
+```text
+cargo test --lib trading::gateway::runtime::tests::idle_expiry_64k_profile -- --ignored --nocapture
+idle_expiry_64k: 64000 connections in 2.771373ms
+```
+
+Called once per `timeout/2` (7.5s for the default 15s timeout), that scan is
+negligible in debug; a timing wheel is not justified. Keep the simpler scan.
 
 ## Remaining data-structure candidates
 
@@ -125,6 +144,6 @@ per-event scan.
 
 ## Next recommended step
 
-Measure idle-session expiry. `expire_idle` still scans every connection; a
-timing wheel or deadline heap is only worth it if a 64k-connection profile shows
-the scan, otherwise keep the simpler full scan.
+Stop adding indexes unless a profile shows a hot scan. The remaining structural
+debt is event materialisation (`CoreEvent` vectors on the test/API surface) and
+snapshot `Vec<(K,V)>` encoding; both are cold-path concerns.
