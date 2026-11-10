@@ -136,6 +136,15 @@ The package is now a workspace. Step 1 extracted `trading-domain`, which owns th
 order book and shared value types. The root `trading-system-engine` package still
 owns kernel, gateway, transport, snapshot, market data, and binaries.
 
-This was done because the module cycles were already removed and the domain
-crate has no runtime dependencies; it is the lowest-risk first split. The next
-step, if still useful, is extracting `trading-kernel` from the root package.
+Measured clean release build on Fedora:
+
+```text
+before split: 52.07s
+after split:  52.08s
+```
+
+The split gives dependency isolation and an independently testable domain crate,
+not faster compilation; dependencies dominate the build. Extracting
+`trading-kernel` next would not improve build time either. Do it only if a
+separate kernel API or team boundary is needed; otherwise keep the current
+two-package workspace.
