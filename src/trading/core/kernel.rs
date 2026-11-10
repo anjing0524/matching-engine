@@ -591,6 +591,7 @@ impl TradingCore {
     /// The order book owns order-id allocation and price/tick validation; this
     /// kernel maps the command into the domain request and projects the result
     /// into protocol-neutral core events.
+    #[cfg(test)]
     pub fn submit_limit(&mut self, command: LimitOrderCommand) -> Vec<CoreEvent> {
         let outcome = self.submit_limit_outcome(command);
         let mut events = Vec::new();
