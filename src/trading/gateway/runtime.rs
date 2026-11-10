@@ -1285,4 +1285,95 @@ mod tests {
         assert!(expired.is_empty());
         let _ = std::fs::remove_file(&path);
     }
+    #[test]
+    #[ignore = "64k gateway profile; run explicitly"]
+    fn gateway_64k_profile() {
+        use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
+        use crate::trading::transport::session::SessionInfo;
+        use std::hint::black_box;
+        use std::sync::mpsc::channel;
+
+        let path = std::env::temp_dir().join(format!(
+            "trading-system-engine-gateway-profile-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let mut middleware = MiddlewareSequencer::new(producer);
+        let (_sender, events) = channel();
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let mut runtime = GatewayRuntime::new(middleware, events);
+        for id in 1..=64_000u64 {
+            runtime.middleware_mut().open_session(SessionInfo {
+                session_id: id,
+                gateway_id: 1,
+                member_id: 1,
+                user_id: u32::try_from(id).unwrap(),
+                seat_id: 1,
+                last_private_seq: 0,
+                active: true,
+            });
+            runtime.connections.insert(id, ConnectionState::new());
+        }
+        runtime.middleware_mut().prune_closed_sessions(0);
+
+        let start = Instant::now();
+        for id in 1..=64_000u64 {
+            black_box(
+                runtime
+                    .middleware_mut()
+                    .session_by_user(u32::try_from(id).unwrap()),
+            );
+        }
+        let lookup = start.elapsed();
+
+        let start = Instant::now();
+        for _ in 0..1_000 {
+            black_box(runtime.poll_effects());
+        }
+        let poll = start.elapsed();
+
+        let start = Instant::now();
+        runtime.dispatch_private(
+            &server,
+            (1..=64_000u64).map(|id| PrivateEvent {
+                seq: 0,
+                order_id: id,
+                client_order_id: id,
+                account_id: id,
+                status: PrivateStatus::Accepted,
+                filled_delta: 0,
+                remaining: 1,
+                reason: None,
+            }),
+        );
+        let dispatch = start.elapsed();
+
+        let event = PrivateEvent {
+            seq: 1,
+            order_id: 1,
+            client_order_id: 1,
+            account_id: 1,
+            status: PrivateStatus::Accepted,
+            filled_delta: 0,
+            remaining: 1,
+            reason: None,
+        };
+        for id in 1..=64_000u64 {
+            if let Some(state) = runtime.connections.get_mut(&id) {
+                state.replay = vec![ReplayEvent::Core(event.clone())];
+            }
+            runtime.replay_pending.insert(id);
+        }
+        let start = Instant::now();
+        let batches = runtime.take_replay_batches();
+        let replay = start.elapsed();
+        assert_eq!(batches.len(), 64_000);
+
+        println!(
+            "gateway_64k: lookup={lookup:?} poll_1000={poll:?} dispatch={dispatch:?} replay={replay:?}"
+        );
+        server.stop();
+        let _ = std::fs::remove_file(&path);
+    }
 }
