@@ -1849,13 +1849,12 @@ mod tests {
 
         let mut tampered: serde_json::Value = serde_json::from_str(&json).unwrap();
         tampered["checksum"] = serde_json::Value::from(0);
-        let mut target = core();
-        assert!(
-            target
-                .restore_snapshot_json(&tampered.to_string())
-                .unwrap_err()
-                .contains("checksum")
-        );
+        let error = crate::trading::snapshot::snapshot_file::decode::<CoreSnapshot>(
+            &tampered.to_string(),
+            crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
+        )
+        .unwrap_err();
+        assert!(error.contains("checksum"));
         let _ = std::fs::remove_file(&path);
     }
     #[test]
