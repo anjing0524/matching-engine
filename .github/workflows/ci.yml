@@ -31,8 +31,8 @@ jobs:
         run: cargo build --release --bins
       - name: Build lean exchange
         run: cargo build --release --no-default-features --bins
-      - name: Test lean exchange lib
-        run: cargo test --release --no-default-features --lib
+      - name: Test lean exchange
+        run: cargo test --release --no-default-features
 
   container:
     runs-on: ubuntu-latest
