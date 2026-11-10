@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        run: docker build -f deploy/Dockerfile -t trading-runtime:ci .
+        run: docker build -f deploy/Dockerfile -t trading-engine:ci .
       - name: Smoke run
         run: |
           docker run --rm trading-engine:ci \
