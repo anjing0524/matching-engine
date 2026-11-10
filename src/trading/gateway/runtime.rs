@@ -8,11 +8,11 @@ use crate::trading::combo::engine::ComboPrivateFill;
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::gateway::GatewayFrame;
 use crate::trading::gateway::auth::GatewayCredentials;
-use crate::trading::gateway::server::{GatewayEvent, GatewayServerHandle};
 use crate::trading::gateway::private_replay::{
     ComboPrivateReplayBuffer, PrivateReplayBuffer, ReplayEvent,
 };
 use crate::trading::gateway::rate_limit::TokenBucket;
+use crate::trading::gateway::server::{GatewayEvent, GatewayServerHandle};
 use crate::trading::gateway::session::SessionInfo;
 use crate::trading::transport::middleware::MiddlewareSequencer;
 use std::collections::HashMap;

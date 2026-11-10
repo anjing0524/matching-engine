@@ -13,7 +13,7 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let proxy = gateway_proxy::start(&args.listen, args.middleware.clone())?;
+    let proxy = proxy::start(&args.listen, args.middleware.clone())?;
     println!(
         "gateway listening on {} -> middleware {}",
         proxy.addr(),

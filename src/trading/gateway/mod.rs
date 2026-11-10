@@ -1,13 +1,13 @@
 //! Member connection, session, authentication, and private downlink.
 
 pub mod auth;
-pub mod frame;
 pub mod directory;
+pub mod frame;
+pub mod private_replay;
 pub mod proxy;
+pub mod rate_limit;
 pub mod runtime;
 pub mod server;
-pub mod private_replay;
-pub mod rate_limit;
 pub mod session;
 
 pub use self::frame::*;
