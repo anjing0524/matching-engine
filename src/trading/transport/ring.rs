@@ -4,10 +4,10 @@
 //! is the middleware sequencer; the consumer is the core. No syscalls are made
 //! on the hot path after the mapping is established.
 
-use crate::shared::spsc_ring::{PushError, SpscRing};
 use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
 use crate::trading::core::protocol::{COMMAND_SLOT_SIZE, Command, ProtocolError, Side};
 use crate::trading::core::public_events::{PublicEvent, PublicEventType};
+use crate::trading::transport::spsc_ring::{PushError, SpscRing};
 use std::io;
 use std::path::Path;
 

@@ -6,6 +6,7 @@ pub mod result_log;
 pub mod ring;
 pub mod runner;
 pub mod session;
+pub mod spsc_ring;
 
 pub use self::middleware::MiddlewareSequencer;
 pub use self::ring::*;
