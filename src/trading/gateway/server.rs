@@ -21,6 +21,8 @@ use std::time::Duration;
 const LISTENER_TOKEN: Token = Token(0);
 const WAKER_TOKEN: Token = Token(1);
 const FIRST_CONNECTION_TOKEN: usize = 2;
+/// Slow-client protection: disconnect instead of growing an unbounded queue.
+const MAX_OUTGOING_BYTES: usize = 1 << 20;
 
 /// Event emitted by the gateway listener.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -294,17 +296,24 @@ impl IoLoop {
         loop {
             match receiver.try_recv() {
                 Ok(WriterCommand::Send(connection_id, frame)) => {
+                    let mut overflow = false;
                     if let Some(connection) = self.connections.get_mut(&connection_id) {
                         connection.outgoing.extend(frame.encode());
-                        let token = Token(
-                            FIRST_CONNECTION_TOKEN
-                                + usize::try_from(connection_id.saturating_sub(1)).unwrap_or(0),
-                        );
-                        let _ = self.poll.registry().reregister(
-                            &mut connection.stream,
-                            token,
-                            Interest::READABLE | Interest::WRITABLE,
-                        );
+                        overflow = connection.outgoing.len() > MAX_OUTGOING_BYTES;
+                        if !overflow {
+                            let token = Token(
+                                FIRST_CONNECTION_TOKEN
+                                    + usize::try_from(connection_id.saturating_sub(1)).unwrap_or(0),
+                            );
+                            let _ = self.poll.registry().reregister(
+                                &mut connection.stream,
+                                token,
+                                Interest::READABLE | Interest::WRITABLE,
+                            );
+                        }
+                    }
+                    if overflow {
+                        self.close_connection(connection_id);
                     }
                 }
                 Ok(WriterCommand::Close(connection_id)) => {
