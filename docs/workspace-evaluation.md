@@ -33,29 +33,29 @@ trading/
 └── runtime/       composition, event fanout
 ```
 
-## Internal dependency cycles
+## Internal dependency cycles resolved
 
-A naive workspace split is blocked by these module cycles:
+The earlier cycle-breaking work is complete:
 
 ```text
-core      -> snapshot
-snapshot  -> core
-
-gateway   -> transport
-transport -> gateway
-
-combo     -> gateway
+core      -> snapshot   removed (core has no snapshot-file dependency)
+gateway  <-> transport  removed (gateway -> transport only)
+combo     -> gateway    removed (combo emits effects; runtime dispatches)
 ```
 
-- `snapshot::replay` needs `TradingCore`; `core` snapshot methods need
-  `snapshot_file`.
-- `transport::middleware` owns `SessionRegistry`; `gateway::runtime` uses
-  `MiddlewareSequencer`.
-- `combo::runtime` dispatches through `GatewayRuntime`; gateway exposes combo
-  private fills.
+Current dependency direction:
 
-Crates cannot contain cyclic dependencies, so these seams must be moved or
-inverted first.
+```text
+core      -> (none)
+snapshot  -> core
+transport -> core
+gateway   -> core, transport, combo
+combo     -> core, transport
+runtime   -> all of the above
+```
+
+The package is now split-ready if a concrete need appears; the remaining
+blockers are public-interface ownership, not dependency cycles.
 
 ## Rust convention
 
@@ -125,6 +125,7 @@ need justifies the extra public-interface work.
 
 ## Decision
 
-Keep `trading-system-engine` as one Cargo package. Revisit after the module
-cycles above are removed, or when a concrete reuse/build-time requirement
+Keep `trading-system-engine` as one Cargo package. The module cycles have been
+removed, so a future three-crate split no longer requires an architectural
+rewrite; only do it when a concrete reuse, team, or build-time requirement
 appears.

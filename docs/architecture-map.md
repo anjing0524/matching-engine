@@ -71,6 +71,10 @@ Entry points:
 - `trading_binary_smoke` / `trading_split_smoke` exercise process entry points.
 - `trading_soak` / `trading_timed_soak` exercise long-running state.
 
+Module dependencies are acyclic: core has no runtime dependencies, snapshot and
+transport depend on core, gateway/combo depend on transport/core, and runtime is
+the composition root.
+
 ## Package layout decision
 
 The project intentionally remains one Cargo package for now. See
