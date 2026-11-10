@@ -48,16 +48,6 @@ Entry points:
 - `exchange-core` — core only
 - `exchange-gateway` — standalone relay
 
-## 2. Legacy persistent service
-
-```
-interfaces → application → domain ← infrastructure
-```
-
-This is the original single-book service with WAL, snapshots, standby
-replication, and its own gateway. It is kept for compatibility and the
-operations scripts under `scripts/`. Do not route exchange commands through it.
-
 ## Tests as interfaces
 
 - `exchange::core` tests exercise the kernel directly.
