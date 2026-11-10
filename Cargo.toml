@@ -9,108 +9,22 @@ serde = { version = "1.0", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tikv-jemallocator = "0.5"
-crossbeam = "0.8"
-mio = { version = "1.0", features = ["os-poll", "net"] }
 memmap2 = "0.9"
 socket2 = { version = "0.5", features = ["all"] }
-rand = "0.8"
 smallvec = "1.13"
 thiserror = "2.0"
 clap = { version = "4.5.52", features = ["derive"] }
-prometheus = "0.14"
 crc32fast = "1.4"
-signal-hook = "0.3"
 serde_json = "1.0"
 
 # Optional dependencies
-core_affinity = { version = "0.8", optional = true }
-
-[features]
-# Original persistent single-book service (WAL, standby, legacy CLI).
-# Disable with `--no-default-features` to build only the exchange runtime.
-default = ["legacy"]
-legacy = []
-# CPU affinity support (requires platform support)
-cpu-affinity = ["core_affinity"]
-
-[[bin]]
-name = "matching-engine"
-path = "src/main.rs"
-required-features = ["legacy"]
-
-[[bin]]
-name = "gateway"
-path = "src/bin/gateway.rs"
-required-features = ["legacy"]
-
-[[bin]]
-name = "ring_probe"
-path = "src/bin/ring_probe.rs"
-required-features = ["legacy"]
-
-[[bin]]
-name = "standby"
-path = "src/bin/standby.rs"
-required-features = ["legacy"]
-
-
-[[example]]
-name = "network_server"
-path = "examples/network_server.rs"
-required-features = ["legacy"]
-
-[[test]]
-name = "chaos_engineering_test"
-path = "tests/chaos_engineering_test.rs"
-required-features = ["legacy"]
-
-[[test]]
-name = "crash_recovery_test"
-path = "tests/crash_recovery_test.rs"
-required-features = ["legacy"]
-
-[[test]]
-name = "gateway_split_test"
-path = "tests/gateway_split_test.rs"
-required-features = ["legacy"]
 
 [dev-dependencies]
-bytes = "1.11"
 criterion = "0.7"
 tempfile = "3.10"
-parking_lot = "0.12"
-num_cpus = "1.16"
-
-[[bench]]
-name = "network_benchmark"
-harness = false
-
-[[bench]]
-name = "e2e_network_benchmark"
-harness = false
 
 [[bench]]
 name = "tick_orderbook_benchmark"
-harness = false
-
-[[bench]]
-name = "network_middleware_benchmark"
-harness = false
-
-[[bench]]
-name = "e2e_matching_engine_benchmark"
-harness = false
-
-[[bench]]
-name = "multicore_benchmark"
-harness = false
-
-[[bench]]
-name = "hft_benchmark"
-harness = false
-
-[[bench]]
-name = "latency_percentiles"
 harness = false
 
 [[bench]]

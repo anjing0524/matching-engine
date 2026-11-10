@@ -1,18 +1,14 @@
-//! Shared types and utilities used across layers.
+//! Shared types and utilities used by the exchange runtime.
 //!
-//! - [`protocol`]: wire protocol messages
+//! - [`protocol`]: order/event wire protocol messages
 //! - [`collections`]: fast bitmap and other shared collections
-//! - [`timestamp`]: batched timestamp reads
-//! - [`metrics`]: Prometheus metrics
-//! - [`wire`]: compact binary codec used by the network and the WAL
-//! - [`latency`]: nanosecond latency percentiles
+//! - [`wire`]: compact binary codec
+//! - [`spsc_ring`]: shared-memory SPSC ring
+//! - [`symbol`]: interned symbols
 pub mod collections;
-pub mod latency;
-pub mod metrics;
 pub mod protocol;
 pub mod spsc_ring;
 pub mod symbol;
-pub mod timestamp;
 pub mod wire;
 
 pub use protocol::{
@@ -21,4 +17,3 @@ pub use protocol::{
     TradeNotification,
 };
 pub use symbol::SymbolId;
-pub use timestamp::get_fast_timestamp;
