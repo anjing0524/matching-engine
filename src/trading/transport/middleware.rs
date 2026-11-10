@@ -7,7 +7,7 @@
 
 use crate::trading::core::protocol::{Command, CommandType};
 use crate::trading::core::schedule::{ScheduleDriver, TradingSchedule};
-use crate::trading::gateway::session::{SessionInfo, SessionRegistry};
+use crate::trading::transport::session::{SessionInfo, SessionRegistry};
 use crate::trading::transport::command_log::{CommandLogWriter, RotatingCommandLog};
 use crate::trading::transport::{CommandProducer, CommandTransportError};
 
@@ -47,7 +47,7 @@ impl MiddlewareSequencer {
     pub fn open_or_takeover(
         &mut self,
         info: SessionInfo,
-    ) -> Result<Option<u64>, crate::trading::gateway::session::SessionOpenError> {
+    ) -> Result<Option<u64>, crate::trading::transport::session::SessionOpenError> {
         self.sessions.open_or_takeover(info)
     }
 
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn session_gate_checks_open_and_member() {
-        use crate::trading::gateway::session::SessionInfo;
+        use crate::trading::transport::session::SessionInfo;
 
         let path = temp_path("session-gate");
         let _ = std::fs::remove_file(&path);

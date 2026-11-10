@@ -8,7 +8,6 @@ pub mod proxy;
 pub mod rate_limit;
 pub mod runtime;
 pub mod server;
-pub mod session;
 
 pub use self::frame::*;
 pub use self::runtime::GatewayRuntime;

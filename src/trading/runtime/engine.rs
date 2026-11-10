@@ -996,7 +996,7 @@ mod tests {
     }
     #[test]
     fn restore_is_rejected_with_active_sessions() {
-        use crate::trading::gateway::session::SessionInfo;
+        use crate::trading::transport::session::SessionInfo;
 
         let path =
             std::env::temp_dir().join(format!("trading-restore-active-{}", std::process::id()));

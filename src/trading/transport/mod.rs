@@ -5,6 +5,7 @@ pub mod middleware;
 pub mod result_log;
 pub mod ring;
 pub mod runner;
+pub mod session;
 
 pub use self::middleware::MiddlewareSequencer;
 pub use self::ring::*;
