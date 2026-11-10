@@ -16,7 +16,6 @@ use crate::trading::gateway::rate_limit::TokenBucket;
 use crate::trading::gateway::server::{GatewayEvent, GatewayServerHandle};
 use crate::trading::transport::middleware::MiddlewareSequencer;
 use crate::trading::transport::session::SessionInfo;
-use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
@@ -58,6 +57,7 @@ pub struct GatewayRuntime {
     combo_replay: ComboPrivateReplayBuffer,
     next_private_seq: U64MixMap<u64>,
     replay_pending: U64MixSet,
+    redirect_pending: U64MixSet,
     rate_limit: Option<(f64, f64)>,
     auth_token: Option<u64>,
     credentials: Option<GatewayCredentials>,
@@ -85,6 +85,7 @@ impl GatewayRuntime {
             combo_replay: ComboPrivateReplayBuffer::new(replay_capacity),
             next_private_seq: U64MixMap::default(),
             replay_pending: U64MixSet::default(),
+            redirect_pending: U64MixSet::default(),
             rate_limit: None,
             auth_token: None,
             credentials: None,
@@ -142,6 +143,7 @@ impl GatewayRuntime {
                     processed += 1;
                     self.connections.remove(&connection_id);
                     self.replay_pending.remove(&connection_id);
+                    self.redirect_pending.remove(&connection_id);
                     self.middleware.close_session(connection_id);
                 }
             }
@@ -155,7 +157,7 @@ impl GatewayRuntime {
         if events > 0 {
             self.prune_closed_sessions(4096);
         }
-        let redirects = self.take_redirects().into_iter().collect();
+        let redirects = self.take_redirects();
         let replays = self.take_replay_batches();
         let (active_sessions, closed_sessions) = self.session_counts();
         GatewayEffects {
@@ -210,6 +212,7 @@ impl GatewayRuntime {
                         .entry(old)
                         .or_insert_with(ConnectionState::new)
                         .redirect = Some(target.clone());
+                    self.redirect_pending.insert(old);
                 }
                 let user_id = u64::from(user_id);
                 let state = self
@@ -282,13 +285,17 @@ impl GatewayRuntime {
         self.middleware.prune_closed_sessions(keep_closed)
     }
 
-    pub fn take_redirects(&mut self) -> HashMap<u64, String> {
-        let mut redirects = HashMap::new();
-        for (connection_id, state) in &mut self.connections {
+    pub fn take_redirects(&mut self) -> Vec<(u64, String)> {
+        let mut redirects = Vec::new();
+        for connection_id in self.redirect_pending.iter().copied().collect::<Vec<_>>() {
+            let Some(state) = self.connections.get_mut(&connection_id) else {
+                continue;
+            };
             if let Some(target) = state.redirect.take() {
-                redirects.insert(*connection_id, target);
+                redirects.push((connection_id, target));
             }
         }
+        self.redirect_pending.clear();
         redirects
     }
 
@@ -304,6 +311,7 @@ impl GatewayRuntime {
             let mut state = ConnectionState::new();
             state.redirect = redirect;
             self.connections.insert(*connection_id, state);
+            self.redirect_pending.insert(*connection_id);
         }
         drained
     }
@@ -648,7 +656,10 @@ mod tests {
         }
         let redirects = runtime.take_redirects();
         assert_eq!(
-            redirects.get(&1).map(String::as_str),
+            redirects
+                .iter()
+                .find(|(id, _)| *id == 1)
+                .map(|(_, target)| target.as_str()),
             Some("127.0.0.1:9000")
         );
         server.stop();
