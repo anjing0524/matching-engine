@@ -10,7 +10,7 @@
 
 use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use crate::shared::SymbolId;
-use crate::shared::collections::identity::{U64MixMap, U64MixSet};
+use crate::shared::collections::identity::U64MixMap;
 use crate::shared::protocol::{NewOrderRequest, OrderType};
 use crate::trading::core::auction::{self, AuctionOrder, AuctionResult};
 use crate::trading::core::plugins::NoPlugins;
@@ -155,6 +155,8 @@ pub struct OrderMeta {
     pub price_ticks: u64,
     pub remaining: u64,
     pub status: OrderStatus,
+    /// True when this order was published as resting public state.
+    pub public: bool,
 }
 
 /// In-memory core snapshot for the continuous book and business state.
@@ -200,7 +202,6 @@ pub struct TradingCore {
     auction_order_seq: u64,
     public_seq: u64,
     public_events: Vec<PublicEvent>,
-    public_orders: U64MixSet,
     phase: TradingPhase,
     trading_day: u32,
     last_tick_seq: u64,
@@ -225,7 +226,6 @@ impl TradingCore {
             auction_order_seq: 1,
             public_seq: 1,
             public_events: Vec::new(),
-            public_orders: U64MixSet::default(),
             phase: TradingPhase::Continuous,
             trading_day: 1,
             last_tick_seq: 0,
@@ -294,7 +294,6 @@ impl TradingCore {
         self.book = book;
         self.symbol = snapshot.symbol;
         self.orders = snapshot.orders.into_iter().collect();
-        self.public_orders = self.orders.keys().copied().collect();
         self.positions.restore(snapshot.positions);
         self.pending_open.restore(snapshot.pending_open);
         self.frozen_close.restore(snapshot.frozen_close);
@@ -568,6 +567,7 @@ impl TradingCore {
                         price_ticks: order.price_ticks,
                         remaining: order.quantity,
                         status: OrderStatus::Accepted,
+                        public: true,
                     },
                 );
             }
@@ -662,6 +662,7 @@ impl TradingCore {
                     let account_id = meta.account_id;
                     let price_ticks = meta.price_ticks;
                     let side = meta.side;
+                    let public = meta.public;
                     meta.remaining = 0;
                     meta.status = OrderStatus::Canceled;
                     self.push_private(
@@ -673,7 +674,7 @@ impl TradingCore {
                         0,
                         None,
                     );
-                    if self.public_orders.remove(&command.order_id) {
+                    if public {
                         self.push_public_event(PublicEvent {
                             seq: 0,
                             event_type: PublicEventType::OrderCanceled,
@@ -858,6 +859,7 @@ impl TradingCore {
                     price_ticks: command.price_ticks as u64,
                     remaining: command.quantity,
                     status: OrderStatus::Accepted,
+                    public: false,
                 },
             );
         }
@@ -938,7 +940,9 @@ impl TradingCore {
                 quantity: accepted.remaining,
                 volume: 0,
             });
-            self.public_orders.insert(accepted.order_id);
+            if let Some(meta) = self.orders.get_mut(&accepted.order_id) {
+                meta.public = true;
+            }
         }
         for event in &outcome.trades {
             if let CoreEvent::Trade {
@@ -1027,7 +1031,6 @@ impl TradingCore {
         };
         if remaining == 0 {
             self.orders.remove(&order_id);
-            self.public_orders.remove(&order_id);
         }
         let position_side = if offset == Offset::Open {
             side
