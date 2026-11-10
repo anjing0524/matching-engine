@@ -118,8 +118,8 @@ fn multi_member_load_latency_profile() {
         received: AtomicUsize::new(0),
     });
 
-    for member in 0..members {
-        let mut reader_stream = writers[member].try_clone().unwrap();
+    for (member, writer) in writers.iter().enumerate() {
+        let mut reader_stream = writer.try_clone().unwrap();
         reader_stream.set_nodelay(true).unwrap();
         let shared = Arc::clone(&shared);
         readers.push(std::thread::spawn(move || {
@@ -153,11 +153,10 @@ fn multi_member_load_latency_profile() {
         senders.push(std::thread::spawn(move || {
             let base = member * per_member;
             let price = 50_000 + member as i64;
-            let interval_ns = if target_rate == 0 {
-                0
-            } else {
-                1_000_000_000u64.saturating_mul(members as u64) / target_rate
-            };
+            let interval_ns = 1_000_000_000u64
+                .saturating_mul(members as u64)
+                .checked_div(target_rate)
+                .unwrap_or(0);
             for seq in 0..per_member {
                 if interval_ns > 0 {
                     let target =
