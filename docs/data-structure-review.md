@@ -166,6 +166,30 @@ Interpretation:
 The pending indexes removed the full scans as intended. The remaining dispatch
 cost is mostly per-event delivery and allocation, not map lookup.
 
+### 14. Per-connection TCP write locks
+
+`GatewayServerHandle` previously held one global mutex over all connections and
+wrote to the socket while holding it. Writes are now structured as:
+
+```text
+lock connection map -> clone Arc<Mutex<TcpStream>> -> unlock map
+lock that connection -> write_all
+```
+
+The map lock is short; a slow client no longer blocks writes to every other
+connection. The map itself uses `U64MixMap`.
+
+Fedora TCP load after the change:
+
+```text
+TRADING_LOAD_CLIENTS=64 TRADING_LOAD_ORDERS=2000
+128000 gateway orders in 749.588293ms (170760 order/s)
+```
+
+This is not a before/after benchmark; it confirms the path still runs at the
+previous order of magnitude. The remaining structural limit is one reader thread
+per connection, which needs an event-loop design rather than another map change.
+
 ## Remaining data-structure candidates
 
 1. **Event vectors**
