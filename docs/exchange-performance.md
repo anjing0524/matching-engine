@@ -72,7 +72,7 @@ middleware submit:      7,034,739 cmd/s
 core consume:           1,920,480 cmd/s
 combo queue:            7,624,631 order/s
 combo cancel:           7,338,229 cancel/s
-combo atomic fills:       870,727 fill/s
+combo atomic fills:       926,210 fill/s
 60s soak:               2,121,725 cmd/s
 5-minute soak max RSS:    140,656 KB
 ```
