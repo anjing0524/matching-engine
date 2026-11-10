@@ -239,9 +239,6 @@ impl IoLoop {
                 }
                 Ok(count) => {
                     connection.incoming.extend_from_slice(&buffer[..count]);
-                    if count < buffer.len() {
-                        break;
-                    }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                 Err(_) => {
