@@ -87,7 +87,11 @@ fn run_member(
     while acked < orders {
         while sent < orders && sent.saturating_sub(acked) < in_flight {
             let id = base as u64 + sent as u64 + 1;
-            let side = if sent % 2 == 0 { Side::Buy } else { Side::Sell };
+            let side = if sent.is_multiple_of(2) {
+                Side::Buy
+            } else {
+                Side::Sell
+            };
             sent_times[sent] = start.elapsed().as_nanos() as u64;
             pending.extend_from_slice(
                 &GatewayFrame::Command(command(id, user_id, side, price)).encode(),
@@ -127,11 +131,12 @@ fn run_member(
                 else {
                     continue;
                 };
-                if sent_times[index] != 0 && index < sent {
+                if index < sent && !acked_flags[index] && sent_times[index] != u64::MAX {
+                    acked_flags[index] = true;
+                    acked += 1;
                     samples.push(
                         (start.elapsed().as_nanos() as u64).saturating_sub(sent_times[index]),
                     );
-                    acked += 1;
                 }
             }
         }
