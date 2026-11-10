@@ -1299,7 +1299,7 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         let (producer, _consumer) = create(&path, 8).unwrap();
-        let mut middleware = MiddlewareSequencer::new(producer);
+        let middleware = MiddlewareSequencer::new(producer);
         let (_sender, gateway_events) = channel::<GatewayEvent>();
         let (mut server, _server_events) = start("127.0.0.1:0").unwrap();
         let mut runtime = GatewayRuntime::new(middleware, gateway_events);
