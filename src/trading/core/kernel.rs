@@ -175,7 +175,6 @@ pub struct CoreSnapshot {
     pub pending_open: Vec<(PositionKey, crate::trading::core::positions::Position)>,
     pub frozen_close: Vec<(CloseKey, u64)>,
     pub auction_orders: Vec<AuctionOrder>,
-    pub auction_order_seq: u64,
     pub phase: TradingPhase,
     pub trading_day: u32,
     pub next_trade_id: u64,
@@ -197,7 +196,6 @@ pub struct TradingCore {
     private_seq: u64,
     private_events: Vec<PrivateEvent>,
     auction_orders: Vec<AuctionOrder>,
-    auction_order_seq: u64,
     public_seq: u64,
     public_events: Vec<PublicEvent>,
     phase: TradingPhase,
@@ -220,7 +218,6 @@ impl TradingCore {
             private_seq: 1,
             private_events: Vec::new(),
             auction_orders: Vec::new(),
-            auction_order_seq: 1,
             public_seq: 1,
             public_events: Vec::new(),
             phase: TradingPhase::Continuous,
@@ -260,7 +257,6 @@ impl TradingCore {
             pending_open,
             frozen_close,
             auction_orders: self.auction_orders.clone(),
-            auction_order_seq: self.auction_order_seq,
             phase: self.phase,
             trading_day: self.trading_day,
             next_trade_id: self.next_trade_id,
@@ -288,7 +284,6 @@ impl TradingCore {
         self.pending_open.restore(snapshot.pending_open);
         self.frozen_close.restore(snapshot.frozen_close);
         self.auction_orders = snapshot.auction_orders;
-        self.auction_order_seq = snapshot.auction_order_seq;
         self.phase = snapshot.phase;
         self.trading_day = snapshot.trading_day;
         self.next_trade_id = snapshot.next_trade_id;
@@ -482,7 +477,6 @@ impl TradingCore {
         hedge: Hedge,
     ) -> u64 {
         let order_id = self.book.reserve_order_id();
-        self.auction_order_seq += 1;
         self.auction_orders.push(AuctionOrder {
             order_id,
             user_id,
