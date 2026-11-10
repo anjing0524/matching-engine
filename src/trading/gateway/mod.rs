@@ -10,6 +10,6 @@ pub mod private_replay;
 pub mod rate_limit;
 pub mod session;
 
-pub use self::gateway::GatewayFrame;
+pub use self::gateway::*;
 pub use self::gateway_runtime::GatewayRuntime;
 pub use self::gateway_server::{GatewayEvent, GatewayServerHandle, start};

@@ -8,6 +8,4 @@ pub mod transport;
 
 pub use self::middleware::MiddlewareSequencer;
 pub use self::runner::CoreRunner;
-pub use self::transport::{
-    CommandConsumer, CommandTransportError, PrivateEventProducer, PublicEventProducer, create,
-};
+pub use self::transport::*;
