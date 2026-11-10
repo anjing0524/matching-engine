@@ -6,7 +6,7 @@
 
 use crate::domain::orderbook::{ContractSpec, RestingOrder};
 use crate::trading::combo::ComboQueue;
-use crate::trading::combo::combo_exec::{ComboExecError, ComboExecutor, ComboFill};
+use crate::trading::combo::exec::{ComboExecError, ComboExecutor, ComboFill};
 use crate::trading::combo::margin::ComboMarginConfig;
 use crate::trading::core::positions::{CloseKey, FrozenClose, Position, PositionKey, Positions};
 use crate::trading::core::protocol::{Hedge, Offset, Side};

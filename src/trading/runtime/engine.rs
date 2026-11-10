@@ -4,11 +4,11 @@
 //! core command consumer, then routes core private events back to the matching
 //! gateway session.
 
-use crate::trading::combo::combo_runtime::{ComboRuntime, ComboRuntimeSnapshot};
+use crate::trading::combo::runtime::{ComboRuntime, ComboRuntimeSnapshot};
 use crate::trading::core::plugins::PreTradePlugin;
 use crate::trading::core::{CoreSnapshot, TradingCore};
-use crate::trading::gateway::gateway_runtime::GatewayRuntime;
-use crate::trading::gateway::gateway_server::GatewayServerHandle;
+use crate::trading::gateway::runtime::GatewayRuntime;
+use crate::trading::gateway::server::GatewayServerHandle;
 use crate::trading::market_data::MarketDataPublisher;
 use crate::trading::market_data::metrics::TradingMetrics;
 use crate::trading::market_data::repair::{NackRequest, RepairServer};
@@ -258,8 +258,8 @@ mod tests {
         VolumeCondition,
     };
     use crate::trading::gateway::GatewayFrame;
-    use crate::trading::gateway::gateway_runtime::GatewayRuntime;
-    use crate::trading::gateway::gateway_server::start;
+    use crate::trading::gateway::runtime::GatewayRuntime;
+    use crate::trading::gateway::server::start;
     use crate::trading::transport::create;
     use crate::trading::transport::middleware::MiddlewareSequencer;
     use std::io::{Read, Write};
@@ -382,11 +382,11 @@ mod tests {
     #[test]
     fn combo_order_flows_gateway_to_public_transport() {
         use crate::shared::protocol::OrderType;
-        use crate::trading::combo::combo_engine::ComboEngine;
-        use crate::trading::combo::combo_market_data::{
+        use crate::trading::combo::engine::ComboEngine;
+        use crate::trading::combo::market_data::{
             ComboMarketDataPublisher, ComboMarketDataSubscriber,
         };
-        use crate::trading::combo::combo_runtime::ComboRuntime;
+        use crate::trading::combo::runtime::ComboRuntime;
         use crate::trading::core::protocol::{Command, CommandType, Hedge, Offset, Side};
         use std::io::Read;
 
@@ -495,11 +495,11 @@ mod tests {
     #[test]
     fn combo_runtime_tick_is_driven_by_runtime() {
         use crate::shared::protocol::OrderType;
-        use crate::trading::combo::combo_engine::ComboEngine;
-        use crate::trading::combo::combo_market_data::{
+        use crate::trading::combo::engine::ComboEngine;
+        use crate::trading::combo::market_data::{
             ComboMarketDataPublisher, ComboMarketDataSubscriber,
         };
-        use crate::trading::combo::combo_runtime::ComboRuntime;
+        use crate::trading::combo::runtime::ComboRuntime;
         use crate::trading::core::protocol::{Hedge, Offset, Side};
 
         let path = std::env::temp_dir().join(format!(
@@ -934,8 +934,8 @@ mod tests {
     }
     #[test]
     fn full_snapshot_restores_combo_runtime() {
-        use crate::trading::combo::combo_engine::ComboEngine;
-        use crate::trading::combo::combo_runtime::ComboRuntime;
+        use crate::trading::combo::engine::ComboEngine;
+        use crate::trading::combo::runtime::ComboRuntime;
 
         let core_path =
             std::env::temp_dir().join(format!("trading-full-snapshot-core-{}", std::process::id()));

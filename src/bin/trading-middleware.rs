@@ -5,8 +5,8 @@ use clap::Parser;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use trading_system_engine::trading::gateway::gateway_runtime::GatewayRuntime;
-use trading_system_engine::trading::gateway::gateway_server::start as start_gateway;
+use trading_system_engine::trading::gateway::runtime::GatewayRuntime;
+use trading_system_engine::trading::gateway::server::start as start_gateway;
 use trading_system_engine::trading::market_data::MarketDataPublisher;
 use trading_system_engine::trading::transport::middleware::MiddlewareSequencer;
 use trading_system_engine::trading::transport::{
@@ -143,14 +143,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         gateway = gateway.with_auth_token(token);
     }
     let health_directory = args.redirect_endpoints.as_deref().and_then(|endpoints| {
-        trading_system_engine::trading::gateway::gateway_directory::GatewayDirectory::new(
+        trading_system_engine::trading::gateway::directory::GatewayDirectory::new(
             endpoints.split(',').map(str::to_string),
         )
         .ok()
         .map(Arc::new)
     });
     let mut health_monitor = health_directory.as_ref().map(|directory| {
-        trading_system_engine::trading::gateway::gateway_directory::HealthMonitor::start(
+        trading_system_engine::trading::gateway::directory::HealthMonitor::start(
             Arc::clone(directory),
             Duration::from_secs(1),
             Duration::from_millis(200),

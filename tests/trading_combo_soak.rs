@@ -2,7 +2,7 @@
 
 use trading_system_engine::domain::orderbook::ContractSpec;
 use trading_system_engine::shared::protocol::OrderType;
-use trading_system_engine::trading::combo::combo_engine::ComboEngine;
+use trading_system_engine::trading::combo::engine::ComboEngine;
 use trading_system_engine::trading::core::protocol::{Hedge, Offset, Side};
 
 #[test]

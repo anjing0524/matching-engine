@@ -2,8 +2,8 @@
 
 use trading_system_engine::domain::orderbook::ContractSpec;
 use trading_system_engine::shared::protocol::OrderType;
-use trading_system_engine::trading::combo::combo_engine::ComboEngine;
-use trading_system_engine::trading::combo::combo_runtime::ComboRuntime;
+use trading_system_engine::trading::combo::engine::ComboEngine;
+use trading_system_engine::trading::combo::runtime::ComboRuntime;
 use trading_system_engine::trading::core::protocol::{Command, CommandType, Hedge, Offset, Side};
 use trading_system_engine::trading::transport::create;
 

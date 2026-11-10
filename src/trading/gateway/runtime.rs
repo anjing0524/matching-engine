@@ -4,11 +4,11 @@
 //! are stamped with that session/member and submitted to the ordered command
 //! ring. Private downlink is a later slice.
 
-use crate::trading::combo::combo_engine::ComboPrivateFill;
+use crate::trading::combo::engine::ComboPrivateFill;
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::gateway::GatewayFrame;
 use crate::trading::gateway::auth::GatewayCredentials;
-use crate::trading::gateway::gateway_server::{GatewayEvent, GatewayServerHandle};
+use crate::trading::gateway::server::{GatewayEvent, GatewayServerHandle};
 use crate::trading::gateway::private_replay::{
     ComboPrivateReplayBuffer, PrivateReplayBuffer, ReplayEvent,
 };
@@ -425,7 +425,7 @@ mod tests {
         Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
         VolumeCondition,
     };
-    use crate::trading::gateway::gateway_server::start;
+    use crate::trading::gateway::server::start;
     use crate::trading::transport::create;
     use std::io::Write;
     use std::net::TcpStream;
@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn combo_private_fill_routes_to_logged_in_gateway() {
-        use crate::trading::combo::combo_engine::ComboPrivateFill;
+        use crate::trading::combo::engine::ComboPrivateFill;
         use crate::trading::core::protocol::Side;
         use std::io::Read;
 
@@ -983,7 +983,7 @@ mod tests {
 
     #[test]
     fn replay_merges_core_and_combo_sequences() {
-        use crate::trading::combo::combo_engine::ComboPrivateFill;
+        use crate::trading::combo::engine::ComboPrivateFill;
         use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
         use crate::trading::core::protocol::Side;
         use crate::trading::gateway::private_replay::ReplayEvent;

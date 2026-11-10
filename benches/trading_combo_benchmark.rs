@@ -4,7 +4,7 @@ use std::hint::black_box;
 use std::time::Instant;
 use trading_system_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use trading_system_engine::shared::protocol::OrderType;
-use trading_system_engine::trading::combo::combo_engine::ComboEngine;
+use trading_system_engine::trading::combo::engine::ComboEngine;
 use trading_system_engine::trading::core::protocol::{Hedge, Offset, Side};
 
 fn main() {

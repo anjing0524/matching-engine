@@ -15,8 +15,8 @@ use trading_system_engine::trading::core::protocol::{
     VolumeCondition,
 };
 use trading_system_engine::trading::gateway::GatewayFrame;
-use trading_system_engine::trading::gateway::gateway_runtime::GatewayRuntime;
-use trading_system_engine::trading::gateway::gateway_server::start;
+use trading_system_engine::trading::gateway::runtime::GatewayRuntime;
+use trading_system_engine::trading::gateway::server::start;
 use trading_system_engine::trading::market_data::{MarketDataPublisher, MarketDataSubscriber};
 use trading_system_engine::trading::runtime::{RuntimeOptions, TradingRuntime};
 use trading_system_engine::trading::transport::create;

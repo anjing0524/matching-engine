@@ -4,7 +4,7 @@
 //! between a gateway and middleware. TCP transport and session lifecycle sit
 //! above this codec; this slice only fixes the byte layout.
 
-use crate::trading::combo::combo_engine::ComboPrivateFill;
+use crate::trading::combo::engine::ComboPrivateFill;
 use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
 use crate::trading::core::protocol::{COMMAND_SLOT_SIZE, Command};
 

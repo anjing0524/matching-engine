@@ -4,7 +4,7 @@
 //! middleware. Session registration, authentication, and private responses are
 //! layered above this event stream; this slice only owns the accept/read loop.
 
-use crate::trading::combo::combo_engine::ComboPrivateFill;
+use crate::trading::combo::engine::ComboPrivateFill;
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
 use std::collections::HashMap;

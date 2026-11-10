@@ -4,7 +4,7 @@
 //! events after `last_private_seq`; middleware replays them before resuming live
 //! delivery.
 
-use crate::trading::combo::combo_engine::ComboPrivateFill;
+use crate::trading::combo::engine::ComboPrivateFill;
 use crate::trading::core::private_events::PrivateEvent;
 use std::collections::{HashMap, VecDeque};
 

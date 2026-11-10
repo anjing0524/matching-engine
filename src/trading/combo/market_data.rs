@@ -4,7 +4,7 @@
 //! realized spread and both leg prices. Public consumers can reconstruct the
 //! leg fills without member identity.
 
-use crate::trading::combo::combo_engine::ComboPublicFill;
+use crate::trading::combo::engine::ComboPublicFill;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;

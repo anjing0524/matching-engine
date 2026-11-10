@@ -3,12 +3,12 @@
 //! Runs the combination queue/executor and forwards successful fill events to
 //! the combo UDP publisher.
 
-use crate::trading::combo::combo_engine::{ComboEngine, ComboEngineSnapshot};
-use crate::trading::combo::combo_market_data::ComboMarketDataPublisher;
+use crate::trading::combo::engine::{ComboEngine, ComboEngineSnapshot};
+use crate::trading::combo::market_data::ComboMarketDataPublisher;
 use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
 use crate::trading::core::protocol::{Command, CommandType};
-use crate::trading::gateway::gateway_runtime::GatewayRuntime;
-use crate::trading::gateway::gateway_server::GatewayServerHandle;
+use crate::trading::gateway::runtime::GatewayRuntime;
+use crate::trading::gateway::server::GatewayServerHandle;
 use crate::trading::transport::CommandConsumer;
 
 /// Serializable combo runtime state.
@@ -188,7 +188,7 @@ impl ComboRuntime {
             server,
             events
                 .iter()
-                .map(crate::trading::combo::combo_engine::ComboFillEvent::private_fill),
+                .map(crate::trading::combo::engine::ComboFillEvent::private_fill),
         );
         (public, private)
     }
@@ -239,7 +239,7 @@ mod tests {
     use super::*;
     use crate::domain::orderbook::ContractSpec;
     use crate::shared::protocol::OrderType;
-    use crate::trading::combo::combo_market_data::ComboMarketDataSubscriber;
+    use crate::trading::combo::market_data::ComboMarketDataSubscriber;
     use crate::trading::core::protocol::{Hedge, Offset, Side};
 
     #[test]
