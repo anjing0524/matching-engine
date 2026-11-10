@@ -94,6 +94,23 @@ Redirects are rare but `take_redirects` previously scanned every connection and
 built a temporary `HashMap` on each tick. `redirect_pending: U64MixSet` now
 indexes displaced connections; `take_redirects` returns `Vec<(u64, String)>`.
 
+### 8. Session secondary indexes
+
+`SessionRegistry` no longer scans all sessions for every count, user lookup, or
+gateway drain. It now maintains:
+
+```text
+active_count / closed_count
+by_user: U64MixMap<u64>          user_id -> active session
+by_gateway: U64MixMap<Vec<u64>>  gateway_id -> active sessions
+closed_order: VecDeque<u64>      bounded pruning order
+```
+
+This makes `session_counts` and `find_active_by_user` O(1) and
+`drain_gateway` O(sessions on that gateway) instead of O(all sessions).
+`find_active_by_user` is on the private-dispatch path, so this also removes a
+per-event scan.
+
 ## Remaining data-structure candidates
 
 1. **Event vectors**
@@ -108,5 +125,6 @@ indexes displaced connections; `take_redirects` returns `Vec<(u64, String)>`.
 
 ## Next recommended step
 
-Make the gateway replay path own one queue instead of rebuilding
-`HashMap<u64, Vec<ReplayEvent>>` batches on every reconnect tick.
+Measure idle-session expiry. `expire_idle` still scans every connection; a
+timing wheel or deadline heap is only worth it if a 64k-connection profile shows
+the scan, otherwise keep the simpler full scan.
