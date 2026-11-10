@@ -4,7 +4,7 @@
 //! are stamped with that session/member and submitted to the ordered command
 //! ring. Private downlink is a later slice.
 
-use crate::shared::collections::U64MixMap;
+use crate::shared::collections::{U64MixMap, U64MixSet};
 use crate::trading::combo::engine::ComboPrivateFill;
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::gateway::GatewayFrame;
@@ -57,6 +57,7 @@ pub struct GatewayRuntime {
     private_replay: PrivateReplayBuffer,
     combo_replay: ComboPrivateReplayBuffer,
     next_private_seq: U64MixMap<u64>,
+    replay_pending: U64MixSet,
     rate_limit: Option<(f64, f64)>,
     auth_token: Option<u64>,
     credentials: Option<GatewayCredentials>,
@@ -83,6 +84,7 @@ impl GatewayRuntime {
             private_replay: PrivateReplayBuffer::new(replay_capacity),
             combo_replay: ComboPrivateReplayBuffer::new(replay_capacity),
             next_private_seq: U64MixMap::default(),
+            replay_pending: U64MixSet::default(),
             rate_limit: None,
             auth_token: None,
             credentials: None,
@@ -139,6 +141,7 @@ impl GatewayRuntime {
                 GatewayEvent::Closed { connection_id } => {
                     processed += 1;
                     self.connections.remove(&connection_id);
+                    self.replay_pending.remove(&connection_id);
                     self.middleware.close_session(connection_id);
                 }
             }
@@ -226,6 +229,9 @@ impl GatewayRuntime {
                         .map(ReplayEvent::Combo),
                 );
                 replay.sort_by_key(ReplayEvent::seq);
+                if !replay.is_empty() {
+                    self.replay_pending.insert(connection_id);
+                }
                 state.replay = replay;
             }
             GatewayFrame::Command(mut command) => {
@@ -323,6 +329,7 @@ impl GatewayRuntime {
 
     /// Takes core replay events queued for a newly logged-in connection.
     pub fn take_replay(&mut self, connection_id: u64) -> Option<Vec<PrivateEvent>> {
+        self.replay_pending.remove(&connection_id);
         let state = self.connections.get_mut(&connection_id)?;
         let replay: Vec<PrivateEvent> = std::mem::take(&mut state.replay)
             .into_iter()
@@ -338,14 +345,18 @@ impl GatewayRuntime {
     #[must_use]
     pub fn take_replay_batches(&mut self) -> Vec<(u64, Vec<ReplayEvent>)> {
         let mut batches = Vec::new();
-        for (connection_id, state) in &mut self.connections {
+        for connection_id in self.replay_pending.iter().copied().collect::<Vec<_>>() {
+            let Some(state) = self.connections.get_mut(&connection_id) else {
+                continue;
+            };
             if state.replay.is_empty() {
                 continue;
             }
             let mut events = std::mem::take(&mut state.replay);
             events.sort_by_key(ReplayEvent::seq);
-            batches.push((*connection_id, events));
+            batches.push((connection_id, events));
         }
+        self.replay_pending.clear();
         batches
     }
 
