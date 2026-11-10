@@ -110,6 +110,7 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn combo_mut(&mut self) -> Option<&mut ComboRuntime> {
         self.combo.as_mut()
     }
@@ -125,6 +126,7 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn repair(
         &self,
         request: NackRequest,
@@ -211,6 +213,7 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn core(&self) -> &TradingCore {
         self.core.core()
     }
