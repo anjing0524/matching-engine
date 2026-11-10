@@ -190,6 +190,20 @@ This is not a before/after benchmark; it confirms the path still runs at the
 previous order of magnitude. The remaining structural limit is one reader thread
 per connection, which needs an event-loop design rather than another map change.
 
+### 15. Acceptance: per-connection write locks
+
+Accepted. The connection map lock now covers only lookup/clone; the blocking
+`write_all` runs under a per-connection mutex. A test with four writer threads
+sending to one connection verifies that 400 frames remain intact.
+
+Residual limits, intentionally not changed now:
+
+- the connection map is still one mutex; do not shard it without a measured
+  contention profile
+- one reader thread per TCP connection remains the dominant structural limit
+- `write_all` can still block a single connection's writer; a non-blocking
+  writer queue is the next design step if that shows up in a real profile
+
 ## Remaining data-structure candidates
 
 1. **Event vectors**
