@@ -5,7 +5,6 @@
 //! gateway session.
 
 use crate::exchange::combo_runtime::{ComboRuntime, ComboRuntimeSnapshot};
-use crate::exchange::config::ExchangeConfig;
 use crate::exchange::core::{CoreSnapshot, ExchangeCore};
 use crate::exchange::event_fanout::EventFanout;
 use crate::exchange::gateway_runtime::GatewayRuntime;
@@ -139,15 +138,6 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
         interface: std::net::Ipv4Addr,
     ) -> std::io::Result<()> {
         self.fanout.switch_interface(interface)
-    }
-
-    #[must_use]
-    pub fn with_config(mut self, config: ExchangeConfig) -> Self {
-        self.idle_timeout = config.idle_timeout;
-        self.fanout = self
-            .fanout
-            .with_repair_buffer(config.repair_buffer_capacity);
-        self
     }
 
     /// Runs one non-blocking iteration.
@@ -572,10 +562,9 @@ mod tests {
         let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
         let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
         let runner = CoreRunner::new(core, consumer, NoPlugins);
-        let runtime = ExchangeRuntime::new(gateway, runner, server).with_config(ExchangeConfig {
-            repair_buffer_capacity: 3,
-            idle_timeout: None,
-            ..ExchangeConfig::default()
+        let runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
+            repair_buffer_capacity: Some(3),
+            ..RuntimeOptions::default()
         });
         assert_eq!(
             runtime
