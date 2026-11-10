@@ -1,6 +1,6 @@
 //! Composition of gateway, core, combo, and output sinks.
 
 pub mod event_fanout;
-pub mod runtime;
+pub mod engine;
 
-pub use self::runtime::{RuntimeOptions, TradingRuntime, TradingSnapshot};
+pub use self::engine::{RuntimeOptions, TradingRuntime, TradingSnapshot};
