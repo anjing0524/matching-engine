@@ -1931,13 +1931,16 @@ mod tests {
             }
         }
         samples.sort_unstable();
-        let percentile = |p: usize| samples[samples.len().saturating_sub(1) * p / 100];
+        let percentile = |p: f64| {
+            let index = ((samples.len().saturating_sub(1) as f64) * p / 100.0) as usize;
+            samples[index]
+        };
         println!(
             "core_latency: n={} p50={}ns p99={}ns p999={}ns max={}ns",
             samples.len(),
-            percentile(50),
-            percentile(99),
-            percentile(999),
+            percentile(50.0),
+            percentile(99.0),
+            percentile(99.9),
             samples.last().copied().unwrap_or(0)
         );
         black_box(core);
