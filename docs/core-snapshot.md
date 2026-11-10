@@ -16,20 +16,21 @@
 It does **not** capture:
 
 - call-auction staging (`auction_orders`, `auction_meta`)
-- combination queues
+- combo queues and leg books (owned by `ComboEngineSnapshot`)
 - ephemeral private/public event buffers
 
-Auction staging (`auction_orders`, `auction_meta`, auction sequence) and logical
-combo queues (`combo_queues`) are included in the snapshot and round-tripped.
-`ComboEngine` has a separate `ComboEngineSnapshot` covering its queue, both leg
-books, leg positions, frozen close, open-quantity limits, and margin state.
+Auction staging (`auction_orders`, `auction_meta`, auction sequence) is included
+in the core snapshot and round-tripped. Combo state lives in
+`ComboEngineSnapshot`, which covers the combo queue, both leg books, leg
+positions, frozen close, open-quantity limits, and margin state.
 `save_snapshot` writes the complete state without a separate drain step.
 
 ## Restore
 
 `restore_snapshot` rebuilds the book via `TickBasedOrderBook::restore`, replaces
-order metadata/positions/frozen reservations, and clears ephemeral/auction/combo
-state. The rebuilt snapshot compares equal to the captured snapshot in tests.
+order metadata/positions/frozen reservations and auction staging, and clears
+ephemeral event buffers. The rebuilt snapshot compares equal to the captured
+snapshot in tests.
 
 ## Persistence
 
@@ -55,4 +56,5 @@ Still required for production:
 
 - Never serve a partially written snapshot.
 - On restore failure, fail closed and require a full command-log replay.
-- Do not snapshot while combo/auction state is non-empty.
+- Core snapshots include auction staging; combo state is captured separately by
+  `ComboEngineSnapshot`.

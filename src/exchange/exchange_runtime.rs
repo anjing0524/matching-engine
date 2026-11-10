@@ -26,7 +26,7 @@ pub struct ExchangeSnapshot {
     pub combo: Option<ComboRuntimeSnapshot>,
 }
 
-const EXCHANGE_SNAPSHOT_VERSION: u32 = 3;
+const EXCHANGE_SNAPSHOT_VERSION: u32 = 4;
 
 impl ExchangeSnapshot {
     /// Writes a versioned, checksummed snapshot with atomic replacement.

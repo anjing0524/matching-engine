@@ -1,16 +1,15 @@
 //! Deterministic exchange core kernel.
 //!
 //! The kernel owns one contract's book, active orders, positions, frozen close,
-//! auction staging, and logical combo queues. It has no network, shared memory,
+//! and auction staging. It has no network, shared memory,
 //! wall clock, or background work; snapshots are explicit method calls.
 //!
-//! Supported command shapes include limit/market/FAK/FOK, cancel, auction
-//! staging/uncross, and combo queue operations. The same command sequence always
-//! produces the same private/public projections.
+//! Supported command shapes include limit/market/FAK/FOK, cancel, and auction
+//! staging/uncross. Combo queues and execution live in `ComboEngine`. The same
+//! command sequence always produces the same private/public projections.
 
 use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use crate::exchange::auction::{self, AuctionOrder, AuctionResult};
-use crate::exchange::combo::ComboQueue;
 use crate::exchange::plugins::{PreTradePlugin, RiskOrder, ValidationContext};
 use crate::exchange::positions::{CloseKey, FrozenClose, PositionKey, Positions};
 use crate::exchange::private_events::{PrivateEvent, PrivateStatus};
@@ -161,7 +160,7 @@ pub struct OrderMeta {
 
 /// In-memory core snapshot for the continuous book and business state.
 ///
-/// Combo queues and call-auction staging are included in this snapshot.
+/// Call-auction staging is included in this snapshot.
 /// Ephemeral diagnostic event buffers are not snapshotted because they are
 /// already consumed by middleware.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -177,7 +176,6 @@ pub struct CoreSnapshot {
     pub auction_orders: Vec<AuctionOrder>,
     pub auction_meta: Vec<(u64, (u64, Side, Offset, Hedge))>,
     pub auction_order_seq: u64,
-    pub combo_queues: Vec<(u32, ComboQueue)>,
     pub phase: ExchangePhase,
     pub trading_day: u32,
     pub next_trade_id: u64,
@@ -188,7 +186,7 @@ pub struct CoreSnapshot {
 }
 
 /// Current on-disk snapshot format version.
-pub const SNAPSHOT_VERSION: u32 = 3;
+pub const SNAPSHOT_VERSION: u32 = 4;
 
 /// The deterministic core state machine for one contract.
 pub struct ExchangeCore {
@@ -207,7 +205,6 @@ pub struct ExchangeCore {
     public_seq: u64,
     public_events: Vec<PublicEvent>,
     public_orders: HashSet<u64>,
-    combo_queues: HashMap<u32, ComboQueue>,
     phase: ExchangePhase,
     trading_day: u32,
     last_tick_seq: u64,
@@ -233,7 +230,6 @@ impl ExchangeCore {
             public_seq: 1,
             public_events: Vec::new(),
             public_orders: HashSet::new(),
-            combo_queues: HashMap::new(),
             phase: ExchangePhase::Continuous,
             trading_day: 1,
             last_tick_seq: 0,
@@ -267,12 +263,6 @@ impl ExchangeCore {
             .map(|(id, meta)| (*id, *meta))
             .collect();
         auction_meta.sort_by_key(|(id, _)| *id);
-        let mut combo_queues: Vec<_> = self
-            .combo_queues
-            .iter()
-            .map(|(id, queue)| (*id, queue.clone()))
-            .collect();
-        combo_queues.sort_by_key(|(id, _)| *id);
         CoreSnapshot {
             spec: self.book.spec().clone(),
             symbol: self.symbol,
@@ -285,7 +275,6 @@ impl ExchangeCore {
             auction_orders: self.auction_orders.clone(),
             auction_meta,
             auction_order_seq: self.auction_order_seq,
-            combo_queues,
             phase: self.phase,
             trading_day: self.trading_day,
             next_trade_id: self.next_trade_id,
@@ -316,7 +305,6 @@ impl ExchangeCore {
         self.auction_orders = snapshot.auction_orders;
         self.auction_meta = snapshot.auction_meta.into_iter().collect();
         self.auction_order_seq = snapshot.auction_order_seq;
-        self.combo_queues = snapshot.combo_queues.into_iter().collect();
         self.phase = snapshot.phase;
         self.trading_day = snapshot.trading_day;
         self.next_trade_id = snapshot.next_trade_id;
@@ -522,45 +510,6 @@ impl ExchangeCore {
             quantity: 0,
             volume: 0,
         });
-    }
-
-    /// Queues a combination order in the logical spread-price/FIFO queue.
-    #[allow(clippy::too_many_arguments)]
-    pub fn submit_combo_order(
-        &mut self,
-        combo_id: u32,
-        user_id: u64,
-        side: Side,
-        spread_price_ticks: u64,
-        quantity: u64,
-        offset: Offset,
-        hedge: Hedge,
-    ) -> Option<u64> {
-        let order_id = self.book.reserve_order_id();
-        let queue = self.combo_queues.entry(combo_id).or_default();
-        queue
-            .push(
-                order_id,
-                user_id,
-                side,
-                spread_price_ticks,
-                quantity,
-                offset,
-                hedge,
-            )
-            .then_some(order_id)
-    }
-
-    /// Cancels a combination order by id.
-    pub fn cancel_combo_order(&mut self, combo_id: u32, order_id: u64) -> bool {
-        self.combo_queues
-            .get_mut(&combo_id)
-            .is_some_and(|queue| queue.cancel(order_id).is_some())
-    }
-
-    #[must_use]
-    pub fn combo_queue_len(&self, combo_id: u32) -> usize {
-        self.combo_queues.get(&combo_id).map_or(0, ComboQueue::len)
     }
 
     /// Clears the current auction collection.
@@ -1814,33 +1763,6 @@ mod tests {
     }
 
     #[test]
-    fn combo_queue_orders_by_spread_price() {
-        let mut core = core();
-        let a = core
-            .submit_combo_order(7, 1, Side::Buy, 100, 5, Offset::Open, Hedge::Spec)
-            .unwrap();
-        let b = core
-            .submit_combo_order(7, 1, Side::Buy, 110, 5, Offset::Open, Hedge::Spec)
-            .unwrap();
-        assert_eq!(core.combo_queue_len(7), 2);
-        let queue = core.combo_queues.get_mut(&7).unwrap();
-        assert_eq!(queue.best_bid(), Some(110));
-        assert_eq!(queue.pop_best(Side::Buy).unwrap().order_id, b);
-        assert_eq!(queue.best_bid(), Some(100));
-        assert_eq!(queue.pop_best(Side::Buy).unwrap().order_id, a);
-    }
-
-    #[test]
-    fn combo_order_can_be_canceled() {
-        let mut core = core();
-        let order_id = core
-            .submit_combo_order(7, 1, Side::Sell, 90, 5, Offset::Open, Hedge::Spec)
-            .unwrap();
-        assert!(core.cancel_combo_order(7, order_id));
-        assert_eq!(core.combo_queue_len(7), 0);
-    }
-
-    #[test]
     fn session_switch_emits_public_event() {
         let mut core = core();
         core.set_phase(ExchangePhase::Break, 2);
@@ -2039,20 +1961,6 @@ mod tests {
                 matches!(event, CoreEvent::Rejected { reason, .. } if reason.contains("auction"))
             }));
         }
-    }
-    #[test]
-    fn snapshot_roundtrips_combo_queue() {
-        let mut exchange = core();
-        assert!(
-            exchange
-                .submit_combo_order(7, 1, Side::Buy, 49_900, 1, Offset::Open, Hedge::Spec)
-                .is_some()
-        );
-        let snapshot = exchange.snapshot();
-        let mut restored = core();
-        let _ = restored.restore_snapshot(snapshot.clone());
-        assert_eq!(restored.combo_queue_len(7), 1);
-        assert_eq!(restored.snapshot(), snapshot);
     }
     #[test]
     fn snapshot_roundtrips_auction_staging() {

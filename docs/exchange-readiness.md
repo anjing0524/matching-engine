@@ -61,7 +61,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Core is a single failure domain; no consensus/leader election
 - [x] In-memory core snapshot for continuous book and business state
 - [x] Versioned JSON snapshot with atomic file replacement
-- [x] Snapshot includes auction staging and combo queues
+- [x] Snapshot includes auction staging; ComboEngine snapshot covers combo state
 - [x] ComboEngine snapshot covers queue, leg books, positions, and margin
 - [x] Full ExchangeSnapshot with version/CRC and `exchange run --snapshot`
 - [x] CRC32 checksum over snapshot payload

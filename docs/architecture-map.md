@@ -28,8 +28,8 @@ ExchangeRuntime
 Key ownership rules:
 
 - `ExchangeCore` owns the book, active order metadata, positions, frozen
-  close, auction staging, and logical combo queues. It has no sockets or file
-  I/O.
+  close, and auction staging. Combo queue/leg books live in `ComboEngine`. The
+  kernel has no sockets or file I/O.
 - `CoreRunner` drains commands and calls the kernel. It does not retain
   diagnostic `CoreEvent`s.
 - `GatewayRuntime` owns per-connection state (`ConnectionState`) and assigns
