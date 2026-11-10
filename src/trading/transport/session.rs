@@ -5,6 +5,7 @@
 //! is an in-memory registry; network connections and authentication are later.
 
 use crate::shared::collections::U64MixMap;
+use std::collections::VecDeque;
 
 /// Rejection for a zero or duplicate session id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +27,14 @@ pub struct SessionInfo {
 #[derive(Debug, Default)]
 pub struct SessionRegistry {
     sessions: U64MixMap<SessionInfo>,
+    active_count: usize,
+    closed_count: usize,
+    /// user_id -> active session id
+    by_user: U64MixMap<u64>,
+    /// gateway_id -> active session ids
+    by_gateway: U64MixMap<Vec<u64>>,
+    /// Closed session ids in close order, for bounded pruning.
+    closed_order: VecDeque<u64>,
 }
 
 impl SessionRegistry {
@@ -39,7 +48,49 @@ impl SessionRegistry {
         if info.session_id == 0 || self.sessions.contains_key(&info.session_id) {
             return false;
         }
+        if info.active {
+            self.activate(info);
+        } else {
+            self.sessions.insert(info.session_id, info);
+            self.closed_count += 1;
+            self.closed_order.push_back(info.session_id);
+        }
+        true
+    }
+
+    fn activate(&mut self, info: SessionInfo) {
         self.sessions.insert(info.session_id, info);
+        self.active_count += 1;
+        self.by_user
+            .insert(u64::from(info.user_id), info.session_id);
+        self.by_gateway
+            .entry(u64::from(info.gateway_id))
+            .or_default()
+            .push(info.session_id);
+    }
+
+    fn deactivate(&mut self, session_id: u64) -> bool {
+        let Some(session) = self.sessions.get_mut(&session_id) else {
+            return false;
+        };
+        if !session.active {
+            return false;
+        }
+        session.active = false;
+        let user_id = u64::from(session.user_id);
+        let gateway_id = u64::from(session.gateway_id);
+        self.active_count -= 1;
+        self.closed_count += 1;
+        if self.by_user.get(&user_id) == Some(&session_id) {
+            self.by_user.remove(&user_id);
+        }
+        if let Some(ids) = self.by_gateway.get_mut(&gateway_id) {
+            ids.retain(|id| *id != session_id);
+            if ids.is_empty() {
+                self.by_gateway.remove(&gateway_id);
+            }
+        }
+        self.closed_order.push_back(session_id);
         true
     }
 
@@ -64,12 +115,10 @@ impl SessionRegistry {
                     && session.session_id != info.session_id
             })
             .map(|session| session.session_id);
-        if let Some(old) = replaced
-            && let Some(session) = self.sessions.get_mut(&old)
-        {
-            session.active = false;
+        if let Some(old) = replaced {
+            self.deactivate(old);
         }
-        self.sessions.insert(info.session_id, info);
+        self.activate(info);
         Ok(replaced)
     }
 
@@ -77,27 +126,19 @@ impl SessionRegistry {
     ///
     /// Returns the drained session ids; records are retained for audit/reconnect.
     pub fn drain_gateway(&mut self, gateway_id: u32) -> Vec<u64> {
-        let drained: Vec<u64> = self
-            .sessions
-            .values()
-            .filter(|session| session.active && session.gateway_id == gateway_id)
-            .map(|session| session.session_id)
-            .collect();
+        let drained = self
+            .by_gateway
+            .remove(&u64::from(gateway_id))
+            .unwrap_or_default();
         for session_id in &drained {
-            if let Some(session) = self.sessions.get_mut(session_id) {
-                session.active = false;
-            }
+            self.deactivate(*session_id);
         }
         drained
     }
 
     /// Marks a session closed; the record is retained for audit/reconnect.
     pub fn close(&mut self, session_id: u64) -> bool {
-        let Some(session) = self.sessions.get_mut(&session_id) else {
-            return false;
-        };
-        session.active = false;
-        true
+        self.deactivate(session_id)
     }
 
     #[must_use]
@@ -119,9 +160,10 @@ impl SessionRegistry {
 
     #[must_use]
     pub fn find_active_by_user(&self, user_id: u32) -> Option<SessionInfo> {
+        let session_id = self.by_user.get(&u64::from(user_id))?;
         self.sessions
-            .values()
-            .find(|session| session.active && session.user_id == user_id)
+            .get(session_id)
+            .filter(|session| session.active)
             .copied()
     }
 
@@ -129,37 +171,27 @@ impl SessionRegistry {
     ///
     /// Returns the number of removed records. Active sessions are never pruned.
     pub fn prune_closed(&mut self, keep_closed: usize) -> usize {
-        let mut closed: Vec<u64> = self
-            .sessions
-            .values()
-            .filter(|session| !session.active)
-            .map(|session| session.session_id)
-            .collect();
-        if closed.len() <= keep_closed {
-            return 0;
+        let mut removed = 0;
+        while self.closed_order.len() > keep_closed {
+            let Some(session_id) = self.closed_order.pop_front() else {
+                break;
+            };
+            if self.sessions.remove(&session_id).is_some() {
+                self.closed_count -= 1;
+                removed += 1;
+            }
         }
-        closed.sort_unstable();
-        let remove = closed.len() - keep_closed;
-        for session_id in closed.into_iter().take(remove) {
-            self.sessions.remove(&session_id);
-        }
-        remove
+        removed
     }
 
     #[must_use]
     pub fn closed_count(&self) -> usize {
-        self.sessions
-            .values()
-            .filter(|session| !session.active)
-            .count()
+        self.closed_count
     }
 
     #[must_use]
     pub fn active_count(&self) -> usize {
-        self.sessions
-            .values()
-            .filter(|session| session.active)
-            .count()
+        self.active_count
     }
 
     #[must_use]
