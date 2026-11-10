@@ -172,9 +172,7 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
     }
 
     /// Runs one non-blocking iteration.
-    ///
-    /// Returns `(gateway_events, commands_executed, private_events_sent)`.
-    pub fn tick(&mut self) -> (usize, usize, usize) {
+    pub fn tick(&mut self) {
         let tick_start = Instant::now();
         let gateway_events = self.gateway.poll();
         self.metrics.gateway_events += gateway_events as u64;
@@ -240,7 +238,6 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
         {
             *snapshot = self.metrics;
         }
-        (gateway_events, commands, sent)
     }
 
     #[must_use]
