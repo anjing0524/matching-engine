@@ -5,7 +5,7 @@
 
 use matching_engine::domain::orderbook::ContractSpec;
 use matching_engine::exchange::core::ExchangeCore;
-use matching_engine::exchange::exchange_runtime::ExchangeRuntime;
+use matching_engine::exchange::exchange_runtime::{ExchangeRuntime, RuntimeOptions};
 use matching_engine::exchange::gateway::GatewayFrame;
 use matching_engine::exchange::gateway_runtime::GatewayRuntime;
 use matching_engine::exchange::gateway_server::start;
@@ -77,7 +77,7 @@ fn multi_gateway_tcp_fanout() {
         }
         let _ = received_tx.send(received);
     });
-    let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_market_data(publisher);
+    let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions { market_data: Some(publisher), ..Default::default() });
 
     let total = clients * per_client;
     let mut streams = Vec::new();

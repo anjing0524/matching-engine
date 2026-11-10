@@ -7,7 +7,7 @@
 use clap::{Parser, Subcommand};
 use matching_engine::domain::orderbook::ContractSpec;
 use matching_engine::exchange::core::ExchangeCore;
-use matching_engine::exchange::exchange_runtime::ExchangeRuntime;
+use matching_engine::exchange::exchange_runtime::{ExchangeRuntime, RuntimeOptions};
 use matching_engine::exchange::gateway_directory::{GatewayDirectory, HealthMonitor};
 use matching_engine::exchange::gateway_runtime::GatewayRuntime;
 use matching_engine::exchange::gateway_server::start as start_gateway;
@@ -154,18 +154,13 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
     let runner = CoreRunner::new(core, cmd_consumer, NoPlugins);
 
     let metrics = Arc::new(Mutex::new(ExchangeMetrics::new()));
-    let mut runtime = ExchangeRuntime::new(gateway_runtime, runner, gateway)
-        .with_metrics_sink(Arc::clone(&metrics));
-    if let Some(path) = &args.snapshot {
-        let snapshot = matching_engine::exchange::exchange_runtime::ExchangeSnapshot::load(
-            std::path::Path::new(path),
-        )?;
-        runtime.restore_snapshot(snapshot)?;
-    }
-    if args.idle_timeout_secs > 0 {
-        runtime = runtime.with_idle_timeout(Duration::from_secs(args.idle_timeout_secs));
-    }
-    let public_log = args
+    let mut options = RuntimeOptions {
+        metrics_sink: Some(Arc::clone(&metrics)),
+        idle_timeout: (args.idle_timeout_secs > 0)
+            .then(|| Duration::from_secs(args.idle_timeout_secs)),
+        ..RuntimeOptions::default()
+    };
+    options.public_log = args
         .public_log
         .as_ref()
         .map(|path| {
@@ -174,7 +169,7 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
             ))
         })
         .transpose()?;
-    let private_log = args
+    options.private_log = args
         .private_log
         .as_ref()
         .map(|path| {
@@ -183,15 +178,21 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
             ))
         })
         .transpose()?;
-    runtime = runtime.with_optional_result_logs(public_log, private_log);
     if let (Some(group), Some(port)) = (&args.multicast_group, args.multicast_port) {
-        let publisher = MarketDataPublisher::bind_multicast_on(
+        options.market_data = Some(MarketDataPublisher::bind_multicast_on(
             "0.0.0.0:0",
             group,
             port,
             args.multicast_interface.parse()?,
+        )?);
+    }
+    let mut runtime =
+        ExchangeRuntime::new(gateway_runtime, runner, gateway).with_options(options);
+    if let Some(path) = &args.snapshot {
+        let snapshot = matching_engine::exchange::exchange_runtime::ExchangeSnapshot::load(
+            std::path::Path::new(path),
         )?;
-        runtime = runtime.with_market_data(publisher);
+        runtime.restore_snapshot(snapshot)?;
     }
 
     let mut metrics_server = metrics_server::start(&args.metrics_listen, metrics)?;

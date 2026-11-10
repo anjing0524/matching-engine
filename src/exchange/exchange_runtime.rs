@@ -46,6 +46,19 @@ impl ExchangeSnapshot {
     }
 }
 
+/// Optional collaborators for one runtime instance.
+#[derive(Default)]
+pub struct RuntimeOptions {
+    pub public_log: Option<PublicResultLog>,
+    pub private_log: Option<PrivateResultLog>,
+    pub repair_buffer_capacity: Option<usize>,
+    pub repair_server: Option<RepairServer>,
+    pub market_data: Option<MarketDataPublisher>,
+    pub combo: Option<ComboRuntime>,
+    pub metrics_sink: Option<Arc<Mutex<ExchangeMetrics>>>,
+    pub idle_timeout: Option<Duration>,
+}
+
 /// Composite gateway/middleware/core runtime for one process.
 pub struct ExchangeRuntime<P> {
     gateway: GatewayRuntime,
@@ -76,34 +89,25 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
     }
 
     #[must_use]
-    pub fn with_optional_result_logs(
-        mut self,
-        public: Option<PublicResultLog>,
-        private: Option<PrivateResultLog>,
-    ) -> Self {
-        if let Some(public) = public {
+    pub fn with_options(mut self, options: RuntimeOptions) -> Self {
+        if let Some(public) = options.public_log {
             self.fanout = self.fanout.with_public_log(public);
         }
-        if let Some(private) = private {
+        if let Some(private) = options.private_log {
             self.fanout = self.fanout.with_private_log(private);
         }
-        self
-    }
-
-    #[must_use]
-    pub fn with_repair_server(mut self, server: RepairServer) -> Self {
-        self.fanout = self.fanout.with_repair_server(server);
-        self
-    }
-
-    #[must_use]
-    pub fn repair_sent(&self) -> u64 {
-        self.fanout.repair_sent()
-    }
-
-    #[must_use]
-    pub fn with_combo_runtime(mut self, combo: ComboRuntime) -> Self {
-        self.combo = Some(combo);
+        if let Some(capacity) = options.repair_buffer_capacity {
+            self.fanout = self.fanout.with_repair_buffer(capacity);
+        }
+        if let Some(server) = options.repair_server {
+            self.fanout = self.fanout.with_repair_server(server);
+        }
+        if let Some(publisher) = options.market_data {
+            self.fanout = self.fanout.with_market_data(publisher);
+        }
+        self.combo = options.combo;
+        self.metrics_sink = options.metrics_sink;
+        self.idle_timeout = options.idle_timeout;
         self
     }
 
@@ -112,56 +116,9 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
     }
 
     #[must_use]
-    pub fn with_repair_buffer(mut self, capacity: usize) -> Self {
-        self.fanout = self.fanout.with_repair_buffer(capacity);
-        self
-    }
-
-    #[must_use]
-    pub fn repair(&self, request: NackRequest) -> Vec<crate::exchange::public_events::PublicEvent> {
-        self.fanout.repair(request)
-    }
-
-    #[must_use]
-    pub fn with_market_data(mut self, publisher: MarketDataPublisher) -> Self {
-        self.fanout = self.fanout.with_market_data(publisher);
-        self
-    }
-
-    /// Switches the multicast publisher's local interface.
-    ///
-    /// # Errors
-    /// Returns an I/O error when no multicast publisher exists or rebinding fails.
-    pub fn switch_market_data_interface(
-        &mut self,
-        interface: std::net::Ipv4Addr,
-    ) -> std::io::Result<()> {
-        self.fanout.switch_interface(interface)
-    }
-
-    #[must_use]
-    pub fn public_sent(&self) -> u64 {
-        self.fanout.public_sent()
-    }
-
-    #[must_use]
     pub fn with_config(mut self, config: ExchangeConfig) -> Self {
         self.idle_timeout = config.idle_timeout;
-        self.fanout = self
-            .fanout
-            .with_repair_buffer(config.repair_buffer_capacity);
-        self
-    }
-
-    #[must_use]
-    pub fn with_metrics_sink(mut self, sink: Arc<Mutex<ExchangeMetrics>>) -> Self {
-        self.metrics_sink = Some(sink);
-        self
-    }
-
-    #[must_use]
-    pub fn with_idle_timeout(mut self, timeout: Duration) -> Self {
-        self.idle_timeout = Some(timeout);
+        self.fanout = self.fanout.with_repair_buffer(config.repair_buffer_capacity);
         self
     }
 
@@ -347,7 +304,7 @@ mod tests {
         let subscriber = MarketDataSubscriber::bind("127.0.0.1:0").unwrap();
         let publisher =
             MarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap()).unwrap();
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_market_data(publisher);
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions { market_data: Some(publisher), ..Default::default() });
 
         let clients = 4u64;
         let per_client = 25u64;
@@ -453,7 +410,7 @@ mod tests {
         let combo = ComboRuntime::new(engine)
             .with_command_consumer(combo_consumer)
             .with_publisher(publisher);
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_combo_runtime(combo);
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions { combo: Some(combo), ..Default::default() });
 
         let mut stream = TcpStream::connect(addr).unwrap();
         stream
@@ -552,7 +509,7 @@ mod tests {
             ComboMarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap())
                 .unwrap();
         let combo = ComboRuntime::new(engine).with_publisher(publisher);
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_combo_runtime(combo);
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions { combo: Some(combo), ..Default::default() });
         runtime.tick();
         let fill = subscriber.recv().unwrap();
         assert_eq!(fill.quantity, 5);
@@ -609,7 +566,7 @@ mod tests {
         let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
         let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
         let runner = CoreRunner::new(core, consumer, NoPlugins);
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_repair_buffer(16);
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions { repair_buffer_capacity: Some(16), ..Default::default() });
 
         let mut stream = TcpStream::connect(addr).unwrap();
         stream
@@ -674,7 +631,7 @@ mod tests {
             MarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap()).unwrap();
         let repair = RepairServer::bind("127.0.0.1:0", publisher, 16).unwrap();
         let repair_addr = repair.local_addr().unwrap();
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_repair_server(repair);
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions { repair_server: Some(repair), ..Default::default() });
 
         let mut stream = TcpStream::connect(addr).unwrap();
         stream
@@ -744,7 +701,7 @@ mod tests {
         let subscriber = MarketDataSubscriber::bind("127.0.0.1:0").unwrap();
         let publisher =
             MarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap()).unwrap();
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_market_data(publisher);
+        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions { market_data: Some(publisher), ..Default::default() });
 
         let mut stream = TcpStream::connect(addr).unwrap();
         stream
@@ -795,7 +752,7 @@ mod tests {
         let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
         let runner = CoreRunner::new(core, consumer, NoPlugins);
         let mut runtime = ExchangeRuntime::new(gateway, runner, server)
-            .with_idle_timeout(Duration::from_millis(30));
+            .with_options(RuntimeOptions { idle_timeout: Some(Duration::from_millis(30)), ..Default::default() });
 
         let mut stream = TcpStream::connect(addr).unwrap();
         stream
@@ -853,7 +810,10 @@ mod tests {
         let runner = CoreRunner::new(core, consumer, NoPlugins);
         let metrics_sink = Arc::new(Mutex::new(ExchangeMetrics::new()));
         let mut runtime = ExchangeRuntime::new(gateway, runner, server)
-            .with_metrics_sink(Arc::clone(&metrics_sink));
+            .with_options(RuntimeOptions {
+                metrics_sink: Some(Arc::clone(&metrics_sink)),
+                ..Default::default()
+            });
 
         let mut stream = TcpStream::connect(addr).unwrap();
         stream
@@ -961,7 +921,10 @@ mod tests {
             ContractSpec::new("LEG2", 1, 1, 100_000),
         );
         let mut runtime = ExchangeRuntime::new(gateway, runner, server)
-            .with_combo_runtime(ComboRuntime::new(engine));
+            .with_options(RuntimeOptions {
+                combo: Some(ComboRuntime::new(engine)),
+                ..Default::default()
+            });
 
         let mut command = Command::zeroed();
         command.command_type = CommandType::NewOrder;
