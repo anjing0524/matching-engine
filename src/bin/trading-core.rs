@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let public = open_public_event_producer(Path::new(&args.public_ring))?;
     let private = open_private_event_producer(Path::new(&args.private_ring))?;
     let core = if let Some(snapshot_path) = &args.snapshot {
-        let snapshot: crate::trading::core::kernel::CoreSnapshot =
+        let snapshot: trading_system_engine::trading::core::kernel::CoreSnapshot =
             trading_system_engine::trading::snapshot::snapshot_file::load(
                 Path::new(snapshot_path),
                 trading_system_engine::trading::snapshot::CORE_SNAPSHOT_VERSION,
