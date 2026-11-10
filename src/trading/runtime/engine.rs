@@ -73,6 +73,8 @@ pub struct TradingRuntime<P> {
     fanout: EventFanout,
     metrics: TradingMetrics,
     metrics_sink: Option<Arc<Mutex<TradingMetrics>>>,
+    private_events: Vec<crate::trading::core::private_events::PrivateEvent>,
+    public_events: Vec<crate::trading::core::public_events::PublicEvent>,
 }
 
 impl<P: PreTradePlugin> TradingRuntime<P> {
@@ -88,6 +90,8 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
             fanout: EventFanout::new(),
             metrics: TradingMetrics::new(),
             metrics_sink: None,
+            private_events: Vec::new(),
+            public_events: Vec::new(),
         }
     }
 
@@ -165,13 +169,19 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         }
         let commands = self.core.poll();
         self.metrics.commands_executed += commands as u64;
-        let private = self.core.drain_private();
-        self.fanout.log_private(&private);
-        let sent = self.gateway.dispatch_private(&self.server, private);
+        self.core
+            .core_mut()
+            .drain_private_events_into(&mut self.private_events);
+        self.fanout.log_private(&self.private_events);
+        let sent = self
+            .gateway
+            .dispatch_private(&self.server, self.private_events.drain(..));
         self.metrics.private_events_sent += sent as u64;
-        let public = self.core.drain_public();
+        self.core
+            .core_mut()
+            .drain_public_events_into(&mut self.public_events);
         let public_before = self.fanout.public_sent();
-        self.fanout.publish_public(&public);
+        self.fanout.publish_public(&self.public_events);
         self.metrics.public_events_sent += self.fanout.public_sent() - public_before;
         if let Some(combo) = &mut self.combo {
             combo.poll_commands();

@@ -316,6 +316,12 @@ impl TradingCore {
     }
 
     /// Drains all private events produced since the last drain.
+    /// Drains private events into a reusable buffer.
+    pub fn drain_private_events_into(&mut self, out: &mut Vec<PrivateEvent>) {
+        out.clear();
+        out.append(&mut self.private_events);
+    }
+
     pub fn drain_private_events(&mut self) -> Vec<PrivateEvent> {
         std::mem::take(&mut self.private_events)
     }
@@ -360,6 +366,12 @@ impl TradingCore {
             Side::Sell => OrderType::Sell,
         };
         self.book.executable_quantity(taker_side, price_ticks) >= quantity
+    }
+
+    /// Drains public events into a reusable buffer.
+    pub fn drain_public_events_into(&mut self, out: &mut Vec<PublicEvent>) {
+        out.clear();
+        out.append(&mut self.public_events);
     }
 
     /// Drains public events produced since the last drain.
