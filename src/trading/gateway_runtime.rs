@@ -1114,9 +1114,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
         stream
-            .write_all(
-                &GatewayFrame::Command(crate::trading::protocol::Command::zeroed()).encode(),
-            )
+            .write_all(&GatewayFrame::Command(crate::trading::protocol::Command::zeroed()).encode())
             .unwrap();
         let mut bucket_id = None;
         for _ in 0..100 {

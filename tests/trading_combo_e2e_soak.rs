@@ -1,11 +1,11 @@
 //! Many combo commands through the middleware combo ring into the two-leg engine.
 
 use trading_system_engine::domain::orderbook::ContractSpec;
+use trading_system_engine::shared::protocol::OrderType;
 use trading_system_engine::trading::combo_engine::ComboEngine;
 use trading_system_engine::trading::combo_runtime::ComboRuntime;
 use trading_system_engine::trading::protocol::{Command, CommandType, Hedge, Offset, Side};
 use trading_system_engine::trading::transport::create;
-use trading_system_engine::shared::protocol::OrderType;
 
 #[test]
 fn ten_thousand_combo_commands_fill() {

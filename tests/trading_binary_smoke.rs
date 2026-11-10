@@ -1,5 +1,9 @@
 //! Deployment smoke test for the `trading` binary.
 
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpStream;
+use std::process::{Command as ProcessCommand, Stdio};
+use std::time::Duration;
 use trading_system_engine::trading::command_log::read_segment;
 use trading_system_engine::trading::gateway::GatewayFrame;
 use trading_system_engine::trading::protocol::{
@@ -7,10 +11,6 @@ use trading_system_engine::trading::protocol::{
     VolumeCondition,
 };
 use trading_system_engine::trading::result_log::{read_private_log, read_public_log};
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
-use std::process::{Command as ProcessCommand, Stdio};
-use std::time::Duration;
 
 #[test]
 fn trading_binary_accepts_order_and_serves_metrics() {

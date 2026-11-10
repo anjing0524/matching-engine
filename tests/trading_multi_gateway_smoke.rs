@@ -1,15 +1,15 @@
 //! Two standalone gateway relays → one middleware/core split process.
 
-use trading_system_engine::trading::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
-use trading_system_engine::trading::protocol::{
-    Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
-    VolumeCondition,
-};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command as ProcessCommand, Stdio};
 use std::time::{Duration, Instant};
+use trading_system_engine::trading::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
+use trading_system_engine::trading::protocol::{
+    Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
+    VolumeCondition,
+};
 
 struct ChildGuard(Child);
 

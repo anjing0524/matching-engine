@@ -15,8 +15,8 @@ use tikv_jemallocator::Jemalloc;
 static GLOBAL: Jemalloc = Jemalloc;
 
 pub mod domain;
-pub mod trading;
 pub mod shared;
+pub mod trading;
 
 pub use domain::orderbook::{ContractSpec, TickBasedOrderBook};
 pub use shared::protocol::{

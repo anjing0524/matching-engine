@@ -3,9 +3,9 @@
 //! Measures order entry, FIFO matching, best-price discovery, and deep-book
 //! behaviour of [`TickBasedOrderBook`].
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use std::hint::black_box;
 use trading_system_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use trading_system_engine::shared::protocol::{NewOrderRequest, OrderType};
-use std::hint::black_box;
 
 fn order(user_id: u64, order_type: OrderType, price: u64, quantity: u64) -> NewOrderRequest {
     NewOrderRequest {

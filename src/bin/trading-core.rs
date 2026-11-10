@@ -2,16 +2,16 @@
 //! publishes public/private events to shared rings.
 
 use clap::Parser;
+use std::path::Path;
+use std::time::Duration;
 use trading_system_engine::domain::orderbook::ContractSpec;
+use trading_system_engine::shared::SymbolId;
 use trading_system_engine::trading::core::TradingCore;
 use trading_system_engine::trading::plugins::NoPlugins;
 use trading_system_engine::trading::runner::CoreRunner;
 use trading_system_engine::trading::transport::{
     open_command_consumer, open_private_event_producer, open_public_event_producer,
 };
-use trading_system_engine::shared::SymbolId;
-use std::path::Path;
-use std::time::Duration;
 
 #[derive(Parser)]
 struct Args {

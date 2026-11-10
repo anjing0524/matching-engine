@@ -1,6 +1,7 @@
 //! Soak-style core run: 1M fixed commands through the shared-memory ring.
 
 use trading_system_engine::domain::orderbook::ContractSpec;
+use trading_system_engine::shared::SymbolId;
 use trading_system_engine::trading::core::TradingCore;
 use trading_system_engine::trading::plugins::NoPlugins;
 use trading_system_engine::trading::protocol::{
@@ -9,7 +10,6 @@ use trading_system_engine::trading::protocol::{
 };
 use trading_system_engine::trading::runner::CoreRunner;
 use trading_system_engine::trading::transport::create;
-use trading_system_engine::shared::SymbolId;
 
 fn command(seq: u64) -> Command {
     let mut command = Command::zeroed();

@@ -2,6 +2,9 @@
 //! sequences gateway commands, and routes core events back to gateways/public.
 
 use clap::Parser;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 use trading_system_engine::trading::gateway_runtime::GatewayRuntime;
 use trading_system_engine::trading::gateway_server::start as start_gateway;
 use trading_system_engine::trading::market_data::MarketDataPublisher;
@@ -10,9 +13,6 @@ use trading_system_engine::trading::transport::{
     create, create_private_event_transport, create_public_event_transport,
     open_private_event_consumer, open_public_event_consumer,
 };
-use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
 
 #[derive(Parser)]
 struct Args {
@@ -85,7 +85,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut public_log = args
         .public_log
         .as_deref()
-        .map(|path| trading_system_engine::trading::result_log::PublicResultLog::create(Path::new(path)))
+        .map(|path| {
+            trading_system_engine::trading::result_log::PublicResultLog::create(Path::new(path))
+        })
         .transpose()?;
     let mut private_log = args
         .private_log

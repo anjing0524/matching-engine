@@ -1,7 +1,7 @@
 //! Build a validated production trading configuration and multicast publisher.
 
-use trading_system_engine::trading::config::TradingConfig;
 use std::time::Duration;
+use trading_system_engine::trading::config::TradingConfig;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = TradingConfig {

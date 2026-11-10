@@ -5,9 +5,7 @@
 //! UDP endpoints and packet codec, not the NACK/retransmit loop.
 
 use crate::trading::public_events::PublicEvent;
-use crate::trading::transport::{
-    PUBLIC_EVENT_SLOT_SIZE, decode_public_event, encode_public_event,
-};
+use crate::trading::transport::{PUBLIC_EVENT_SLOT_SIZE, decode_public_event, encode_public_event};
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;

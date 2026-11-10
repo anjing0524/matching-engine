@@ -3,7 +3,9 @@
 //! Ignored by default; duration is controlled by `TRADING_SOAK_SECS`:
 //! `TRADING_SOAK_SECS=3600 cargo test --release --test trading_timed_soak -- --ignored --nocapture`
 
+use std::time::{Duration, Instant};
 use trading_system_engine::domain::orderbook::ContractSpec;
+use trading_system_engine::shared::SymbolId;
 use trading_system_engine::trading::core::TradingCore;
 use trading_system_engine::trading::plugins::NoPlugins;
 use trading_system_engine::trading::protocol::{
@@ -12,8 +14,6 @@ use trading_system_engine::trading::protocol::{
 };
 use trading_system_engine::trading::runner::CoreRunner;
 use trading_system_engine::trading::transport::create;
-use trading_system_engine::shared::SymbolId;
-use std::time::{Duration, Instant};
 
 fn command(seq: u64) -> Command {
     let mut command = Command::zeroed();

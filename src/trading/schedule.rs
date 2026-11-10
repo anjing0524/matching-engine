@@ -169,10 +169,7 @@ mod tests {
     #[test]
     fn driver_reports_only_phase_changes() {
         let mut driver = ScheduleDriver::new(schedule());
-        assert_eq!(
-            driver.observe(100),
-            Some((TradingPhase::OpeningAuction, 1))
-        );
+        assert_eq!(driver.observe(100), Some((TradingPhase::OpeningAuction, 1)));
         assert_eq!(driver.observe(150), None);
         assert_eq!(driver.observe(200), Some((TradingPhase::Continuous, 1)));
         assert_eq!(driver.observe(500), Some((TradingPhase::Closed, 1)));

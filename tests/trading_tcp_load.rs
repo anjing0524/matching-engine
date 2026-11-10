@@ -3,9 +3,12 @@
 //! Ignored by default; run with:
 //! `cargo test --release --test trading_tcp_load -- --ignored --nocapture`
 
+use std::io::Write;
+use std::net::TcpStream;
+use std::time::{Duration, Instant};
 use trading_system_engine::domain::orderbook::ContractSpec;
+use trading_system_engine::shared::SymbolId;
 use trading_system_engine::trading::core::TradingCore;
-use trading_system_engine::trading::runtime::{TradingRuntime, RuntimeOptions};
 use trading_system_engine::trading::gateway::GatewayFrame;
 use trading_system_engine::trading::gateway_runtime::GatewayRuntime;
 use trading_system_engine::trading::gateway_server::start;
@@ -17,11 +20,8 @@ use trading_system_engine::trading::protocol::{
     VolumeCondition,
 };
 use trading_system_engine::trading::runner::CoreRunner;
+use trading_system_engine::trading::runtime::{RuntimeOptions, TradingRuntime};
 use trading_system_engine::trading::transport::create;
-use trading_system_engine::shared::SymbolId;
-use std::io::Write;
-use std::net::TcpStream;
-use std::time::{Duration, Instant};
 
 fn command(id: u64, user: u32) -> Command {
     let mut command = Command::zeroed();

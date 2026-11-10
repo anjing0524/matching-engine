@@ -5,9 +5,11 @@
 //! `deploy/README.md`.
 
 use clap::{Parser, Subcommand};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use trading_system_engine::domain::orderbook::ContractSpec;
+use trading_system_engine::shared::SymbolId;
 use trading_system_engine::trading::core::TradingCore;
-use trading_system_engine::trading::runtime::{TradingRuntime, RuntimeOptions};
 use trading_system_engine::trading::gateway_directory::{GatewayDirectory, HealthMonitor};
 use trading_system_engine::trading::gateway_runtime::GatewayRuntime;
 use trading_system_engine::trading::gateway_server::start as start_gateway;
@@ -17,10 +19,8 @@ use trading_system_engine::trading::metrics_server;
 use trading_system_engine::trading::middleware::MiddlewareSequencer;
 use trading_system_engine::trading::plugins::NoPlugins;
 use trading_system_engine::trading::runner::CoreRunner;
+use trading_system_engine::trading::runtime::{RuntimeOptions, TradingRuntime};
 use trading_system_engine::trading::transport::create;
-use trading_system_engine::shared::SymbolId;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 #[derive(Parser)]
 #[command(name = "trading", version, about = "Trading runtime")]
@@ -164,18 +164,18 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
         .public_log
         .as_ref()
         .map(|path| {
-            trading_system_engine::trading::result_log::PublicResultLog::create(std::path::Path::new(
-                path,
-            ))
+            trading_system_engine::trading::result_log::PublicResultLog::create(
+                std::path::Path::new(path),
+            )
         })
         .transpose()?;
     options.private_log = args
         .private_log
         .as_ref()
         .map(|path| {
-            trading_system_engine::trading::result_log::PrivateResultLog::create(std::path::Path::new(
-                path,
-            ))
+            trading_system_engine::trading::result_log::PrivateResultLog::create(
+                std::path::Path::new(path),
+            )
         })
         .transpose()?;
     if let (Some(group), Some(port)) = (&args.multicast_group, args.multicast_port) {

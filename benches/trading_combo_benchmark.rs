@@ -1,11 +1,11 @@
 //! Combo queue and atomic leg-execution throughput.
 
-use trading_system_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
-use trading_system_engine::trading::combo_engine::ComboEngine;
-use trading_system_engine::trading::protocol::{Hedge, Offset, Side};
-use trading_system_engine::shared::protocol::OrderType;
 use std::hint::black_box;
 use std::time::Instant;
+use trading_system_engine::domain::orderbook::{ContractSpec, TickBasedOrderBook};
+use trading_system_engine::shared::protocol::OrderType;
+use trading_system_engine::trading::combo_engine::ComboEngine;
+use trading_system_engine::trading::protocol::{Hedge, Offset, Side};
 
 fn main() {
     let orders = 200_000u64;

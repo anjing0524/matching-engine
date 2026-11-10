@@ -152,6 +152,7 @@ impl<P: PreTradePlugin> CoreRunner<P> {
 mod tests {
     use super::*;
     use crate::domain::orderbook::ContractSpec;
+    use crate::shared::SymbolId;
     use crate::trading::plugins::NoPlugins;
     use crate::trading::protocol::{
         Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
@@ -160,7 +161,6 @@ mod tests {
     use crate::trading::transport::{
         create, create_private_event_transport, create_public_event_transport,
     };
-    use crate::shared::SymbolId;
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(

@@ -197,6 +197,7 @@ impl MiddlewareSequencer {
 mod tests {
     use super::*;
     use crate::domain::orderbook::ContractSpec;
+    use crate::shared::SymbolId;
     use crate::trading::core::TradingCore;
     use crate::trading::plugins::NoPlugins;
     use crate::trading::protocol::{
@@ -205,7 +206,6 @@ mod tests {
     };
     use crate::trading::runner::CoreRunner;
     use crate::trading::transport::create;
-    use crate::shared::SymbolId;
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(

@@ -248,6 +248,7 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
 mod tests {
     use super::*;
     use crate::domain::orderbook::ContractSpec;
+    use crate::shared::SymbolId;
     use crate::trading::gateway::GatewayFrame;
     use crate::trading::gateway_runtime::GatewayRuntime;
     use crate::trading::gateway_server::start;
@@ -258,7 +259,6 @@ mod tests {
         VolumeCondition,
     };
     use crate::trading::transport::create;
-    use crate::shared::SymbolId;
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::time::Duration;
@@ -376,13 +376,13 @@ mod tests {
 
     #[test]
     fn combo_order_flows_gateway_to_public_transport() {
+        use crate::shared::protocol::OrderType;
         use crate::trading::combo_engine::ComboEngine;
         use crate::trading::combo_market_data::{
             ComboMarketDataPublisher, ComboMarketDataSubscriber,
         };
         use crate::trading::combo_runtime::ComboRuntime;
         use crate::trading::protocol::{Command, CommandType, Hedge, Offset, Side};
-        use crate::shared::protocol::OrderType;
         use std::io::Read;
 
         let core_path = std::env::temp_dir().join(format!(
@@ -489,13 +489,13 @@ mod tests {
 
     #[test]
     fn combo_runtime_tick_is_driven_by_runtime() {
+        use crate::shared::protocol::OrderType;
         use crate::trading::combo_engine::ComboEngine;
         use crate::trading::combo_market_data::{
             ComboMarketDataPublisher, ComboMarketDataSubscriber,
         };
         use crate::trading::combo_runtime::ComboRuntime;
         use crate::trading::protocol::{Hedge, Offset, Side};
-        use crate::shared::protocol::OrderType;
 
         let path = std::env::temp_dir().join(format!(
             "matching-engine-trading-runtime-combo-{}",
@@ -932,10 +932,8 @@ mod tests {
         use crate::trading::combo_engine::ComboEngine;
         use crate::trading::combo_runtime::ComboRuntime;
 
-        let core_path = std::env::temp_dir().join(format!(
-            "trading-full-snapshot-core-{}",
-            std::process::id()
-        ));
+        let core_path =
+            std::env::temp_dir().join(format!("trading-full-snapshot-core-{}", std::process::id()));
         let combo_path = std::env::temp_dir().join(format!(
             "trading-full-snapshot-combo-{}",
             std::process::id()

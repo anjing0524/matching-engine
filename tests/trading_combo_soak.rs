@@ -1,9 +1,9 @@
 //! Combo queue/cancel and atomic fill soak.
 
 use trading_system_engine::domain::orderbook::ContractSpec;
+use trading_system_engine::shared::protocol::OrderType;
 use trading_system_engine::trading::combo_engine::ComboEngine;
 use trading_system_engine::trading::protocol::{Hedge, Offset, Side};
-use trading_system_engine::shared::protocol::OrderType;
 
 #[test]
 fn combo_queue_cancel_soak() {

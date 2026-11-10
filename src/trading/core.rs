@@ -9,6 +9,8 @@
 //! command sequence always produces the same private/public projections.
 
 use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
+use crate::shared::SymbolId;
+use crate::shared::protocol::{NewOrderRequest, OrderType};
 use crate::trading::auction::{self, AuctionOrder, AuctionResult};
 use crate::trading::plugins::{PreTradePlugin, RiskOrder, ValidationContext};
 use crate::trading::positions::{CloseKey, FrozenClose, PositionKey, Positions};
@@ -16,9 +18,7 @@ use crate::trading::private_events::{PrivateEvent, PrivateStatus};
 use crate::trading::protocol::{
     Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, VolumeCondition,
 };
-use crate::trading::public_events::{TradingPhase, PublicEvent, PublicEventType};
-use crate::shared::SymbolId;
-use crate::shared::protocol::{NewOrderRequest, OrderType};
+use crate::trading::public_events::{PublicEvent, PublicEventType, TradingPhase};
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;

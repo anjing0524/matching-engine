@@ -1,14 +1,14 @@
 //! Gateway connection churn: active sessions return to zero and closed records
 //! remain bounded.
 
+use std::io::Write;
+use std::net::TcpStream;
+use std::time::{Duration, Instant};
 use trading_system_engine::trading::gateway::GatewayFrame;
 use trading_system_engine::trading::gateway_runtime::GatewayRuntime;
 use trading_system_engine::trading::gateway_server::start;
 use trading_system_engine::trading::middleware::MiddlewareSequencer;
 use trading_system_engine::trading::transport::create;
-use std::io::Write;
-use std::net::TcpStream;
-use std::time::{Duration, Instant};
 
 #[test]
 fn reconnect_churn_returns_to_zero_active_sessions() {

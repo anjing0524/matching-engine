@@ -238,9 +238,9 @@ impl ComboRuntime {
 mod tests {
     use super::*;
     use crate::domain::orderbook::ContractSpec;
+    use crate::shared::protocol::OrderType;
     use crate::trading::combo_market_data::ComboMarketDataSubscriber;
     use crate::trading::protocol::{Hedge, Offset, Side};
-    use crate::shared::protocol::OrderType;
 
     #[test]
     fn combo_command_emits_private_status() {
