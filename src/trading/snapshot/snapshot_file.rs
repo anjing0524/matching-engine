@@ -91,10 +91,10 @@ mod tests {
     fn core_snapshot_json_and_file_roundtrip() {
         use crate::domain::orderbook::ContractSpec;
         use crate::shared::SymbolId;
-        use crate::trading::core::LimitOrderCommand;
-        use crate::trading::core::kernel::{CoreSnapshot, TradingCore};
+        use crate::shared::protocol::OrderType;
+        use crate::trading::core::kernel::{CoreSnapshot, LimitOrderCommand, TradingCore};
         use crate::trading::core::positions::PositionKey;
-        use crate::trading::core::protocol::{Hedge, Offset, OrderType, Side};
+        use crate::trading::core::protocol::{Hedge, Side};
 
         fn core() -> TradingCore {
             TradingCore::new(
