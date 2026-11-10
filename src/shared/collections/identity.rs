@@ -58,6 +58,10 @@ impl Hasher for U64MixHasher {
         value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
         self.0 = value ^ (value >> 31);
     }
+
+    fn write_u128(&mut self, value: u128) {
+        self.write_u64((value as u64) ^ ((value >> 64) as u64));
+    }
 }
 
 /// `HashMap<u64, V>` with mixed hashing.
@@ -65,6 +69,9 @@ pub type U64MixMap<V> = HashMap<u64, V, BuildHasherDefault<U64MixHasher>>;
 
 /// `HashSet<u64>` with mixed hashing.
 pub type U64MixSet = HashSet<u64, BuildHasherDefault<U64MixHasher>>;
+
+/// `HashMap<K, V>` for composite keys whose `Hash` writes one `u128`.
+pub type U128MixMap<K, V> = HashMap<K, V, BuildHasherDefault<U64MixHasher>>;
 
 /// `HashMap<u64, V>` with identity hashing.
 pub type U64IdentityMap<V> = HashMap<u64, V, BuildHasherDefault<U64IdentityHasher>>;

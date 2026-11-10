@@ -4,8 +4,9 @@
 //! bucket. Orders are deliberately not embedded in positions; this module only
 //! owns the counters that fills and risk plugins read.
 
+use crate::shared::collections::identity::U128MixMap;
 use crate::trading::core::protocol::{Hedge, Offset, Side};
-use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 /// One side of a gross position, split by trading day bucket.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -22,7 +23,7 @@ impl Position {
 }
 
 /// Key for one account's position bucket.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PositionKey {
     pub account_id: u64,
     pub side: Side,
@@ -40,8 +41,16 @@ impl PositionKey {
     }
 }
 
+impl Hash for PositionKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u128(
+            (u128::from(self.account_id) << 5) | (self.side as u128) | ((self.hedge as u128) << 2),
+        );
+    }
+}
+
 /// Key for close-quantity reservations made by accepted close orders.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CloseKey {
     pub position: PositionKey,
     pub offset: Offset,
@@ -51,6 +60,15 @@ impl CloseKey {
     #[must_use]
     pub const fn new(position: PositionKey, offset: Offset) -> Self {
         Self { position, offset }
+    }
+}
+
+impl Hash for CloseKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let position = (u128::from(self.position.account_id) << 5)
+            | (self.position.side as u128)
+            | ((self.position.hedge as u128) << 2);
+        state.write_u128((position << 2) | (self.offset as u128));
     }
 }
 
@@ -64,7 +82,7 @@ pub enum PositionError {
 /// Gross position store.
 #[derive(Debug, Default)]
 pub struct Positions {
-    positions: HashMap<PositionKey, Position>,
+    positions: U128MixMap<PositionKey, Position>,
 }
 
 impl Positions {
@@ -148,7 +166,7 @@ impl Positions {
 /// position. A fill/cancel releases its reservation.
 #[derive(Debug, Default)]
 pub struct FrozenClose {
-    reserved: HashMap<CloseKey, u64>,
+    reserved: U128MixMap<CloseKey, u64>,
 }
 
 impl FrozenClose {
