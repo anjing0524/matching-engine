@@ -21,8 +21,6 @@ use crate::trading::core::protocol::{
 };
 use crate::trading::core::public_events::{PublicEvent, PublicEventType, TradingPhase};
 use std::collections::{HashMap, HashSet};
-use std::io;
-use std::path::Path;
 
 /// A new limit order submitted to the core.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,8 +184,6 @@ pub struct CoreSnapshot {
     pub last_trading_ts_ns: u64,
 }
 
-/// Current on-disk snapshot format version.
-pub const SNAPSHOT_VERSION: u32 = 4;
 
 /// The deterministic core state machine for one contract.
 pub struct TradingCore {
@@ -316,39 +312,6 @@ impl TradingCore {
         self.private_events.clear();
         self.public_events.clear();
         Ok(())
-    }
-
-    /// Serializes the snapshot with a format version.
-    ///
-    /// # Errors
-    /// Returns a JSON error if serialization fails.
-    pub fn snapshot_json(&self) -> Result<String, serde_json::Error> {
-        crate::trading::snapshot::snapshot_file::encode(&self.snapshot(), SNAPSHOT_VERSION)
-    }
-
-    /// Restores a snapshot from versioned JSON.
-    ///
-    /// # Errors
-    /// Returns a reason for invalid JSON, a version mismatch, or a restore error.
-    pub fn restore_snapshot_json(&mut self, json: &str) -> Result<(), String> {
-        let snapshot = crate::trading::snapshot::snapshot_file::decode(json, SNAPSHOT_VERSION)?;
-        self.restore_snapshot(snapshot)
-    }
-
-    /// Atomically writes a versioned snapshot to `path`.
-    ///
-    /// # Errors
-    /// Returns an I/O error for serialization or file replacement failure.
-    pub fn save_snapshot(&self, path: &Path) -> io::Result<()> {
-        crate::trading::snapshot::snapshot_file::save(path, &self.snapshot(), SNAPSHOT_VERSION)
-    }
-
-    /// Loads a versioned snapshot from `path`.
-    ///
-    /// # Errors
-    /// Returns an I/O error for read/JSON/version failures.
-    pub fn load_snapshot(path: &Path) -> io::Result<CoreSnapshot> {
-        crate::trading::snapshot::snapshot_file::load(path, SNAPSHOT_VERSION)
     }
 
     #[must_use]
@@ -1852,9 +1815,18 @@ mod tests {
             .apply_open(PositionKey::new(1, Side::Buy, Hedge::Spec), 2)
             .unwrap();
         let expected = state.snapshot();
-        let json = state.snapshot_json().unwrap();
+        let json = crate::trading::snapshot::snapshot_file::encode(
+            &state.snapshot(),
+            crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
+        )
+        .unwrap();
         let mut restored = core();
-        restored.restore_snapshot_json(&json).unwrap();
+        let snapshot: CoreSnapshot = crate::trading::snapshot::snapshot_file::decode(
+            &json,
+            crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
+        )
+        .unwrap();
+        restored.restore_snapshot(snapshot).unwrap();
         assert_eq!(restored.snapshot(), expected);
 
         let path = std::env::temp_dir().join(format!(
@@ -1862,8 +1834,17 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
-        state.save_snapshot(&path).unwrap();
-        let loaded = TradingCore::load_snapshot(&path).unwrap();
+        crate::trading::snapshot::snapshot_file::save(
+            &path,
+            &state.snapshot(),
+            crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
+        )
+        .unwrap();
+        let loaded = crate::trading::snapshot::snapshot_file::load(
+            &path,
+            crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
+        )
+        .unwrap();
         assert_eq!(loaded, expected);
 
         let mut tampered: serde_json::Value = serde_json::from_str(&json).unwrap();

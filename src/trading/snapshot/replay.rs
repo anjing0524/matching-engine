@@ -13,7 +13,11 @@ pub fn replay_from_snapshot(
     snapshot_path: &Path,
     commands: impl IntoIterator<Item = Command>,
 ) -> Result<TradingCore, String> {
-    let snapshot = TradingCore::load_snapshot(snapshot_path).map_err(|error| error.to_string())?;
+    let snapshot = crate::trading::snapshot::snapshot_file::load::<crate::trading::core::kernel::CoreSnapshot>(
+        snapshot_path,
+        crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
+    )
+    .map_err(|error| error.to_string())?;
     let mut core = TradingCore::new(snapshot.spec.clone(), snapshot.symbol);
     core.restore_snapshot(snapshot)?;
     apply(&mut core, commands);
@@ -117,7 +121,12 @@ mod tests {
             let _ =
                 before.execute_with_plugins(command(seq, side, TradingPhase::Continuous), &plugin);
         }
-        before.save_snapshot(&path).unwrap();
+        crate::trading::snapshot::snapshot_file::save(
+            &path,
+            &before.snapshot(),
+            crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
+        )
+        .unwrap();
         let replayed = replay_from_snapshot(
             &path,
             [
