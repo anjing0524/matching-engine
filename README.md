@@ -33,6 +33,14 @@ TradingRuntime
 
 详细 ownership 与边界见 [docs/architecture-map.md](docs/architecture-map.md)。
 
+## 命名
+
+```text
+crate:     trading-system-engine
+lib:       trading_system_engine
+binaries:  trading-engine / trading-core / trading-middleware / trading-gateway
+```
+
 ## 构建与测试
 
 ```bash

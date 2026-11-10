@@ -13,7 +13,8 @@ Rust: 1.99.1 (updated with `rustup update stable`)
 Cargo: 1.99.1
 ```
 
-Repository: `~/code/matching-engine`, cloned from `main` at `0827b96`.
+Repository checkout at test time: `~/code/matching-engine` (the project/package
+is now named `trading-system-engine`; the historical path is recorded verbatim).
 
 ## Test suite
 
