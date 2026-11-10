@@ -88,6 +88,12 @@ connection.
 `HashMap<u64, Vec<ReplayEvent>>` is gone. `take_all_replays` was removed and the
 middleware binary drains `take_replay_batches` directly.
 
+### 7. Redirect pending index
+
+Redirects are rare but `take_redirects` previously scanned every connection and
+built a temporary `HashMap` on each tick. `redirect_pending: U64MixSet` now
+indexes displaced connections; `take_redirects` returns `Vec<(u64, String)>`.
+
 ## Remaining data-structure candidates
 
 1. **Event vectors**
