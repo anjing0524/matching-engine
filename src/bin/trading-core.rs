@@ -3,7 +3,6 @@
 
 use clap::Parser;
 use std::path::Path;
-use std::time::Duration;
 use trading_system_engine::domain::orderbook::ContractSpec;
 use trading_system_engine::shared::SymbolId;
 use trading_system_engine::trading::core::TradingCore;
