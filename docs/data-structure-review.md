@@ -135,6 +135,13 @@ negligible in debug; a timing wheel is not justified. Keep the simpler scan.
 `auction_order_seq` was incremented and snapshotted but never read. It is
 removed; `CORE_SNAPSHOT_VERSION` is now `7`.
 
+### 12. Reused runtime event buffers
+
+`TradingRuntime` now owns `private_events` and `public_events` buffers.
+`TradingCore::drain_private_events_into` / `drain_public_events_into` append
+into them instead of `mem::take`-ing a new Vec every tick; `drain(..)` leaves
+the buffers' capacity in place for the next tick.
+
 ## Remaining data-structure candidates
 
 1. **Event vectors**
