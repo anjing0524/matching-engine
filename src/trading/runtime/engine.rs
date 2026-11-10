@@ -110,7 +110,7 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         self
     }
 
-    pub fn combo_mut(&mut self) -> Option<&mut ComboRuntime> {
+    pub(crate) fn combo_mut(&mut self) -> Option<&mut ComboRuntime> {
         self.combo.as_mut()
     }
 
@@ -125,25 +125,13 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
     }
 
     #[must_use]
-    pub fn repair(
+    pub(crate) fn repair(
         &self,
         request: NackRequest,
     ) -> Vec<crate::trading::core::public_events::PublicEvent> {
         self.fanout.repair(request)
     }
 
-    /// Switches the multicast publisher's local interface.
-    ///
-    /// # Errors
-    /// Returns an I/O error when no multicast publisher exists or rebinding fails.
-    pub fn switch_market_data_interface(
-        &mut self,
-        interface: std::net::Ipv4Addr,
-    ) -> std::io::Result<()> {
-        self.fanout.switch_interface(interface)
-    }
-
-    /// Runs one non-blocking iteration.
     pub fn tick(&mut self) {
         let tick_start = Instant::now();
         let effects = self.gateway.poll_effects();
@@ -223,7 +211,7 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
     }
 
     #[must_use]
-    pub fn core(&self) -> &TradingCore {
+    pub(crate) fn core(&self) -> &TradingCore {
         self.core.core()
     }
 
@@ -251,7 +239,7 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         }
     }
 
-    pub fn gateway_mut(&mut self) -> &mut GatewayRuntime {
+    pub(crate) fn gateway_mut(&mut self) -> &mut GatewayRuntime {
         &mut self.gateway
     }
 }
