@@ -23,7 +23,7 @@ Date: 2026-11-06
 | combo queue + atomic fills | combo engine/execution tests |
 | combo command ring + private/public | `runtime` combo e2e test |
 | binary deployment smoke | `tests/trading_binary_smoke.rs` |
-| CI two-job run | GitHub Actions run 42756601448: test + container, success |
+| CI two-job run | GitHub Actions run 42763267240: test + container, success |
 
 The binary smoke test:
 
