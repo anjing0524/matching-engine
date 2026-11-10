@@ -12,8 +12,8 @@ src/
 ├── bin/                    # trading-engine/core/middleware/gateway
 └── trading/
     ├── core/               # kernel, auction, positions, plugins, events, protocol
-    ├── gateway/            # frame, runtime, server, proxy, directory, auth, session, replay
-    ├── transport/          # ring, middleware, runner, command/result logs
+    ├── gateway/            # frame, runtime, server, proxy, directory, auth, replay
+    ├── transport/          # ring, middleware, runner, session, command/result logs
     ├── market_data/        # publisher, tracker, repair, metrics
     ├── combo/              # queue, engine, exec, runtime, market_data, margin
     ├── snapshot/           # snapshot_file, replay
