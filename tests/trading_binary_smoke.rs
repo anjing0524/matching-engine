@@ -4,12 +4,12 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::process::{Command as ProcessCommand, Stdio};
 use std::time::Duration;
-use trading_system_engine::trading::transport::command_log::read_segment;
-use trading_system_engine::trading::gateway::GatewayFrame;
 use trading_system_engine::trading::core::protocol::{
     Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
     VolumeCondition,
 };
+use trading_system_engine::trading::gateway::GatewayFrame;
+use trading_system_engine::trading::transport::command_log::read_segment;
 use trading_system_engine::trading::transport::result_log::{read_private_log, read_public_log};
 
 #[test]

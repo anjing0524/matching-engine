@@ -70,9 +70,9 @@ impl NackClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trading::market_data::{MarketDataPublisher, MarketDataSubscriber};
     use crate::trading::core::public_events::PublicEventType;
     use crate::trading::market_data::repair::RepairServer;
+    use crate::trading::market_data::{MarketDataPublisher, MarketDataSubscriber};
 
     fn event(seq: u64) -> PublicEvent {
         PublicEvent {

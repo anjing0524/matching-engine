@@ -4,15 +4,17 @@
 //! are stamped with that session/member and submitted to the ordered command
 //! ring. Private downlink is a later slice.
 
-use crate::trading::gateway::auth::GatewayCredentials;
 use crate::trading::combo::combo_engine::ComboPrivateFill;
-use crate::trading::gateway::GatewayFrame;
-use crate::trading::gateway::gateway_server::{GatewayEvent, GatewayServerHandle};
-use crate::trading::transport::middleware::MiddlewareSequencer;
 use crate::trading::core::private_events::PrivateEvent;
-use crate::trading::gateway::private_replay::{ComboPrivateReplayBuffer, PrivateReplayBuffer, ReplayEvent};
+use crate::trading::gateway::GatewayFrame;
+use crate::trading::gateway::auth::GatewayCredentials;
+use crate::trading::gateway::gateway_server::{GatewayEvent, GatewayServerHandle};
+use crate::trading::gateway::private_replay::{
+    ComboPrivateReplayBuffer, PrivateReplayBuffer, ReplayEvent,
+};
 use crate::trading::gateway::rate_limit::TokenBucket;
 use crate::trading::gateway::session::SessionInfo;
+use crate::trading::transport::middleware::MiddlewareSequencer;
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -419,11 +421,11 @@ impl GatewayRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trading::gateway::gateway_server::start;
     use crate::trading::core::protocol::{
         Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
         VolumeCondition,
     };
+    use crate::trading::gateway::gateway_server::start;
     use crate::trading::transport::create;
     use std::io::Write;
     use std::net::TcpStream;
@@ -983,8 +985,8 @@ mod tests {
     fn replay_merges_core_and_combo_sequences() {
         use crate::trading::combo::combo_engine::ComboPrivateFill;
         use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
-        use crate::trading::gateway::private_replay::ReplayEvent;
         use crate::trading::core::protocol::Side;
+        use crate::trading::gateway::private_replay::ReplayEvent;
 
         let path = std::env::temp_dir().join(format!(
             "trading-system-engine-gateway-combo-replay-{}",
@@ -1114,7 +1116,9 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
         stream
-            .write_all(&GatewayFrame::Command(crate::trading::core::protocol::Command::zeroed()).encode())
+            .write_all(
+                &GatewayFrame::Command(crate::trading::core::protocol::Command::zeroed()).encode(),
+            )
             .unwrap();
         let mut bucket_id = None;
         for _ in 0..100 {

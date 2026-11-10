@@ -3,9 +3,9 @@
 //! One module owns result logs, repair buffers, the market-data publisher, and
 //! their counters. The runtime only decides when to publish.
 
-use crate::trading::market_data::MarketDataPublisher;
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::core::public_events::PublicEvent;
+use crate::trading::market_data::MarketDataPublisher;
 use crate::trading::market_data::repair::{NackRequest, RepairBuffer, RepairServer};
 use crate::trading::transport::result_log::{PrivateResultLog, PublicResultLog};
 

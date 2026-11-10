@@ -5,8 +5,8 @@
 //! publisher. This slice keeps a bounded in-memory replay log; persistent
 //! full-day storage is a later layer.
 
-use crate::trading::market_data::MarketDataPublisher;
 use crate::trading::core::public_events::PublicEvent;
+use crate::trading::market_data::MarketDataPublisher;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 
@@ -184,8 +184,8 @@ impl RepairServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trading::market_data::MarketDataSubscriber;
     use crate::trading::core::public_events::PublicEventType;
+    use crate::trading::market_data::MarketDataSubscriber;
 
     fn event(seq: u64) -> PublicEvent {
         PublicEvent {

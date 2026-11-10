@@ -3,8 +3,8 @@
 //! `TRADING_MCAST_IFACE=10.92.252.146 cargo test --release --test multicast_nic -- --ignored --nocapture`
 
 use std::time::Duration;
-use trading_system_engine::trading::market_data::{MarketDataPublisher, MarketDataSubscriber};
 use trading_system_engine::trading::core::public_events::{PublicEvent, PublicEventType};
+use trading_system_engine::trading::market_data::{MarketDataPublisher, MarketDataSubscriber};
 
 fn event() -> PublicEvent {
     PublicEvent {

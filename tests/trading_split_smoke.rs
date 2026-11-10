@@ -5,11 +5,11 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command as ProcessCommand, Stdio};
 use std::time::{Duration, Instant};
-use trading_system_engine::trading::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
 use trading_system_engine::trading::core::protocol::{
     Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
     VolumeCondition,
 };
+use trading_system_engine::trading::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
 
 struct ChildGuard(Child);
 

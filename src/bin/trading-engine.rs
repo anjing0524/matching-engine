@@ -10,17 +10,17 @@ use std::time::Duration;
 use trading_system_engine::domain::orderbook::ContractSpec;
 use trading_system_engine::shared::SymbolId;
 use trading_system_engine::trading::core::TradingCore;
+use trading_system_engine::trading::core::plugins::NoPlugins;
 use trading_system_engine::trading::gateway::gateway_directory::{GatewayDirectory, HealthMonitor};
 use trading_system_engine::trading::gateway::gateway_runtime::GatewayRuntime;
 use trading_system_engine::trading::gateway::gateway_server::start as start_gateway;
 use trading_system_engine::trading::market_data::MarketDataPublisher;
 use trading_system_engine::trading::market_data::metrics::TradingMetrics;
 use trading_system_engine::trading::market_data::metrics_server;
-use trading_system_engine::trading::transport::middleware::MiddlewareSequencer;
-use trading_system_engine::trading::core::plugins::NoPlugins;
-use trading_system_engine::trading::transport::runner::CoreRunner;
 use trading_system_engine::trading::runtime::{RuntimeOptions, TradingRuntime};
 use trading_system_engine::trading::transport::create;
+use trading_system_engine::trading::transport::middleware::MiddlewareSequencer;
+use trading_system_engine::trading::transport::runner::CoreRunner;
 
 #[derive(Parser)]
 #[command(name = "trading", version, about = "Trading runtime")]

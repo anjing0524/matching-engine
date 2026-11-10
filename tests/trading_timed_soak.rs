@@ -12,8 +12,8 @@ use trading_system_engine::trading::core::protocol::{
     Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
     VolumeCondition,
 };
-use trading_system_engine::trading::transport::runner::CoreRunner;
 use trading_system_engine::trading::transport::create;
+use trading_system_engine::trading::transport::runner::CoreRunner;
 
 fn command(seq: u64) -> Command {
     let mut command = Command::zeroed();

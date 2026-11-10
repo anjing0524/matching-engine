@@ -5,14 +5,14 @@
 //! gateway session.
 
 use crate::trading::combo::combo_runtime::{ComboRuntime, ComboRuntimeSnapshot};
+use crate::trading::core::plugins::PreTradePlugin;
 use crate::trading::core::{CoreSnapshot, TradingCore};
-use crate::trading::runtime::event_fanout::EventFanout;
 use crate::trading::gateway::gateway_runtime::GatewayRuntime;
 use crate::trading::gateway::gateway_server::GatewayServerHandle;
 use crate::trading::market_data::MarketDataPublisher;
 use crate::trading::market_data::metrics::TradingMetrics;
-use crate::trading::core::plugins::PreTradePlugin;
 use crate::trading::market_data::repair::{NackRequest, RepairServer};
+use crate::trading::runtime::event_fanout::EventFanout;
 use crate::trading::transport::result_log::{PrivateResultLog, PublicResultLog};
 use crate::trading::transport::runner::CoreRunner;
 use std::sync::{Arc, Mutex};
@@ -125,7 +125,10 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
     }
 
     #[must_use]
-    pub fn repair(&self, request: NackRequest) -> Vec<crate::trading::core::public_events::PublicEvent> {
+    pub fn repair(
+        &self,
+        request: NackRequest,
+    ) -> Vec<crate::trading::core::public_events::PublicEvent> {
         self.fanout.repair(request)
     }
 
@@ -249,16 +252,16 @@ mod tests {
     use super::*;
     use crate::domain::orderbook::ContractSpec;
     use crate::shared::SymbolId;
-    use crate::trading::gateway::GatewayFrame;
-    use crate::trading::gateway::gateway_runtime::GatewayRuntime;
-    use crate::trading::gateway::gateway_server::start;
-    use crate::trading::transport::middleware::MiddlewareSequencer;
     use crate::trading::core::plugins::NoPlugins;
     use crate::trading::core::protocol::{
         Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
         VolumeCondition,
     };
+    use crate::trading::gateway::GatewayFrame;
+    use crate::trading::gateway::gateway_runtime::GatewayRuntime;
+    use crate::trading::gateway::gateway_server::start;
     use crate::trading::transport::create;
+    use crate::trading::transport::middleware::MiddlewareSequencer;
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::time::Duration;
@@ -300,8 +303,8 @@ mod tests {
 
     #[test]
     fn multiple_gateway_clients_fan_out_public_events() {
-        use crate::trading::market_data::{MarketDataPublisher, MarketDataSubscriber};
         use crate::trading::core::protocol::{Command, CommandType, Hedge, Offset, Side};
+        use crate::trading::market_data::{MarketDataPublisher, MarketDataSubscriber};
         use std::io::Write;
 
         let path = std::env::temp_dir().join(format!(
@@ -638,9 +641,9 @@ mod tests {
 
     #[test]
     fn runtime_repair_server_serves_nack() {
-        use crate::trading::market_data::{MarketDataPublisher, MarketDataSubscriber};
-        use crate::trading::market_data::tracker::NackClient;
         use crate::trading::market_data::repair::{NackRequest, RepairServer};
+        use crate::trading::market_data::tracker::NackClient;
+        use crate::trading::market_data::{MarketDataPublisher, MarketDataSubscriber};
 
         let path = std::env::temp_dir().join(format!(
             "trading-system-engine-trading-runtime-repair-server-{}",

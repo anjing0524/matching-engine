@@ -5,10 +5,10 @@
 
 use crate::trading::combo::combo_engine::{ComboEngine, ComboEngineSnapshot};
 use crate::trading::combo::combo_market_data::ComboMarketDataPublisher;
-use crate::trading::gateway::gateway_runtime::GatewayRuntime;
-use crate::trading::gateway::gateway_server::GatewayServerHandle;
 use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
 use crate::trading::core::protocol::{Command, CommandType};
+use crate::trading::gateway::gateway_runtime::GatewayRuntime;
+use crate::trading::gateway::gateway_server::GatewayServerHandle;
 use crate::trading::transport::CommandConsumer;
 
 /// Serializable combo runtime state.

@@ -5,8 +5,8 @@
 //! layered above this event stream; this slice only owns the accept/read loop.
 
 use crate::trading::combo::combo_engine::ComboPrivateFill;
-use crate::trading::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
 use crate::trading::core::private_events::PrivateEvent;
+use crate::trading::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};

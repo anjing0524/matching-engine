@@ -5,10 +5,10 @@
 //! assign `global_seq`, append the fixed 256-byte command to the shared ring,
 //! and let the core runner consume it.
 
-use crate::trading::transport::command_log::{CommandLogWriter, RotatingCommandLog};
 use crate::trading::core::protocol::{Command, CommandType};
 use crate::trading::core::schedule::{ScheduleDriver, TradingSchedule};
 use crate::trading::gateway::session::{SessionInfo, SessionRegistry};
+use crate::trading::transport::command_log::{CommandLogWriter, RotatingCommandLog};
 use crate::trading::transport::{CommandProducer, CommandTransportError};
 
 /// Single-writer middleware command sequencer.
@@ -204,8 +204,8 @@ mod tests {
         Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
         VolumeCondition,
     };
-    use crate::trading::transport::runner::CoreRunner;
     use crate::trading::transport::create;
+    use crate::trading::transport::runner::CoreRunner;
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(

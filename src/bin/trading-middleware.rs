@@ -86,14 +86,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .public_log
         .as_deref()
         .map(|path| {
-            trading_system_engine::trading::transport::result_log::PublicResultLog::create(Path::new(path))
+            trading_system_engine::trading::transport::result_log::PublicResultLog::create(
+                Path::new(path),
+            )
         })
         .transpose()?;
     let mut private_log = args
         .private_log
         .as_deref()
         .map(|path| {
-            trading_system_engine::trading::transport::result_log::PrivateResultLog::create(Path::new(path))
+            trading_system_engine::trading::transport::result_log::PrivateResultLog::create(
+                Path::new(path),
+            )
         })
         .transpose()?;
     let mut rotating_public_log = args

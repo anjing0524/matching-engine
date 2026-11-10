@@ -7,11 +7,11 @@ use std::time::Duration;
 use trading_system_engine::domain::orderbook::ContractSpec;
 use trading_system_engine::shared::SymbolId;
 use trading_system_engine::trading::core::TradingCore;
-use trading_system_engine::trading::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
 use trading_system_engine::trading::core::protocol::{
     Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
     VolumeCondition,
 };
+use trading_system_engine::trading::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
 use trading_system_engine::trading::runtime::TradingSnapshot;
 
 fn order_frame(user: u32, id: u64, price: i64) -> GatewayFrame {
