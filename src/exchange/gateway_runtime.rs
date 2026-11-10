@@ -38,6 +38,15 @@ impl ConnectionState {
     }
 }
 
+/// One poll's gateway effects, already drained from per-connection state.
+pub struct GatewayEffects {
+    pub events: usize,
+    pub redirects: Vec<(u64, String)>,
+    pub replays: HashMap<u64, Vec<ReplayEvent>>,
+    pub active_sessions: usize,
+    pub closed_sessions: usize,
+}
+
 /// Drains gateway events and applies them to middleware.
 pub struct GatewayRuntime {
     middleware: MiddlewareSequencer,
@@ -133,6 +142,24 @@ impl GatewayRuntime {
             }
         }
         processed
+    }
+
+    /// Polls frames and returns every lifecycle effect in one value.
+    pub fn poll_effects(&mut self) -> GatewayEffects {
+        let events = self.poll();
+        if events > 0 {
+            self.prune_closed_sessions(4096);
+        }
+        let redirects = self.take_redirects().into_iter().collect();
+        let replays = self.take_replay_batches();
+        let (active_sessions, closed_sessions) = self.session_counts();
+        GatewayEffects {
+            events,
+            redirects,
+            replays,
+            active_sessions,
+            closed_sessions,
+        }
     }
 
     fn handle_frame(&mut self, connection_id: u64, frame: GatewayFrame) {

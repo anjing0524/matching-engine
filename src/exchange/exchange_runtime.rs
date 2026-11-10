@@ -143,19 +143,15 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
     /// Runs one non-blocking iteration.
     pub fn tick(&mut self) {
         let tick_start = Instant::now();
-        let gateway_events = self.gateway.poll();
-        self.metrics.gateway_events += gateway_events as u64;
-        if gateway_events > 0 {
-            self.gateway.prune_closed_sessions(4096);
-        }
-        let (active_sessions, closed_sessions) = self.gateway.session_counts();
-        self.metrics.active_sessions = active_sessions as u64;
-        self.metrics.closed_sessions = closed_sessions as u64;
-        for (connection_id, address) in self.gateway.take_redirects() {
+        let effects = self.gateway.poll_effects();
+        self.metrics.gateway_events += effects.events as u64;
+        self.metrics.active_sessions = effects.active_sessions as u64;
+        self.metrics.closed_sessions = effects.closed_sessions as u64;
+        for (connection_id, address) in effects.redirects {
             let _ = self.server.send_redirect(connection_id, &address);
             self.server.close(connection_id);
         }
-        for (connection_id, replay) in self.gateway.take_replay_batches() {
+        for (connection_id, replay) in effects.replays {
             for event in replay {
                 let sent = match &event {
                     crate::exchange::private_replay::ReplayEvent::Core(event) => {
