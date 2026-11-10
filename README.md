@@ -125,3 +125,4 @@ docker run --rm trading-engine --iterations 100
 - [Linux handoff](docs/trading-linux-handoff.md)
 - [Crate split evaluation](docs/workspace-evaluation.md)
 - [Data-structure review](docs/data-structure-review.md)
+- [Performance test matrix](docs/performance-test-matrix.md)
