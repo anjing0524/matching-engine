@@ -404,6 +404,25 @@ Pinning all four busy-poll processes to two CPUs caused starvation and had to be
 killed; it is not a valid measurement. Proper pinning needs one CPU/thread budget
 per process, or separate hosts.
 
+### 23. External pipelined load generator (experimental)
+
+Added `src/bin/trading-load.rs` and a category runner. It uses one TCP connection
+per member, multiple commands in flight, and an external `trading-engine`
+process.
+
+Early runs are **not yet valid capacity numbers**:
+
+```text
+members=1 in-flight=1:  rate=1009/s p50=988µs
+members=1 in-flight=32: rate=70769/s p50=427µs
+members=4 in-flight=32: rate=40805/s p50=2.97ms
+```
+
+The in-flight=1 number contradicts the earlier external one-outstanding profile
+(~7µs p50), so the generator/client loop has a correctness or scheduling defect
+that must be fixed before using its aggregate numbers. It is recorded as an
+experimental tool, not evidence for or against 1M capacity.
+
 ## Remaining data-structure candidates## Remaining data-structure candidates
 
 1. **Event vectors**
