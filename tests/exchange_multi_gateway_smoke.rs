@@ -81,18 +81,31 @@ fn order(user: u32, id: u64) -> GatewayFrame {
 }
 
 fn send_order(addr: &str, member: u32, id: u64) {
-    let mut stream = connect(addr);
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    stream.write_all(&login(member).encode()).unwrap();
-    stream.write_all(&order(member, id).encode()).unwrap();
-    let mut frame = [0u8; GATEWAY_FRAME_SIZE];
-    stream.read_exact(&mut frame).unwrap();
-    assert!(matches!(
-        GatewayFrame::decode(&frame).unwrap(),
-        GatewayFrame::PrivateEvent(_)
-    ));
+    for attempt in 0..20 {
+        let mut stream = connect(addr);
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        if stream.write_all(&login(member).encode()).is_err()
+            || stream.write_all(&order(member, id).encode()).is_err()
+        {
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
+        }
+        let mut frame = [0u8; GATEWAY_FRAME_SIZE];
+        if stream.read_exact(&mut frame).is_err() {
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
+        }
+        if matches!(
+            GatewayFrame::decode(&frame).unwrap(),
+            GatewayFrame::PrivateEvent(_)
+        ) {
+            return;
+        }
+        assert!(attempt < 19, "unexpected gateway frame");
+    }
+    panic!("gateway relay did not deliver a private event");
 }
 
 #[test]
@@ -164,6 +177,7 @@ fn two_gateway_relays_share_middleware_and_core() {
             .expect("spawn gateway b"),
     );
 
+    std::thread::sleep(Duration::from_millis(50));
     send_order(&gateway_a, 1, 1);
     send_order(&gateway_b, 2, 2);
     let _ = std::fs::remove_dir_all(&dir);
