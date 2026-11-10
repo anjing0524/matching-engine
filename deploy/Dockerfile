@@ -6,7 +6,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY benches ./benches
 COPY examples ./examples
-RUN cargo build --release --no-default-features --bin exchange
+RUN cargo build --release --bin exchange
 
 FROM alpine:3.21
 RUN adduser -D -u 10001 exchange
