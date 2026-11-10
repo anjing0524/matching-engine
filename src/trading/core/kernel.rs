@@ -1945,4 +1945,72 @@ mod tests {
         );
         black_box(core);
     }
+    #[test]
+    #[ignore = "multi-contract latency profile; run explicitly"]
+    fn multi_contract_latency_profile() {
+        use crate::trading::core::plugins::NoPlugins;
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let contracts = std::env::var("CORE_MULTI_CONTRACTS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(3000);
+        let iterations = std::env::var("CORE_LATENCY_ITERS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(1_000_000);
+        let spec = ContractSpec::new("MC", 1, 50_000, 50_100);
+        let mut cores: Vec<TradingCore> = (0..contracts)
+            .map(|index| TradingCore::new(spec.clone(), SymbolId::intern(&format!("MC{index}"))))
+            .collect();
+        let mut command = Command::zeroed();
+        command.command_type = CommandType::NewOrder;
+        command.price_type = PriceType::Limit;
+        command.time_condition = TimeCondition::Gfd;
+        command.volume_condition = VolumeCondition::Any;
+        command.offset = Offset::Open;
+        command.hedge = Hedge::Spec;
+        command.price_ticks = 50_000;
+        command.quantity = 1;
+        let plugin = NoPlugins;
+        let mut samples = Vec::with_capacity(iterations);
+        for index in 0..iterations {
+            let instrument = index % contracts;
+            command.client_order_id = index as u64 + 1;
+            command.user_id = if index % 2 == 0 { 1 } else { 2 };
+            command.side = if index % 2 == 0 {
+                Side::Buy
+            } else {
+                Side::Sell
+            };
+            command.instrument_id = u32::try_from(instrument).unwrap_or(u32::MAX);
+            let start = Instant::now();
+            cores[instrument].execute_with_plugins_discard(command, &plugin);
+            samples.push(u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX));
+        }
+        samples.sort_unstable();
+        let percentile = |p: f64| {
+            let index = ((samples.len().saturating_sub(1) as f64) * p / 100.0) as usize;
+            samples[index]
+        };
+        let rss = std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|status| {
+                status
+                    .lines()
+                    .find(|line| line.starts_with("VmRSS:"))
+                    .map(str::to_string)
+            })
+            .unwrap_or_default();
+        println!(
+            "multi_contract: contracts={contracts} n={} p50={}ns p99={}ns p999={}ns max={}ns {rss}",
+            samples.len(),
+            percentile(50.0),
+            percentile(99.0),
+            percentile(99.9),
+            samples.last().copied().unwrap_or(0)
+        );
+        black_box(cores);
+    }
 }
