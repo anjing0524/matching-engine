@@ -12,8 +12,8 @@ use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use crate::shared::SymbolId;
 use crate::shared::protocol::{NewOrderRequest, OrderType};
 use crate::trading::core::auction::{self, AuctionOrder, AuctionResult};
-use crate::trading::core::plugins::{PreTradePlugin, RiskOrder, ValidationContext};
 use crate::trading::core::plugins::NoPlugins;
+use crate::trading::core::plugins::{PreTradePlugin, RiskOrder, ValidationContext};
 use crate::trading::core::positions::{CloseKey, FrozenClose, PositionKey, Positions};
 use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
 use crate::trading::core::protocol::{
@@ -1962,5 +1962,4 @@ mod tests {
         assert_eq!(core.order_status(order_id), Some(OrderStatus::Accepted));
         assert_eq!(core.pending_open().get(key).total(), 5);
     }
-
 }
