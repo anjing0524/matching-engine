@@ -34,6 +34,7 @@ Key ownership rules:
   diagnostic `CoreEvent`s.
 - `GatewayRuntime` owns per-connection state (`ConnectionState`) and assigns
   the single per-user private sequence used by both core and combo effects.
+  `poll_effects()` returns redirects, replays, and session counts together.
 - `EventFanout` owns public/private result logs, repair, market-data publishing,
   and their counters.
 - Snapshots use `snapshot_file`: version, CRC32, payload bytes, atomic replace.
