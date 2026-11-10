@@ -63,6 +63,12 @@ fn multi_member_load_latency_profile() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(12_500);
     let total = members * per_member;
+    let parallel = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    assert!(
+        members.saturating_mul(3).saturating_add(1) <= parallel,
+        "this in-process profile needs about 3*members+1 threads; reduce LATENCY_MEMBERS to {}",
+        parallel.saturating_sub(1) / 3
+    );
     let target_rate: u64 = std::env::var("LATENCY_RATE")
         .ok()
         .and_then(|value| value.parse().ok())

@@ -316,7 +316,8 @@ explicitly out of scope for now.
 
 `tests/trading_load_latency.rs` sends commands from member client threads while
 the main thread drives the runtime; private responses are timestamped per
-client order.
+client order. The test refuses configurations that oversubscribe the host:
+the in-process profile needs roughly `3 * members + 1` threads.
 
 Single member, paced at ~100k/s:
 
@@ -332,24 +333,28 @@ members=1 n=100000 elapsed=659.870668ms rate=151545/s
 p50=386540086ns p99=526246687ns
 ```
 
-16 members, 1M orders, unpaced:
+Two members, unpaced burst (6-ish threads on an 8-thread host):
 
 ```text
-members=16 n=1000000 elapsed=6.748838569s rate=148174/s
-p50=3685213480ns p99=5867985585ns
+members=2 n=100000 elapsed=729.621507ms rate=137057/s
+p50=332948596ns p99=487310548ns
 ```
 
-Interpretation:
+The earlier 16-member / 1M run is **invalid**: it used 16 sender threads and 16
+reader threads plus runtime/gateway on an 8-thread host, so it measured CPU
+oversubscription, not capacity. It must not be used as evidence that one process
+cannot reach a target rate.
 
-- one process tops out near 150k order/s in this synthetic burst
-- at the sustainable rate, single-member p99 is ~25µs
-- at 1M burst, latency is backlog-dominated (seconds), not a usable p99
-- the 8-member paced run was distorted by busy-spin sender threads competing
-  for CPUs; its latency is not a valid production figure
-- reaching 1M order/s and a microsecond p99 requires separate gateway/core
-  processes or a different latency-oriented design, not just this data structure
+What the valid runs establish:
 
-## Remaining data-structure candidates
+- single-process burst throughput is roughly 140k–150k order/s in this
+  same-host harness
+- at 100k/s paced, single-member end-to-end p99 is ~25µs
+- an unpaced burst makes p99 backlog-dominated (hundreds of ms)
+- 1M aggregate throughput is not measurable from this same-process harness;
+  it needs an external load generator and / or multiple gateway/core hosts
+
+## Remaining data-structure candidates## Remaining data-structure candidates
 
 1. **Event vectors**
    Production already uses `execute_with_plugins_discard`; `CoreEvent` vectors
