@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn writes_and_reads_segment() {
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-command-log-{}.log",
+            "trading-system-engine-command-log-{}.log",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -221,7 +221,7 @@ mod tests {
     #[test]
     fn rotating_log_bounds_segments() {
         let directory = std::env::temp_dir().join(format!(
-            "matching-engine-rotating-log-{}",
+            "trading-system-engine-rotating-log-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&directory);
@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn rejects_truncated_slot() {
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-command-log-truncated-{}.log",
+            "trading-system-engine-command-log-truncated-{}.log",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);

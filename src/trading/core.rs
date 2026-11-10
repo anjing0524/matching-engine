@@ -1882,7 +1882,7 @@ mod tests {
         assert_eq!(restored.snapshot(), expected);
 
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-snapshot-{}.json",
+            "trading-system-engine-snapshot-{}.json",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);

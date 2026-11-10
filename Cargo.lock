@@ -455,7 +455,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "matching-engine"
+name = "trading-system-engine"
 version = "0.1.0"
 dependencies = [
  "bytes",

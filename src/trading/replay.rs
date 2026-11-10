@@ -99,7 +99,7 @@ mod tests {
         assert_eq!(restored.snapshot(), expected.snapshot());
 
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-replay-{}.json",
+            "trading-system-engine-replay-{}.json",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);

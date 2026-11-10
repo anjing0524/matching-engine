@@ -40,7 +40,7 @@ fn command(seq: u64) -> Command {
 #[test]
 fn one_million_commands_complete() {
     let path = std::env::temp_dir().join(format!(
-        "matching-engine-soak-{}-{}",
+        "trading-system-engine-soak-{}-{}",
         std::process::id(),
         std::thread::current().name().unwrap_or("main")
     ));

@@ -305,7 +305,7 @@ mod tests {
         use std::io::Write;
 
         let path =
-            std::env::temp_dir().join(format!("matching-engine-fanout-{}", std::process::id()));
+            std::env::temp_dir().join(format!("trading-system-engine-fanout-{}", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let (producer, consumer) = create(&path, 1024).unwrap();
         let middleware = MiddlewareSequencer::new(producer);
@@ -386,11 +386,11 @@ mod tests {
         use std::io::Read;
 
         let core_path = std::env::temp_dir().join(format!(
-            "matching-engine-combo-e2e-core-{}",
+            "trading-system-engine-combo-e2e-core-{}",
             std::process::id()
         ));
         let combo_path = std::env::temp_dir().join(format!(
-            "matching-engine-combo-e2e-ring-{}",
+            "trading-system-engine-combo-e2e-ring-{}",
             std::process::id()
         ));
         for path in [&core_path, &combo_path] {
@@ -498,7 +498,7 @@ mod tests {
         use crate::trading::protocol::{Hedge, Offset, Side};
 
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-trading-runtime-combo-{}",
+            "trading-system-engine-trading-runtime-combo-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -545,7 +545,7 @@ mod tests {
     #[test]
     fn config_builder_sets_repair_capacity_and_timeout() {
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-trading-runtime-config-{}",
+            "trading-system-engine-trading-runtime-config-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -577,7 +577,7 @@ mod tests {
         use crate::trading::repair::NackRequest;
 
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-trading-runtime-repair-{}",
+            "trading-system-engine-trading-runtime-repair-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -641,7 +641,7 @@ mod tests {
         use crate::trading::repair::{NackRequest, RepairServer};
 
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-trading-runtime-repair-server-{}",
+            "trading-system-engine-trading-runtime-repair-server-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -717,7 +717,7 @@ mod tests {
         use crate::trading::market_data::MarketDataSubscriber;
 
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-trading-runtime-udp-{}",
+            "trading-system-engine-trading-runtime-udp-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -774,7 +774,7 @@ mod tests {
     #[test]
     fn runtime_expires_idle_gateway() {
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-trading-runtime-idle-{}",
+            "trading-system-engine-trading-runtime-idle-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -834,7 +834,7 @@ mod tests {
     #[test]
     fn order_flows_gateway_to_core_and_private_back() {
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-trading-runtime-{}",
+            "trading-system-engine-trading-runtime-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);

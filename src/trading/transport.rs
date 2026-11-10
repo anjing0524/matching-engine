@@ -429,7 +429,7 @@ mod tests {
     use crate::trading::public_events::{PublicEvent, PublicEventType};
 
     fn temp_path(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("matching-engine-{name}-{}", std::process::id()))
+        std::env::temp_dir().join(format!("trading-system-engine-{name}-{}", std::process::id()))
     }
 
     fn command(seq: u64) -> Command {

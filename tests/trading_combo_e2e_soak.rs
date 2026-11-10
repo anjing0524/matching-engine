@@ -10,7 +10,7 @@ use trading_system_engine::trading::transport::create;
 #[test]
 fn ten_thousand_combo_commands_fill() {
     let path = std::env::temp_dir().join(format!(
-        "matching-engine-combo-e2e-soak-{}",
+        "trading-system-engine-combo-e2e-soak-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_file(&path);

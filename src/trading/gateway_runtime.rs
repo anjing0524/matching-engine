@@ -470,7 +470,7 @@ mod tests {
         use std::io::Read;
 
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-gateway-combo-private-{}",
+            "trading-system-engine-gateway-combo-private-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -545,7 +545,7 @@ mod tests {
     #[test]
     fn second_gateway_login_takes_over() {
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-gateway-takeover-{}",
+            "trading-system-engine-gateway-takeover-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -605,7 +605,7 @@ mod tests {
     #[test]
     fn takeover_queues_redirect_for_old_connection() {
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-gateway-redirect-{}",
+            "trading-system-engine-gateway-redirect-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -655,7 +655,7 @@ mod tests {
         use crate::trading::auth::GatewayCredentials;
 
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-gateway-credentials-{}",
+            "trading-system-engine-gateway-credentials-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -720,7 +720,7 @@ mod tests {
     #[test]
     fn login_requires_matching_auth_token() {
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-gateway-auth-{}",
+            "trading-system-engine-gateway-auth-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -783,7 +783,7 @@ mod tests {
     #[test]
     fn rate_limit_drops_excess_commands() {
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-gateway-rate-{}",
+            "trading-system-engine-gateway-rate-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -837,7 +837,7 @@ mod tests {
     #[test]
     fn client_ack_updates_session_private_seq() {
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-gateway-ack-{}",
+            "trading-system-engine-gateway-ack-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -898,7 +898,7 @@ mod tests {
         use crate::trading::private_events::{PrivateEvent, PrivateStatus};
 
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-gateway-replay-{}",
+            "trading-system-engine-gateway-replay-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -987,7 +987,7 @@ mod tests {
         use crate::trading::protocol::Side;
 
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-gateway-combo-replay-{}",
+            "trading-system-engine-gateway-combo-replay-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -1084,7 +1084,7 @@ mod tests {
     fn idle_session_expires() {
         use std::time::Duration;
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-gateway-idle-{}",
+            "trading-system-engine-gateway-idle-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -1148,7 +1148,7 @@ mod tests {
         use std::io::Read;
 
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-gateway-private-{}",
+            "trading-system-engine-gateway-private-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -1201,7 +1201,7 @@ mod tests {
     #[test]
     fn login_and_command_reach_core() {
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-gateway-runtime-{}",
+            "trading-system-engine-gateway-runtime-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);

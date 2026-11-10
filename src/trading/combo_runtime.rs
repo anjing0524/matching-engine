@@ -276,7 +276,7 @@ mod tests {
         use crate::trading::transport::create;
 
         let path = std::env::temp_dir().join(format!(
-            "matching-engine-combo-commands-{}",
+            "trading-system-engine-combo-commands-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);

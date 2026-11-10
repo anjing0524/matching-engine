@@ -164,7 +164,7 @@ mod tests {
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "matching-engine-runner-{name}-{}",
+            "trading-system-engine-runner-{name}-{}",
             std::process::id()
         ))
     }

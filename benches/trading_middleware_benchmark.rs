@@ -42,7 +42,7 @@ fn command(seq: u64) -> Command {
 
 fn main() {
     let path = std::env::temp_dir().join(format!(
-        "matching-engine-bench-middleware-{}",
+        "trading-system-engine-bench-middleware-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_file(&path);

@@ -44,7 +44,7 @@ fn command(seq: u64) -> Command {
 #[ignore = "long soak; run explicitly"]
 fn five_million_commands_complete() {
     let path =
-        std::env::temp_dir().join(format!("matching-engine-long-soak-{}", std::process::id()));
+        std::env::temp_dir().join(format!("trading-system-engine-long-soak-{}", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let (producer, consumer) = create(&path, 1 << 17).unwrap();
     let spec = ContractSpec::new("BTCUSDT", 1, 1, 1_000_000);

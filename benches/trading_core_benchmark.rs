@@ -37,7 +37,7 @@ fn command(seq: u64, side: Side, price: i64) -> Command {
 
 fn main() {
     let path = std::env::temp_dir().join(format!(
-        "matching-engine-bench-commands-{}",
+        "trading-system-engine-bench-commands-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_file(&path);
