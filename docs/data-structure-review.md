@@ -130,6 +130,11 @@ idle_expiry_64k: 64000 connections in 2.771373ms
 Called once per `timeout/2` (7.5s for the default 15s timeout), that scan is
 negligible in debug; a timing wheel is not justified. Keep the simpler scan.
 
+### 11. Removed dead auction sequence
+
+`auction_order_seq` was incremented and snapshotted but never read. It is
+removed; `CORE_SNAPSHOT_VERSION` is now `7`.
+
 ## Remaining data-structure candidates
 
 1. **Event vectors**
