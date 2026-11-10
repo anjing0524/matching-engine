@@ -337,7 +337,7 @@ pub fn start(bind_addr: &str) -> io::Result<(GatewayServerHandle, Receiver<Gatew
     let listener = std::net::TcpListener::bind(bind_addr)?;
     listener.set_nonblocking(true)?;
     let addr = listener.local_addr()?;
-    let mut poll = Poll::new()?;
+    let poll = Poll::new()?;
     let mut listener = TcpListener::from_std(listener);
     poll.registry()
         .register(&mut listener, LISTENER_TOKEN, Interest::READABLE)?;
@@ -399,7 +399,7 @@ mod tests {
     #[test]
     fn accepts_login_and_command_frames() {
         let (handle, rx) = start("127.0.0.1:0").unwrap();
-        let mut stream = TcpStream::connect(handle.addr()).unwrap();
+        let mut stream = std::net::TcpStream::connect(handle.addr()).unwrap();
         stream.set_nodelay(true).unwrap();
 
         let login = GatewayFrame::Login {
@@ -435,9 +435,8 @@ mod tests {
     #[test]
     fn concurrent_writes_keep_frames_intact() {
         let (handle, rx) = start("127.0.0.1:0").unwrap();
-        let mut stream = TcpStream::connect(handle.addr()).unwrap();
+        let mut stream = std::net::TcpStream::connect(handle.addr()).unwrap();
         stream.set_nodelay(true).unwrap();
-        stream.set_nonblocking(false).unwrap();
         stream
             .write_all(
                 &GatewayFrame::Login {
