@@ -71,6 +71,12 @@ Entry points:
 - `trading_binary_smoke` / `trading_split_smoke` exercise process entry points.
 - `trading_soak` / `trading_timed_soak` exercise long-running state.
 
+## Package layout decision
+
+The project intentionally remains one Cargo package for now. See
+[workspace-evaluation.md](workspace-evaluation.md) for the cycle analysis and
+the conditions under which a three-crate workspace would be justified.
+
 ## When adding a feature
 
 1. Keep trading as the only command path; do not reintroduce a second runtime.
