@@ -49,7 +49,6 @@ struct Shared {
     start: Instant,
     sent: Vec<AtomicU64>,
     received: AtomicUsize,
-    total: usize,
 }
 
 #[test]
@@ -113,7 +112,6 @@ fn multi_member_load_latency_profile() {
             .flat_map(|_| (0..per_member).map(|_| AtomicU64::new(u64::MAX)))
             .collect(),
         received: AtomicUsize::new(0),
-        total,
     });
 
     for member in 0..members {
