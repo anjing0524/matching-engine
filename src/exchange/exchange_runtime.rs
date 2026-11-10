@@ -116,6 +116,32 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
     }
 
     #[must_use]
+    pub fn repair_sent(&self) -> u64 {
+        self.fanout.repair_sent()
+    }
+
+    #[must_use]
+    pub fn public_sent(&self) -> u64 {
+        self.fanout.public_sent()
+    }
+
+    #[must_use]
+    pub fn repair(&self, request: NackRequest) -> Vec<crate::exchange::public_events::PublicEvent> {
+        self.fanout.repair(request)
+    }
+
+    /// Switches the multicast publisher's local interface.
+    ///
+    /// # Errors
+    /// Returns an I/O error when no multicast publisher exists or rebinding fails.
+    pub fn switch_market_data_interface(
+        &mut self,
+        interface: std::net::Ipv4Addr,
+    ) -> std::io::Result<()> {
+        self.fanout.switch_interface(interface)
+    }
+
+    #[must_use]
     pub fn with_config(mut self, config: ExchangeConfig) -> Self {
         self.idle_timeout = config.idle_timeout;
         self.fanout = self.fanout.with_repair_buffer(config.repair_buffer_capacity);
