@@ -7,8 +7,8 @@
 
 use crate::trading::core::protocol::{Command, CommandType};
 use crate::trading::core::schedule::{ScheduleDriver, TradingSchedule};
-use crate::trading::transport::session::{SessionInfo, SessionRegistry};
 use crate::trading::transport::command_log::{CommandLogWriter, RotatingCommandLog};
+use crate::trading::transport::session::{SessionInfo, SessionRegistry};
 use crate::trading::transport::{CommandProducer, CommandTransportError};
 
 /// Single-writer middleware command sequencer.

@@ -13,8 +13,8 @@ use crate::trading::gateway::private_replay::{
 };
 use crate::trading::gateway::rate_limit::TokenBucket;
 use crate::trading::gateway::server::{GatewayEvent, GatewayServerHandle};
-use crate::trading::transport::session::SessionInfo;
 use crate::trading::transport::middleware::MiddlewareSequencer;
+use crate::trading::transport::session::SessionInfo;
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
