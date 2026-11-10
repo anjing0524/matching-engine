@@ -87,4 +87,69 @@ mod tests {
         let corrupted = json.replacen("\"payload\":\"", "\"payload\":\"x", 1);
         assert!(decode::<Value>(&corrupted, 3).is_err());
     }
+    #[test]
+    fn core_snapshot_json_and_file_roundtrip() {
+        use crate::domain::orderbook::ContractSpec;
+        use crate::shared::SymbolId;
+        use crate::trading::core::LimitOrderCommand;
+        use crate::trading::core::kernel::{CoreSnapshot, TradingCore};
+        use crate::trading::core::positions::PositionKey;
+        use crate::trading::core::protocol::{Hedge, Offset, OrderType, Side};
+
+        fn core() -> TradingCore {
+            TradingCore::new(
+                ContractSpec::new("BTCUSDT", 1, 40_000, 70_000),
+                SymbolId::intern("BTCUSDT"),
+            )
+        }
+
+        let mut state = core();
+        let _ = state.submit_limit(LimitOrderCommand {
+            user_id: 1,
+            client_order_id: 1,
+            side: OrderType::Buy,
+            price_ticks: 49_000,
+            quantity: 5,
+        });
+        state
+            .positions_mut()
+            .apply_open(PositionKey::new(1, Side::Buy, Hedge::Spec), 2)
+            .unwrap();
+        let expected = state.snapshot();
+        let json = encode(
+            &state.snapshot(),
+            crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
+        )
+        .unwrap();
+        let snapshot: CoreSnapshot =
+            decode(&json, crate::trading::snapshot::CORE_SNAPSHOT_VERSION).unwrap();
+        let mut restored = core();
+        restored.restore_snapshot(snapshot).unwrap();
+        assert_eq!(restored.snapshot(), expected);
+
+        let path = std::env::temp_dir().join(format!(
+            "trading-system-engine-snapshot-{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        save(
+            &path,
+            &state.snapshot(),
+            crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
+        )
+        .unwrap();
+        let loaded: CoreSnapshot =
+            load(&path, crate::trading::snapshot::CORE_SNAPSHOT_VERSION).unwrap();
+        assert_eq!(loaded, expected);
+
+        let mut tampered: serde_json::Value = serde_json::from_str(&json).unwrap();
+        tampered["checksum"] = serde_json::Value::from(0);
+        let error = decode::<CoreSnapshot>(
+            &tampered.to_string(),
+            crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
+        )
+        .unwrap_err();
+        assert!(error.contains("checksum"));
+        let _ = std::fs::remove_file(&path);
+    }
 }

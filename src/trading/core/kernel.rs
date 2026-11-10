@@ -1804,59 +1804,6 @@ mod tests {
         let _ = resting_id;
     }
     #[test]
-    fn snapshot_json_and_file_roundtrip() {
-        use crate::trading::core::positions::PositionKey;
-
-        let mut state = core();
-        let _ = state.submit_limit(order(1, OrderType::Buy, 49_000, 5));
-        state
-            .positions_mut()
-            .apply_open(PositionKey::new(1, Side::Buy, Hedge::Spec), 2)
-            .unwrap();
-        let expected = state.snapshot();
-        let json = crate::trading::snapshot::snapshot_file::encode(
-            &state.snapshot(),
-            crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
-        )
-        .unwrap();
-        let mut restored = core();
-        let snapshot: CoreSnapshot = crate::trading::snapshot::snapshot_file::decode(
-            &json,
-            crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
-        )
-        .unwrap();
-        restored.restore_snapshot(snapshot).unwrap();
-        assert_eq!(restored.snapshot(), expected);
-
-        let path = std::env::temp_dir().join(format!(
-            "trading-system-engine-snapshot-{}.json",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        crate::trading::snapshot::snapshot_file::save(
-            &path,
-            &state.snapshot(),
-            crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
-        )
-        .unwrap();
-        let loaded: CoreSnapshot = crate::trading::snapshot::snapshot_file::load(
-            &path,
-            crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
-        )
-        .unwrap();
-        assert_eq!(loaded, expected);
-
-        let mut tampered: serde_json::Value = serde_json::from_str(&json).unwrap();
-        tampered["checksum"] = serde_json::Value::from(0);
-        let error = crate::trading::snapshot::snapshot_file::decode::<CoreSnapshot>(
-            &tampered.to_string(),
-            crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
-        )
-        .unwrap_err();
-        assert!(error.contains("checksum"));
-        let _ = std::fs::remove_file(&path);
-    }
-    #[test]
     fn pending_open_exposure_tracks_accept_and_cancel() {
         use crate::trading::core::plugins::NoPlugins;
 
