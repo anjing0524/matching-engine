@@ -335,20 +335,6 @@ impl GatewayRuntime {
         expired
     }
 
-    /// Takes core replay events queued for a newly logged-in connection.
-    pub fn take_replay(&mut self, connection_id: u64) -> Option<Vec<PrivateEvent>> {
-        self.replay_pending.remove(&connection_id);
-        let state = self.connections.get_mut(&connection_id)?;
-        let replay: Vec<PrivateEvent> = std::mem::take(&mut state.replay)
-            .into_iter()
-            .filter_map(|event| match event {
-                ReplayEvent::Core(event) => Some(event),
-                ReplayEvent::Combo(_) => None,
-            })
-            .collect();
-        (!replay.is_empty()).then_some(replay)
-    }
-
     /// Drains core and combo replay batches in per-user sequence order.
     #[must_use]
     pub fn take_replay_batches(&mut self) -> Vec<(u64, Vec<ReplayEvent>)> {
@@ -982,7 +968,12 @@ mod tests {
         let mut replay = None;
         for _ in 0..50 {
             runtime.poll();
-            if let Some(events) = runtime.take_replay(2) {
+            if let Some(events) = runtime
+                .take_replay_batches()
+                .into_iter()
+                .find(|(id, _)| *id == 2)
+                .map(|(_, events)| events)
+            {
                 replay = Some(events);
                 break;
             }
@@ -990,7 +981,7 @@ mod tests {
         }
         let replay = replay.expect("replay batch");
         assert_eq!(replay.len(), 1);
-        assert_eq!(replay[0].seq, 2);
+        assert_eq!(replay[0].seq(), 2);
         server.stop();
         let _ = std::fs::remove_file(&path);
     }
