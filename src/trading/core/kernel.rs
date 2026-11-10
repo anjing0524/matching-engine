@@ -13,6 +13,7 @@ use crate::shared::SymbolId;
 use crate::shared::protocol::{NewOrderRequest, OrderType};
 use crate::trading::core::auction::{self, AuctionOrder, AuctionResult};
 use crate::trading::core::plugins::{PreTradePlugin, RiskOrder, ValidationContext};
+use crate::trading::core::plugins::NoPlugins;
 use crate::trading::core::positions::{CloseKey, FrozenClose, PositionKey, Positions};
 use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
 use crate::trading::core::protocol::{
@@ -788,10 +789,6 @@ impl TradingCore {
             );
             return;
         }
-        if !matches!(command.price_type, PriceType::Limit | PriceType::Market) {
-            out.extend(self.execute(command));
-            return;
-        }
         if self.phase == TradingPhase::OpeningAuction
             && (command.price_type == PriceType::Market
                 || command.time_condition == TimeCondition::Ioc
@@ -1137,24 +1134,7 @@ impl TradingCore {
                 }
                 Vec::new()
             }
-            CommandType::NewOrder if command.price_type == PriceType::Limit => {
-                if command.price_ticks < 0 || command.quantity == 0 {
-                    return vec![CoreEvent::Rejected {
-                        client_order_id: command.client_order_id,
-                        reason: "invalid price or quantity".to_string(),
-                    }];
-                }
-                self.submit_limit(LimitOrderCommand {
-                    user_id: u64::from(command.user_id),
-                    client_order_id: command.client_order_id,
-                    side: match command.side {
-                        Side::Buy => OrderType::Buy,
-                        Side::Sell => OrderType::Sell,
-                    },
-                    price_ticks: command.price_ticks as u64,
-                    quantity: command.quantity,
-                })
-            }
+            CommandType::NewOrder => self.execute_with_plugins(command, &NoPlugins),
             CommandType::Cancel => vec![self.cancel(CancelCommand {
                 user_id: u64::from(command.user_id),
                 order_id: command.cancel_order_id,
