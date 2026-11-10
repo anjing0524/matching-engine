@@ -382,6 +382,28 @@ So:
 - p99.9 remains ~25µs and max outliers remain milliseconds
 - kernel bypass is still not used
 
+### 22. Split-process single-member latency
+
+`tests/trading_split_latency.rs` starts the real split topology:
+
+```text
+trading-gateway -> trading-middleware -> trading-core
+```
+
+and drives one member through the proxy.
+
+```text
+LATENCY_ITERS=100000, no CPU pinning
+p50=32456ns p99=51061ns p999=206399ns max=2168395ns
+```
+
+The split path adds proxy relay, middleware/core process handoff, and shared
+memory rings; p99 is ~51µs versus ~25µs for the single-process runtime.
+
+Pinning all four busy-poll processes to two CPUs caused starvation and had to be
+killed; it is not a valid measurement. Proper pinning needs one CPU/thread budget
+per process, or separate hosts.
+
 ## Remaining data-structure candidates## Remaining data-structure candidates
 
 1. **Event vectors**
