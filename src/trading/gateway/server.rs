@@ -46,6 +46,7 @@ struct Connection {
     stream: TcpStream,
     incoming: Vec<u8>,
     outgoing: VecDeque<u8>,
+    write_interest: bool,
 }
 
 /// Handle used to address and stop a running listener.
@@ -172,6 +173,7 @@ impl IoLoop {
                             stream,
                             incoming: Vec::with_capacity(GATEWAY_FRAME_SIZE * 2),
                             outgoing: VecDeque::new(),
+                            write_interest: false,
                         },
                     );
                 }
@@ -192,7 +194,7 @@ impl IoLoop {
         let mut frames = Vec::new();
         let mut closed = false;
         self.read_connection(&mut connection, &mut frames, &mut closed);
-        if !closed {
+        if !closed && !connection.outgoing.is_empty() {
             self.write_connection(id, &mut connection, &mut closed);
         }
         if closed {
@@ -300,7 +302,7 @@ impl IoLoop {
                     if let Some(connection) = self.connections.get_mut(&connection_id) {
                         connection.outgoing.extend(frame.encode());
                         overflow = connection.outgoing.len() > MAX_OUTGOING_BYTES;
-                        if !overflow {
+                        if !overflow && !connection.write_interest {
                             let token = Token(
                                 FIRST_CONNECTION_TOKEN
                                     + usize::try_from(connection_id.saturating_sub(1)).unwrap_or(0),
@@ -310,6 +312,7 @@ impl IoLoop {
                                 token,
                                 Interest::READABLE | Interest::WRITABLE,
                             );
+                            connection.write_interest = true;
                         }
                     }
                     if overflow {
