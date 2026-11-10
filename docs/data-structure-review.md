@@ -272,6 +272,26 @@ Interpretation:
 Remaining caveats: one contract per `TradingCore`, no multi-contract routing,
 no network stack, and no real order mix/plugin chain in this profile.
 
+### 18. Multi-contract profile
+
+3000 independent `TradingCore` books in one thread, narrow synthetic price ranges,
+1M commands routed by `instrument_id`:
+
+```text
+CORE_MULTI_CONTRACTS=3000 CORE_LATENCY_ITERS=1000000
+multi_contract: contracts=3000 n=1000000 p50=302ns p99=7517ns p999=28136ns max=163893ns VmRSS: 482952 kB
+```
+
+This is not a production multi-contract design; it only measures the cost of
+routing across many books on one thread. Observations:
+
+- p99 is ~7.5µs; p99.9 is ~28µs
+- throughput is roughly 1.6M commands/s for this synthetic workload
+- RSS is high because each core accumulates private/public event buffers that
+  the profile never drains; a real runtime drains every tick
+- each `TradingCore` is still single-contract; a multi-contract wrapper and
+  sequence/event merge do not exist yet
+
 ## Remaining data-structure candidates
 
 1. **Event vectors**
