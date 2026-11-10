@@ -33,7 +33,7 @@ visits only populated levels rather than every tick.
 
 Fastest, because aggregate side quantity and price bounds guarantee a sweep can
 fill the requested quantity. Rejected because any internal book bug would leave
-leg risk with no recovery path; the exchange prioritizes correctness.
+leg risk with no recovery path; the trading prioritizes correctness.
 
 ### Journal-based undo
 

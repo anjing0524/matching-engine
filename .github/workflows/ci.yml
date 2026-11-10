@@ -27,7 +27,7 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
         run: cargo test --all-features
-      - name: Build exchange binaries
+      - name: Build trading binaries
         run: cargo build --release --bins
 
   container:
@@ -36,10 +36,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        run: docker build -f deploy/Dockerfile -t exchange-runtime:ci .
+        run: docker build -f deploy/Dockerfile -t trading-runtime:ci .
       - name: Smoke run
         run: |
-          docker run --rm exchange-runtime:ci \
+          docker run --rm trading-engine:ci \
             --iterations 3 \
             --listen 127.0.0.1:0 \
             --metrics-listen 127.0.0.1:0

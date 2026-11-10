@@ -1,9 +1,9 @@
 # Architecture map
 
-This crate ships one production runtime: the exchange core. Low-level order-book
+This crate ships one production runtime: the trading core. Low-level order-book
 and ring types are shared; there is no second command path.
 
-## 1. Exchange core (production)
+## 1. Trading core (production)
 
 ```
 member TCP
@@ -15,10 +15,10 @@ GatewayRuntime ── sessions/auth/rate limit/reconnect replay
 shared-memory command ring
   │
   ▼
-CoreRunner → ExchangeCore
+CoreRunner → TradingCore
   │  private events / public events
   ▼
-ExchangeRuntime
+TradingRuntime
   ├─ GatewayRuntime private downlink
   ├─ EventFanout: result logs, repair buffer/server, market data
   └─ ComboRuntime (optional)
@@ -26,7 +26,7 @@ ExchangeRuntime
 
 Key ownership rules:
 
-- `ExchangeCore` owns the book, active order metadata, positions, frozen
+- `TradingCore` owns the book, active order metadata, positions, frozen
   close, and auction staging. Combo queue/leg books live in `ComboEngine`. The
   kernel has no sockets or file I/O.
 - `CoreRunner` drains commands and calls the kernel. It does not retain
@@ -37,26 +37,26 @@ Key ownership rules:
 - `EventFanout` owns public/private result logs, repair, market-data publishing,
   and their counters.
 - Snapshots use `snapshot_file`: version, CRC32, payload bytes, atomic replace.
-- `ExchangeRuntime` composes the above from one `RuntimeOptions` value;
+- `TradingRuntime` composes the above from one `RuntimeOptions` value;
   `tick()` is the only driver.
 
 Entry points:
 
-- `exchange` — single process
-- `exchange-middleware` — middleware + gateway
-- `exchange-core` — core only
-- `exchange-gateway` — standalone relay
+- `trading` — single process
+- `trading-middleware` — middleware + gateway
+- `trading-core` — core only
+- `trading-gateway` — standalone relay
 
 ## Tests as interfaces
 
-- `exchange::core` tests exercise the kernel directly.
-- `exchange::exchange_runtime` tests exercise the composed tick.
-- `exchange_binary_smoke` / `exchange_split_smoke` exercise process entry points.
-- `exchange_soak` / `exchange_timed_soak` exercise long-running state.
+- `trading::core` tests exercise the kernel directly.
+- `trading::runtime` tests exercise the composed tick.
+- `trading_binary_smoke` / `trading_split_smoke` exercise process entry points.
+- `trading_soak` / `trading_timed_soak` exercise long-running state.
 
 ## When adding a feature
 
-1. Keep exchange as the only command path; do not reintroduce a second runtime.
-2. Put business state in `ExchangeCore`; keep it deterministic and I/O-free.
+1. Keep trading as the only command path; do not reintroduce a second runtime.
+2. Put business state in `TradingCore`; keep it deterministic and I/O-free.
 3. Put output delivery in `EventFanout` or GatewayRuntime.
 4. Add a test at the narrowest interface that can observe the change.

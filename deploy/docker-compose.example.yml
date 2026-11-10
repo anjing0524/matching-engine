@@ -1,14 +1,14 @@
 services:
-  exchange:
+  trading:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: exchange-runtime:local
+    image: trading-runtime:local
     ports:
       - "8000:8000"
       - "9100:9100"
     environment:
-      EXCHANGE_GATEWAY_IDLE_TIMEOUT: "30"
+      TRADING_GATEWAY_IDLE_TIMEOUT: "30"
     read_only: true
     tmpfs:
       - /tmp

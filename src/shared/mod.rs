@@ -1,4 +1,4 @@
-//! Shared types and utilities used by the exchange runtime.
+//! Shared types and utilities used by the trading runtime.
 //!
 //! - [`protocol`]: order/event wire protocol messages
 //! - [`collections`]: fast bitmap and other shared collections

@@ -1,10 +1,10 @@
-//! Build a validated production exchange configuration and multicast publisher.
+//! Build a validated production trading configuration and multicast publisher.
 
-use matching_engine::exchange::config::ExchangeConfig;
+use trading_system_engine::trading::config::TradingConfig;
 use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = ExchangeConfig {
+    let config = TradingConfig {
         private_replay_capacity: 4096,
         repair_buffer_capacity: 1_000_000,
         idle_timeout: Some(Duration::from_secs(15)),
@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.validate()?;
     let publisher = config.multicast_publisher("0.0.0.0:0")?;
     println!(
-        "exchange config valid: replay={} repair={} idle={:?} multicast={}",
+        "trading config valid: replay={} repair={} idle={:?} multicast={}",
         config.private_replay_capacity,
         config.repair_buffer_capacity,
         config.idle_timeout,

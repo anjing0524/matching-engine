@@ -1,0 +1,27 @@
+[Unit]
+Description=Trading single-process runtime (gateway + middleware + core)
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=trading
+Group=trading
+EnvironmentFile=/etc/trading/trading.env
+ExecStart=/opt/trading/bin/trading run \
+  --listen ${TRADING_GATEWAY_LISTEN} \
+  --metrics-listen ${TRADING_METRICS_LISTEN} \
+  --idle-timeout-secs ${TRADING_GATEWAY_IDLE_TIMEOUT}
+Restart=on-failure
+RestartSec=2s
+LimitNOFILE=1048576
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/run/trading /var/lib/trading /tmp
+KillSignal=SIGTERM
+TimeoutStopSec=20s
+
+[Install]
+WantedBy=multi-user.target

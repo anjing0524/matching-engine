@@ -2,7 +2,7 @@
 
 ## Scope
 
-`ExchangeCore::snapshot()` captures continuous-book and business state:
+`TradingCore::snapshot()` captures continuous-book and business state:
 
 - contract spec and symbol
 - resting orders in level/FIFO order
@@ -11,7 +11,7 @@
 - positions and frozen close reservations
 - phase and trading day
 - trade/private/public sequence counters
-- last time tick and exchange timestamp
+- last time tick and trading timestamp
 
 It does **not** capture:
 

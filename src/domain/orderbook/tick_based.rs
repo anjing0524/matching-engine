@@ -802,7 +802,7 @@ impl TickBasedOrderBook {
         self.next_order_id
     }
 
-    /// Reserves and returns the next exchange order id.
+    /// Reserves and returns the next trading order id.
     pub fn reserve_order_id(&mut self) -> u64 {
         let id = self.next_order_id;
         self.next_order_id += 1;

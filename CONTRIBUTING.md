@@ -203,7 +203,7 @@ const maxPrice: u64 = 100000;   // 常量应使用SCREAMING_SNAKE_CASE
 /// # Examples
 ///
 /// ```
-/// use matching_engine::OrderBook;
+/// use trading_system_engine::OrderBook;
 ///
 /// let mut book = OrderBook::new();
 /// let trades = book.match_order(order)?;
@@ -484,7 +484,7 @@ mod tests {
 
 ```rust
 // tests/integration_test.rs
-use matching_engine::*;
+use trading_system_engine::*;
 
 #[test]
 fn test_end_to_end_matching() {
@@ -556,7 +556,7 @@ cargo tarpaulin --out Html
 //! # Examples
 //!
 //! ```
-//! use matching_engine::orderbook::TickBasedOrderBook;
+//! use trading_system_engine::orderbook::TickBasedOrderBook;
 //!
 //! let spec = ContractSpec::new("BTC/USD", 1, 1000, 100000);
 //! let mut book = TickBasedOrderBook::new(spec);
@@ -626,7 +626,7 @@ cargo doc --document-private-items
 ```rust
 // benches/my_feature_benchmark.rs
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use matching_engine::*;
+use trading_system_engine::*;
 
 fn bench_order_matching(c: &mut Criterion) {
     let mut book = OrderBook::new();

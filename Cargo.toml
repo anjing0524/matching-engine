@@ -1,5 +1,5 @@
 [package]
-name = "matching-engine"
+name = "trading-system-engine"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
@@ -26,15 +26,15 @@ name = "tick_orderbook_benchmark"
 harness = false
 
 [[bench]]
-name = "exchange_core_benchmark"
+name = "trading_core_benchmark"
 harness = false
 
 [[bench]]
-name = "exchange_middleware_benchmark"
+name = "trading_middleware_benchmark"
 harness = false
 
 [[bench]]
-name = "exchange_combo_benchmark"
+name = "trading_combo_benchmark"
 harness = false
 
 # Performance profile

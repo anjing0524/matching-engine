@@ -1,4 +1,4 @@
-//! Order-book protocol types shared by the exchange kernel and tests.
+//! Order-book protocol types shared by the trading kernel and tests.
 
 use crate::shared::SymbolId;
 use serde::{Deserialize, Serialize};

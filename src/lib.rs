@@ -1,6 +1,6 @@
-//! A high-performance futures exchange core.
+//! A high-performance futures trading core.
 //!
-//! The production path is the [`exchange`] module: gateway/middleware/core,
+//! The production path is the [`trading`] module: gateway/middleware/core,
 //! deterministic matching, combo execution, snapshots, and market-data
 //! distribution. [`domain`] provides the order book; [`shared`] provides wire
 //! types and the SPSC ring.
@@ -15,7 +15,7 @@ use tikv_jemallocator::Jemalloc;
 static GLOBAL: Jemalloc = Jemalloc;
 
 pub mod domain;
-pub mod exchange;
+pub mod trading;
 pub mod shared;
 
 pub use domain::orderbook::{ContractSpec, TickBasedOrderBook};

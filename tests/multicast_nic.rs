@@ -1,16 +1,16 @@
 //! Real-NIC multicast smoke test (ignored by default).
 //!
-//! `EXCHANGE_MCAST_IFACE=10.92.252.146 cargo test --release --test multicast_nic -- --ignored --nocapture`
+//! `TRADING_MCAST_IFACE=10.92.252.146 cargo test --release --test multicast_nic -- --ignored --nocapture`
 
-use matching_engine::exchange::market_data::{MarketDataPublisher, MarketDataSubscriber};
-use matching_engine::exchange::public_events::{PublicEvent, PublicEventType};
+use trading_system_engine::trading::market_data::{MarketDataPublisher, MarketDataSubscriber};
+use trading_system_engine::trading::public_events::{PublicEvent, PublicEventType};
 use std::time::Duration;
 
 fn event() -> PublicEvent {
     PublicEvent {
         seq: 1,
         event_type: PublicEventType::Trade,
-        exchange_ts_ns: 2,
+        trading_ts_ns: 2,
         phase: 3,
         instrument_id: 1,
         order_id: 0,
@@ -25,9 +25,9 @@ fn event() -> PublicEvent {
 }
 
 #[test]
-#[ignore = "requires EXCHANGE_MCAST_IFACE with a multicast-capable NIC"]
+#[ignore = "requires TRADING_MCAST_IFACE with a multicast-capable NIC"]
 fn publishes_on_configured_interface() {
-    let interface = std::env::var("EXCHANGE_MCAST_IFACE").expect("EXCHANGE_MCAST_IFACE");
+    let interface = std::env::var("TRADING_MCAST_IFACE").expect("TRADING_MCAST_IFACE");
     let interface: std::net::Ipv4Addr = interface.parse().expect("IPv4 interface");
     let group = "239.255.42.97";
     let subscriber = MarketDataSubscriber::bind_multicast_on(0, group, interface).unwrap();
