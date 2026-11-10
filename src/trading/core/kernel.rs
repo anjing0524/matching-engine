@@ -1139,10 +1139,6 @@ impl TradingCore {
                 user_id: u64::from(command.user_id),
                 order_id: command.cancel_order_id,
             })],
-            other => vec![CoreEvent::Rejected {
-                client_order_id: command.client_order_id,
-                reason: format!("unsupported command in this slice: {other:?}"),
-            }],
         }
     }
 
