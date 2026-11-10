@@ -204,7 +204,15 @@ Residual limits, intentionally not changed now:
 - `write_all` can still block a single connection's writer; a non-blocking
   writer queue is the next design step if that shows up in a real profile
 
-### 16. Linux mio event-loop gateway
+### 16. Rejected: Linux mio event-loop gateway (superseded)
+
+This was implemented to test a 64k-connection hypothesis, then reverted when the
+actual topology was confirmed: several gateways, each facing only a few futures
+firm members, all feeding one middleware. In that topology thread-per-member is
+simpler and lower overhead; the event loop optimized a connection count that is
+not part of the design. The measurements below are retained as historical data,
+not as a recommendation.
+
 
 The thread-per-connection gateway was replaced with one `mio` event-loop thread:
 

@@ -26,10 +26,8 @@ src/
 member TCP
   │  GatewayFrame (264B)
   ▼
-mio event loop ── accept / non-blocking read / write queues
-  │
-  ▼
-GatewayRuntime ── sessions/auth/rate limit/reconnect replay
+GatewayRuntime ── thread-per-member accept/read + per-connection write lock
+  │  sessions/auth/rate limit/reconnect replay
   │  Command (256B), globally sequenced by MiddlewareSequencer
   ▼
 shared-memory command ring
