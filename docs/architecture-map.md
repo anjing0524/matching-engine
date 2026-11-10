@@ -3,6 +3,23 @@
 This crate ships one production runtime: the trading core. Low-level order-book
 and ring types are shared; there is no second command path.
 
+## Module layout
+
+```text
+src/
+├── domain/                 # order book
+├── shared/                 # symbols, SPSC ring, order protocol types
+├── bin/                    # trading-engine/core/middleware/gateway
+└── trading/
+    ├── core/               # kernel, auction, positions, plugins, events, protocol
+    ├── gateway/            # frame, runtime, server, proxy, auth, session, replay
+    ├── transport/          # ring, middleware, runner, command/result logs
+    ├── market_data/        # publisher, tracker, repair, metrics
+    ├── combo/              # queue, engine, exec, runtime, margin
+    ├── snapshot/           # snapshot_file, replay
+    └── runtime/            # engine composition, event fanout
+```
+
 ## 1. Trading core (production)
 
 ```
