@@ -233,7 +233,7 @@ impl IoLoop {
             match connection.stream.read(&mut buffer) {
                 Ok(0) => {
                     *closed = true;
-                    return;
+                    break;
                 }
                 Ok(count) => {
                     connection.incoming.extend_from_slice(&buffer[..count]);
