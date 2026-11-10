@@ -76,12 +76,6 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
     }
 
     #[must_use]
-    pub fn with_result_logs(mut self, public: PublicResultLog, private: PrivateResultLog) -> Self {
-        self = self.with_optional_result_logs(Some(public), Some(private));
-        self
-    }
-
-    #[must_use]
     pub fn with_optional_result_logs(
         mut self,
         public: Option<PublicResultLog>,
