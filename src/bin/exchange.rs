@@ -165,18 +165,25 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
     if args.idle_timeout_secs > 0 {
         runtime = runtime.with_idle_timeout(Duration::from_secs(args.idle_timeout_secs));
     }
-    if let Some(path) = &args.public_log {
-        let log = matching_engine::exchange::result_log::PublicResultLog::create(
-            std::path::Path::new(path),
-        )?;
-        runtime = runtime.with_public_result_log(log);
-    }
-    if let Some(path) = &args.private_log {
-        let log = matching_engine::exchange::result_log::PrivateResultLog::create(
-            std::path::Path::new(path),
-        )?;
-        runtime = runtime.with_private_result_log(log);
-    }
+    let public_log = args
+        .public_log
+        .as_ref()
+        .map(|path| {
+            matching_engine::exchange::result_log::PublicResultLog::create(std::path::Path::new(
+                path,
+            ))
+        })
+        .transpose()?;
+    let private_log = args
+        .private_log
+        .as_ref()
+        .map(|path| {
+            matching_engine::exchange::result_log::PrivateResultLog::create(std::path::Path::new(
+                path,
+            ))
+        })
+        .transpose()?;
+    runtime = runtime.with_optional_result_logs(public_log, private_log);
     if let (Some(group), Some(port)) = (&args.multicast_group, args.multicast_port) {
         let publisher = MarketDataPublisher::bind_multicast_on(
             "0.0.0.0:0",

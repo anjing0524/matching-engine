@@ -77,22 +77,22 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
 
     #[must_use]
     pub fn with_result_logs(mut self, public: PublicResultLog, private: PrivateResultLog) -> Self {
-        self.fanout = self
-            .fanout
-            .with_public_log(public)
-            .with_private_log(private);
+        self = self.with_optional_result_logs(Some(public), Some(private));
         self
     }
 
     #[must_use]
-    pub fn with_public_result_log(mut self, public: PublicResultLog) -> Self {
-        self.fanout = self.fanout.with_public_log(public);
-        self
-    }
-
-    #[must_use]
-    pub fn with_private_result_log(mut self, private: PrivateResultLog) -> Self {
-        self.fanout = self.fanout.with_private_log(private);
+    pub fn with_optional_result_logs(
+        mut self,
+        public: Option<PublicResultLog>,
+        private: Option<PrivateResultLog>,
+    ) -> Self {
+        if let Some(public) = public {
+            self.fanout = self.fanout.with_public_log(public);
+        }
+        if let Some(private) = private {
+            self.fanout = self.fanout.with_private_log(private);
+        }
         self
     }
 
