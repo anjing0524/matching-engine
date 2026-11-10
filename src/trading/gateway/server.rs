@@ -202,12 +202,9 @@ impl IoLoop {
             if let Ok(mut connected) = self.connected.lock() {
                 connected.remove(&id);
             }
-            let _ = self
-                .event_tx
-                .send(GatewayEvent::Closed { connection_id: id });
-            return;
+        } else {
+            self.connections.insert(id, connection);
         }
-        self.connections.insert(id, connection);
         for frame in frames {
             if self
                 .event_tx
@@ -219,6 +216,11 @@ impl IoLoop {
             {
                 return;
             }
+        }
+        if closed {
+            let _ = self
+                .event_tx
+                .send(GatewayEvent::Closed { connection_id: id });
         }
     }
 
