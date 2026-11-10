@@ -1890,4 +1890,56 @@ mod tests {
         assert_eq!(core.order_status(order_id), Some(OrderStatus::Accepted));
         assert_eq!(core.pending_open().get(key).total(), 5);
     }
+    #[test]
+    #[ignore = "single-core latency profile; run explicitly"]
+    fn core_latency_profile() {
+        use crate::trading::core::plugins::NoPlugins;
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let iterations = std::env::var("CORE_LATENCY_ITERS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(1_000_000);
+        let warmup = iterations / 10;
+        let mut core = core();
+        let mut command = Command::zeroed();
+        command.command_type = CommandType::NewOrder;
+        command.price_type = PriceType::Limit;
+        command.time_condition = TimeCondition::Gfd;
+        command.volume_condition = VolumeCondition::Any;
+        command.offset = Offset::Open;
+        command.hedge = Hedge::Spec;
+        command.price_ticks = 50_000;
+        command.quantity = 1;
+        command.instrument_id = 1;
+        let plugin = NoPlugins;
+        let mut samples = Vec::with_capacity(iterations);
+        for index in 0..iterations + warmup {
+            command.client_order_id = index as u64 + 1;
+            command.user_id = if index % 2 == 0 { 1 } else { 2 };
+            command.side = if index % 2 == 0 {
+                Side::Buy
+            } else {
+                Side::Sell
+            };
+            let start = Instant::now();
+            core.execute_with_plugins_discard(command, &plugin);
+            let elapsed = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            if index >= warmup {
+                samples.push(elapsed);
+            }
+        }
+        samples.sort_unstable();
+        let percentile = |p: usize| samples[samples.len().saturating_sub(1) * p / 100];
+        println!(
+            "core_latency: n={} p50={}ns p99={}ns p999={}ns max={}ns",
+            samples.len(),
+            percentile(50),
+            percentile(99),
+            percentile(999),
+            samples.last().copied().unwrap_or(0)
+        );
+        black_box(core);
+    }
 }
