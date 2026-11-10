@@ -181,10 +181,17 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         self.metrics.public_events_sent += self.fanout.public_sent() - public_before;
         if let Some(combo) = &mut self.combo {
             combo.poll_commands();
-            let (combo_public, combo_private) =
-                combo.tick_with_gateway(&mut self.gateway, &self.server);
-            self.metrics.public_events_sent += combo_public as u64;
-            self.metrics.private_events_sent += combo_private as u64;
+            let effects = combo.tick_effects();
+            self.metrics.public_events_sent += effects.public_sent as u64;
+            let command_events = self.gateway.dispatch_private(&self.server, effects.private_commands);
+            let fill_events = self.gateway.dispatch_combo_private(
+                &self.server,
+                effects
+                    .private_fills
+                    .iter()
+                    .map(crate::trading::combo::engine::ComboFillEvent::private_fill),
+            );
+            self.metrics.private_events_sent += (command_events + fill_events) as u64;
             self.metrics.combo_queue_orders = combo.engine().queue_len() as u64;
         }
         let repaired = self.fanout.poll_repair();

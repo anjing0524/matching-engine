@@ -7,9 +7,14 @@ use crate::trading::combo::engine::{ComboEngine, ComboEngineSnapshot};
 use crate::trading::combo::market_data::ComboMarketDataPublisher;
 use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
 use crate::trading::core::protocol::{Command, CommandType};
-use crate::trading::gateway::runtime::GatewayRuntime;
-use crate::trading::gateway::server::GatewayServerHandle;
 use crate::trading::transport::CommandConsumer;
+
+/// Private fills and command statuses produced by one combo tick.
+pub struct ComboEffects {
+    pub public_sent: usize,
+    pub private_commands: Vec<PrivateEvent>,
+    pub private_fills: Vec<crate::trading::combo::engine::ComboFillEvent>,
+}
 
 /// Serializable combo runtime state.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -162,35 +167,25 @@ impl ComboRuntime {
         sent
     }
 
-    /// Publishes public fills and routes private fills to logged-in gateways.
-    ///
-    /// Returns `(public_sent, private_sent)`.
-    pub fn tick_with_gateway(
-        &mut self,
-        gateway: &mut GatewayRuntime,
-        server: &GatewayServerHandle,
-    ) -> (usize, usize) {
-        let command_events = self.drain_command_events();
-        let _ = gateway.dispatch_private(server, command_events);
-        // Execute every marketable queued combo before draining its fills.
+    /// Runs marketable combo orders, publishes fills, and returns private effects.
+    pub fn tick_effects(&mut self) -> ComboEffects {
+        let private_commands = self.drain_command_events();
         let _ = self.engine.run();
         let events = self.engine.drain_events();
-        let mut public = 0;
+        let mut public_sent = 0;
         if let Some(publisher) = &self.publisher {
             for event in &events {
                 if publisher.send(&event.public_fill()).is_ok() {
-                    public += 1;
+                    public_sent += 1;
                     self.public_sent += 1;
                 }
             }
         }
-        let private = gateway.dispatch_combo_private(
-            server,
-            events
-                .iter()
-                .map(crate::trading::combo::engine::ComboFillEvent::private_fill),
-        );
-        (public, private)
+        ComboEffects {
+            public_sent,
+            private_commands,
+            private_fills: events,
+        }
     }
 
     #[must_use]
