@@ -175,7 +175,6 @@ pub struct CoreSnapshot {
     pub pending_open: Vec<(PositionKey, crate::trading::core::positions::Position)>,
     pub frozen_close: Vec<(CloseKey, u64)>,
     pub auction_orders: Vec<AuctionOrder>,
-    pub auction_meta: Vec<(u64, (u64, Side, Offset, Hedge))>,
     pub auction_order_seq: u64,
     pub phase: TradingPhase,
     pub trading_day: u32,
@@ -198,7 +197,6 @@ pub struct TradingCore {
     private_seq: u64,
     private_events: Vec<PrivateEvent>,
     auction_orders: Vec<AuctionOrder>,
-    auction_meta: U64MixMap<(u64, Side, Offset, Hedge)>,
     auction_order_seq: u64,
     public_seq: u64,
     public_events: Vec<PublicEvent>,
@@ -222,7 +220,6 @@ impl TradingCore {
             private_seq: 1,
             private_events: Vec::new(),
             auction_orders: Vec::new(),
-            auction_meta: U64MixMap::default(),
             auction_order_seq: 1,
             public_seq: 1,
             public_events: Vec::new(),
@@ -253,12 +250,6 @@ impl TradingCore {
                 key.offset as u8,
             )
         });
-        let mut auction_meta: Vec<_> = self
-            .auction_meta
-            .iter()
-            .map(|(id, meta)| (*id, *meta))
-            .collect();
-        auction_meta.sort_by_key(|(id, _)| *id);
         CoreSnapshot {
             spec: self.book.spec().clone(),
             symbol: self.symbol,
@@ -298,7 +289,6 @@ impl TradingCore {
         self.pending_open.restore(snapshot.pending_open);
         self.frozen_close.restore(snapshot.frozen_close);
         self.auction_orders = snapshot.auction_orders;
-        self.auction_meta = snapshot.auction_meta.into_iter().collect();
         self.auction_order_seq = snapshot.auction_order_seq;
         self.phase = snapshot.phase;
         self.trading_day = snapshot.trading_day;
@@ -504,24 +494,31 @@ impl TradingCore {
             hedge,
             arrival_seq: order_id,
         });
-        self.auction_meta
-            .insert(order_id, (user_id, side, offset, hedge));
         order_id
     }
 
     /// Uncrosses the collected auction orders at the maximum-volume price.
     pub fn uncross_auction(&mut self, previous_settlement: u64) -> AuctionResult {
         let orders = std::mem::take(&mut self.auction_orders);
+        let metadata: U64MixMap<(u64, Side, Offset, Hedge)> = orders
+            .iter()
+            .map(|order| {
+                (
+                    order.order_id,
+                    (order.user_id, order.side, order.offset, order.hedge),
+                )
+            })
+            .collect();
         let result = auction::uncross(&orders, previous_settlement);
         for trade in &result.trades {
-            self.apply_auction_fill(trade.buyer_order_id, trade.quantity);
-            self.apply_auction_fill(trade.seller_order_id, trade.quantity);
+            let buyer = metadata.get(&trade.buyer_order_id).copied();
+            let seller = metadata.get(&trade.seller_order_id).copied();
+            self.apply_auction_fill(buyer, trade.quantity);
+            self.apply_auction_fill(seller, trade.quantity);
             self.push_private(
                 trade.buyer_order_id,
                 0,
-                self.auction_meta
-                    .get(&trade.buyer_order_id)
-                    .map_or(0, |meta| meta.0),
+                buyer.map_or(0, |meta| meta.0),
                 PrivateStatus::Filled,
                 trade.quantity,
                 0,
@@ -530,9 +527,7 @@ impl TradingCore {
             self.push_private(
                 trade.seller_order_id,
                 0,
-                self.auction_meta
-                    .get(&trade.seller_order_id)
-                    .map_or(0, |meta| meta.0),
+                seller.map_or(0, |meta| meta.0),
                 PrivateStatus::Filled,
                 trade.quantity,
                 0,
@@ -572,7 +567,6 @@ impl TradingCore {
                 );
             }
         }
-        self.auction_meta.clear();
         self.push_public(
             PublicEventType::AuctionResult,
             result.price_ticks.unwrap_or(0),
@@ -986,9 +980,8 @@ impl TradingCore {
         }
     }
 
-    fn apply_auction_fill(&mut self, order_id: u64, quantity: u64) {
-        let Some((account_id, side, offset, hedge)) = self.auction_meta.get(&order_id).copied()
-        else {
+    fn apply_auction_fill(&mut self, metadata: Option<(u64, Side, Offset, Hedge)>, quantity: u64) {
+        let Some((account_id, side, offset, hedge)) = metadata else {
             return;
         };
         let position_side = if offset == Offset::Open {
