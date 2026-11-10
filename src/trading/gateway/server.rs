@@ -1,20 +1,26 @@
-//! Minimal gateway TCP listener.
+//! Non-blocking Linux gateway TCP listener.
 //!
-//! Accepts gateway connections and forwards decoded fixed-size frames to
-//! middleware. Session registration, authentication, and private responses are
-//! layered above this event stream; this slice only owns the accept/read loop.
+//! One event-loop thread owns the sockets. The matching core stays synchronous
+//! and is not involved in readiness or write backpressure.
 
-use crate::shared::collections::U64MixMap;
+use crate::shared::collections::{U64MixMap, U64MixSet};
 use crate::trading::combo::engine::ComboPrivateFill;
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
+use mio::net::{TcpListener, TcpStream};
+use mio::{Events, Interest, Poll, Token, Waker};
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Sender, channel};
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+
+const LISTENER_TOKEN: Token = Token(0);
+const WAKER_TOKEN: Token = Token(1);
+const FIRST_CONNECTION_TOKEN: usize = 2;
 
 /// Event emitted by the gateway listener.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,69 +34,63 @@ pub enum GatewayEvent {
     },
 }
 
-type SharedStream = Arc<Mutex<TcpStream>>;
+enum WriterCommand {
+    Send(u64, GatewayFrame),
+    Close(u64),
+    Stop,
+}
+
+struct Connection {
+    stream: TcpStream,
+    incoming: Vec<u8>,
+    outgoing: VecDeque<u8>,
+}
 
 /// Handle used to address and stop a running listener.
 pub struct GatewayServerHandle {
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
     shutdown: Arc<AtomicBool>,
-    connections: Arc<Mutex<U64MixMap<SharedStream>>>,
+    writer: Sender<WriterCommand>,
+    waker: Waker,
+    connected: Arc<Mutex<U64MixSet>>,
     join: Option<thread::JoinHandle<()>>,
 }
 
 impl GatewayServerHandle {
     #[must_use]
-    pub fn addr(&self) -> std::net::SocketAddr {
+    pub fn addr(&self) -> SocketAddr {
         self.addr
     }
 
-    /// Sends one frame to a connected gateway.
+    /// Queues one frame for a connected gateway.
     ///
     /// # Errors
-    /// Returns an I/O error when the connection is unknown or the write fails.
+    /// Returns an I/O error when the connection is unknown or the event loop
+    /// has stopped.
     pub fn send(&self, connection_id: u64, frame: GatewayFrame) -> io::Result<()> {
-        let stream = {
-            let connections = self
-                .connections
-                .lock()
-                .map_err(|_| io::Error::other("gateway connection lock poisoned"))?;
-            connections
-                .get(&connection_id)
-                .cloned()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "gateway not connected"))?
-        };
-        let mut stream = stream
+        if !self
+            .connected
             .lock()
-            .map_err(|_| io::Error::other("gateway stream lock poisoned"))?;
-        stream.write_all(&frame.encode())
+            .map_err(|_| io::Error::other("gateway connection lock poisoned"))?
+            .contains(&connection_id)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "gateway not connected",
+            ));
+        }
+        self.writer
+            .send(WriterCommand::Send(connection_id, frame))
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "gateway loop stopped"))?;
+        self.waker
+            .wake()
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "gateway wake failed"))
     }
 
-    /// Sends one private order event to a gateway connection.
-    ///
-    /// # Errors
-    /// Returns an I/O error when the connection is unknown or the write fails.
     pub fn send_private(&self, connection_id: u64, event: &PrivateEvent) -> io::Result<()> {
         self.send(connection_id, GatewayFrame::PrivateEvent(event.clone()))
     }
 
-    /// Closes one gateway connection and removes it from the write map.
-    pub fn close(&self, connection_id: u64) {
-        let stream = self
-            .connections
-            .lock()
-            .ok()
-            .and_then(|mut connections| connections.remove(&connection_id));
-        if let Some(stream) = stream
-            && let Ok(stream) = stream.lock()
-        {
-            let _ = stream.shutdown(std::net::Shutdown::Both);
-        }
-    }
-
-    /// Sends one combination private fill to a gateway connection.
-    ///
-    /// # Errors
-    /// Returns an I/O error when the connection is unknown or the write fails.
     pub fn send_combo_private(
         &self,
         connection_id: u64,
@@ -99,10 +99,6 @@ impl GatewayServerHandle {
         self.send(connection_id, GatewayFrame::ComboPrivate(*fill))
     }
 
-    /// Sends a redirect frame to a gateway connection.
-    ///
-    /// # Errors
-    /// Returns an I/O error when the connection is unknown or the write fails.
     pub fn send_redirect(&self, connection_id: u64, address: &str) -> io::Result<()> {
         self.send(
             connection_id,
@@ -112,8 +108,19 @@ impl GatewayServerHandle {
         )
     }
 
+    /// Closes one gateway connection.
+    pub fn close(&self, connection_id: u64) {
+        if let Ok(mut connected) = self.connected.lock() {
+            connected.remove(&connection_id);
+        }
+        let _ = self.writer.send(WriterCommand::Close(connection_id));
+        let _ = self.waker.wake();
+    }
+
     pub fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
+        let _ = self.writer.send(WriterCommand::Stop);
+        let _ = self.waker.wake();
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
@@ -126,51 +133,246 @@ impl Drop for GatewayServerHandle {
     }
 }
 
-/// Starts a gateway listener and returns its handle plus the event receiver.
+struct IoLoop {
+    poll: Poll,
+    listener: TcpListener,
+    connections: U64MixMap<Connection>,
+    connected: Arc<Mutex<U64MixSet>>,
+    event_tx: Sender<GatewayEvent>,
+    next_id: u64,
+}
+
+impl IoLoop {
+    fn accept_pending(&mut self) {
+        loop {
+            match self.listener.accept() {
+                Ok((mut stream, _)) => {
+                    let _ = stream.set_nodelay(true);
+                    let id = self.next_id;
+                    self.next_id += 1;
+                    let token = Token(
+                        FIRST_CONNECTION_TOKEN + usize::try_from(id.saturating_sub(1)).unwrap_or(0),
+                    );
+                    if self
+                        .poll
+                        .registry()
+                        .register(&mut stream, token, Interest::READABLE)
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    if let Ok(mut connected) = self.connected.lock() {
+                        connected.insert(id);
+                    }
+                    self.connections.insert(
+                        id,
+                        Connection {
+                            stream,
+                            incoming: Vec::with_capacity(GATEWAY_FRAME_SIZE * 2),
+                            outgoing: VecDeque::new(),
+                        },
+                    );
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(_) => break,
+            }
+        }
+    }
+
+    fn handle_connection(&mut self, token: Token) {
+        if token.0 < FIRST_CONNECTION_TOKEN {
+            return;
+        }
+        let id = (token.0 - FIRST_CONNECTION_TOKEN) as u64 + 1;
+        let Some(mut connection) = self.connections.remove(&id) else {
+            return;
+        };
+        let mut frames = Vec::new();
+        let mut closed = false;
+        self.read_connection(&mut connection, &mut frames, &mut closed);
+        if !closed {
+            self.write_connection(id, &mut connection, &mut closed);
+        }
+        if closed {
+            let _ = connection.stream.shutdown(std::net::Shutdown::Both);
+            if let Ok(mut connected) = self.connected.lock() {
+                connected.remove(&id);
+            }
+            let _ = self
+                .event_tx
+                .send(GatewayEvent::Closed { connection_id: id });
+            return;
+        }
+        self.connections.insert(id, connection);
+        for frame in frames {
+            if self
+                .event_tx
+                .send(GatewayEvent::Frame {
+                    connection_id: id,
+                    frame,
+                })
+                .is_err()
+            {
+                return;
+            }
+        }
+    }
+
+    fn read_connection(
+        &self,
+        connection: &mut Connection,
+        frames: &mut Vec<GatewayFrame>,
+        closed: &mut bool,
+    ) {
+        let mut buffer = [0u8; GATEWAY_FRAME_SIZE * 4];
+        loop {
+            match connection.stream.read(&mut buffer) {
+                Ok(0) => {
+                    *closed = true;
+                    return;
+                }
+                Ok(count) => {
+                    connection.incoming.extend_from_slice(&buffer[..count]);
+                    if count < buffer.len() {
+                        break;
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(_) => {
+                    *closed = true;
+                    return;
+                }
+            }
+        }
+        while connection.incoming.len() >= GATEWAY_FRAME_SIZE {
+            let mut bytes = [0u8; GATEWAY_FRAME_SIZE];
+            bytes.copy_from_slice(&connection.incoming[..GATEWAY_FRAME_SIZE]);
+            connection.incoming.drain(..GATEWAY_FRAME_SIZE);
+            match GatewayFrame::decode(&bytes) {
+                Ok(frame) => frames.push(frame),
+                Err(_) => {
+                    *closed = true;
+                    return;
+                }
+            }
+        }
+    }
+
+    fn write_connection(&self, connection_id: u64, connection: &mut Connection, closed: &mut bool) {
+        while !connection.outgoing.is_empty() {
+            let data = connection.outgoing.make_contiguous();
+            match connection.stream.write(data) {
+                Ok(0) => {
+                    *closed = true;
+                    return;
+                }
+                Ok(count) => {
+                    connection.outgoing.drain(..count);
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(_) => {
+                    *closed = true;
+                    return;
+                }
+            }
+        }
+        let interest = if connection.outgoing.is_empty() {
+            Interest::READABLE
+        } else {
+            Interest::READABLE | Interest::WRITABLE
+        };
+        let token = Token(
+            FIRST_CONNECTION_TOKEN + usize::try_from(connection_id.saturating_sub(1)).unwrap_or(0),
+        );
+        let _ = self
+            .poll
+            .registry()
+            .reregister(&mut connection.stream, token, interest);
+    }
+
+    fn process_writer_commands(&mut self, receiver: &Receiver<WriterCommand>) -> bool {
+        loop {
+            match receiver.try_recv() {
+                Ok(WriterCommand::Send(connection_id, frame)) => {
+                    if let Some(connection) = self.connections.get_mut(&connection_id) {
+                        connection.outgoing.extend(frame.encode());
+                        let token = Token(
+                            FIRST_CONNECTION_TOKEN
+                                + usize::try_from(connection_id.saturating_sub(1)).unwrap_or(0),
+                        );
+                        let _ = self.poll.registry().reregister(
+                            &mut connection.stream,
+                            token,
+                            Interest::READABLE | Interest::WRITABLE,
+                        );
+                    }
+                }
+                Ok(WriterCommand::Close(connection_id)) => {
+                    self.close_connection(connection_id);
+                }
+                Ok(WriterCommand::Stop) => return false,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return false,
+            }
+        }
+    }
+
+    fn close_connection(&mut self, connection_id: u64) {
+        let connection = self.connections.remove(&connection_id);
+        if let Some(connection) = connection {
+            let _ = connection.stream.shutdown(std::net::Shutdown::Both);
+        }
+        if let Ok(mut connected) = self.connected.lock() {
+            connected.remove(&connection_id);
+        }
+        let _ = self.event_tx.send(GatewayEvent::Closed { connection_id });
+    }
+}
+
+/// Starts a gateway listener and returns its handle plus an event receiver.
 ///
 /// # Errors
-/// Returns an I/O error if the listener cannot bind.
-pub fn start(
-    bind_addr: &str,
-) -> io::Result<(GatewayServerHandle, std::sync::mpsc::Receiver<GatewayEvent>)> {
-    let listener = TcpListener::bind(bind_addr)?;
+/// Returns an I/O error if the listener or event loop cannot be created.
+pub fn start(bind_addr: &str) -> io::Result<(GatewayServerHandle, Receiver<GatewayEvent>)> {
+    let listener = std::net::TcpListener::bind(bind_addr)?;
     listener.set_nonblocking(true)?;
     let addr = listener.local_addr()?;
+    let mut poll = Poll::new()?;
+    let mut listener = TcpListener::from_std(listener);
+    poll.registry()
+        .register(&mut listener, LISTENER_TOKEN, Interest::READABLE)?;
+    let waker = Waker::new(poll.registry(), WAKER_TOKEN)?;
+    let (writer, writer_rx) = channel();
+    let (event_tx, event_rx) = channel();
+    let connected = Arc::new(Mutex::new(U64MixSet::default()));
     let shutdown = Arc::new(AtomicBool::new(false));
-    let accept_shutdown = Arc::clone(&shutdown);
-    let (tx, rx) = channel();
-    let next_connection = Arc::new(AtomicU64::new(1));
-    let connections = Arc::new(Mutex::new(U64MixMap::default()));
-    let accept_connections = Arc::clone(&connections);
+    let thread_shutdown = Arc::clone(&shutdown);
+    let thread_connected = Arc::clone(&connected);
     let join = thread::Builder::new()
-        .name("gateway-tcp-listener".to_string())
+        .name("gateway-event-loop".to_string())
         .spawn(move || {
-            while !accept_shutdown.load(Ordering::Acquire) {
-                match listener.accept() {
-                    Ok((stream, _)) => {
-                        let id = next_connection.fetch_add(1, Ordering::Relaxed);
-                        let event_tx = tx.clone();
-                        let write_stream = match stream.try_clone() {
-                            Ok(stream) => Arc::new(Mutex::new(stream)),
-                            Err(_) => continue,
-                        };
-                        if let Ok(mut map) = accept_connections.lock() {
-                            map.insert(id, write_stream);
-                        }
-                        let remove_connections = Arc::clone(&accept_connections);
-                        let _ = thread::Builder::new()
-                            .name(format!("gateway-tcp-{id}"))
-                            .spawn(move || {
-                                serve_connection(id, stream, event_tx);
-                                if let Ok(mut map) = remove_connections.lock() {
-                                    map.remove(&id);
-                                }
-                            });
+            let mut state = IoLoop {
+                poll,
+                listener,
+                connections: U64MixMap::default(),
+                connected: thread_connected,
+                event_tx,
+                next_id: 1,
+            };
+            let mut events = Events::with_capacity(1024);
+            while !thread_shutdown.load(Ordering::Acquire) {
+                let _ = state
+                    .poll
+                    .poll(&mut events, Some(Duration::from_millis(100)));
+                for event in events.iter() {
+                    match event.token() {
+                        LISTENER_TOKEN => state.accept_pending(),
+                        WAKER_TOKEN => {}
+                        token => state.handle_connection(token),
                     }
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(_) => break,
+                }
+                if !state.process_writer_commands(&writer_rx) {
+                    break;
                 }
             }
         })?;
@@ -178,37 +380,13 @@ pub fn start(
         GatewayServerHandle {
             addr,
             shutdown,
-            connections,
+            writer,
+            waker,
+            connected,
             join: Some(join),
         },
-        rx,
+        event_rx,
     ))
-}
-
-fn serve_connection(id: u64, mut stream: TcpStream, tx: Sender<GatewayEvent>) {
-    let _ = stream.set_nonblocking(false);
-    let _ = stream.set_nodelay(true);
-    let mut frame = [0u8; GATEWAY_FRAME_SIZE];
-    loop {
-        if stream.read_exact(&mut frame).is_err() {
-            break;
-        }
-        match GatewayFrame::decode(&frame) {
-            Ok(frame) => {
-                if tx
-                    .send(GatewayEvent::Frame {
-                        connection_id: id,
-                        frame,
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-    }
-    let _ = tx.send(GatewayEvent::Closed { connection_id: id });
 }
 
 #[cfg(test)]
