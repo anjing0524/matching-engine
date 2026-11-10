@@ -14,7 +14,7 @@ use std::time::Duration;
 
 #[test]
 fn trading_binary_accepts_order_and_serves_metrics() {
-    let binary = env!("CARGO_BIN_EXE_trading");
+    let binary = env!("CARGO_BIN_EXE_trading-engine");
     let dir = std::env::temp_dir().join(format!("trading-binary-smoke-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let mut child = ProcessCommand::new(binary)

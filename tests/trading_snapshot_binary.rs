@@ -63,7 +63,7 @@ fn binary_restores_runtime_snapshot() {
     };
     snapshot.save(&snapshot_path).unwrap();
 
-    let mut child = ProcessCommand::new(env!("CARGO_BIN_EXE_trading"))
+    let mut child = ProcessCommand::new(env!("CARGO_BIN_EXE_trading-engine"))
         .args([
             "run",
             "--iterations",
