@@ -186,8 +186,7 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
             args.multicast_interface.parse()?,
         )?);
     }
-    let mut runtime =
-        ExchangeRuntime::new(gateway_runtime, runner, gateway).with_options(options);
+    let mut runtime = ExchangeRuntime::new(gateway_runtime, runner, gateway).with_options(options);
     if let Some(path) = &args.snapshot {
         let snapshot = matching_engine::exchange::exchange_runtime::ExchangeSnapshot::load(
             std::path::Path::new(path),

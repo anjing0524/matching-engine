@@ -144,7 +144,9 @@ impl<P: PreTradePlugin> ExchangeRuntime<P> {
     #[must_use]
     pub fn with_config(mut self, config: ExchangeConfig) -> Self {
         self.idle_timeout = config.idle_timeout;
-        self.fanout = self.fanout.with_repair_buffer(config.repair_buffer_capacity);
+        self.fanout = self
+            .fanout
+            .with_repair_buffer(config.repair_buffer_capacity);
         self
     }
 
@@ -330,7 +332,11 @@ mod tests {
         let subscriber = MarketDataSubscriber::bind("127.0.0.1:0").unwrap();
         let publisher =
             MarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap()).unwrap();
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions { market_data: Some(publisher), ..Default::default() });
+        let mut runtime =
+            ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
+                market_data: Some(publisher),
+                ..Default::default()
+            });
 
         let clients = 4u64;
         let per_client = 25u64;
@@ -436,7 +442,11 @@ mod tests {
         let combo = ComboRuntime::new(engine)
             .with_command_consumer(combo_consumer)
             .with_publisher(publisher);
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions { combo: Some(combo), ..Default::default() });
+        let mut runtime =
+            ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
+                combo: Some(combo),
+                ..Default::default()
+            });
 
         let mut stream = TcpStream::connect(addr).unwrap();
         stream
@@ -535,7 +545,11 @@ mod tests {
             ComboMarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap())
                 .unwrap();
         let combo = ComboRuntime::new(engine).with_publisher(publisher);
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions { combo: Some(combo), ..Default::default() });
+        let mut runtime =
+            ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
+                combo: Some(combo),
+                ..Default::default()
+            });
         runtime.tick();
         let fill = subscriber.recv().unwrap();
         assert_eq!(fill.quantity, 5);
@@ -592,7 +606,11 @@ mod tests {
         let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
         let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
         let runner = CoreRunner::new(core, consumer, NoPlugins);
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions { repair_buffer_capacity: Some(16), ..Default::default() });
+        let mut runtime =
+            ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
+                repair_buffer_capacity: Some(16),
+                ..Default::default()
+            });
 
         let mut stream = TcpStream::connect(addr).unwrap();
         stream
@@ -657,7 +675,11 @@ mod tests {
             MarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap()).unwrap();
         let repair = RepairServer::bind("127.0.0.1:0", publisher, 16).unwrap();
         let repair_addr = repair.local_addr().unwrap();
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions { repair_server: Some(repair), ..Default::default() });
+        let mut runtime =
+            ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
+                repair_server: Some(repair),
+                ..Default::default()
+            });
 
         let mut stream = TcpStream::connect(addr).unwrap();
         stream
@@ -727,7 +749,11 @@ mod tests {
         let subscriber = MarketDataSubscriber::bind("127.0.0.1:0").unwrap();
         let publisher =
             MarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap()).unwrap();
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions { market_data: Some(publisher), ..Default::default() });
+        let mut runtime =
+            ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
+                market_data: Some(publisher),
+                ..Default::default()
+            });
 
         let mut stream = TcpStream::connect(addr).unwrap();
         stream
@@ -777,8 +803,11 @@ mod tests {
         let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
         let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
         let runner = CoreRunner::new(core, consumer, NoPlugins);
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server)
-            .with_options(RuntimeOptions { idle_timeout: Some(Duration::from_millis(30)), ..Default::default() });
+        let mut runtime =
+            ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
+                idle_timeout: Some(Duration::from_millis(30)),
+                ..Default::default()
+            });
 
         let mut stream = TcpStream::connect(addr).unwrap();
         stream
@@ -835,8 +864,8 @@ mod tests {
         let core = ExchangeCore::new(spec, SymbolId::intern("BTCUSDT"));
         let runner = CoreRunner::new(core, consumer, NoPlugins);
         let metrics_sink = Arc::new(Mutex::new(ExchangeMetrics::new()));
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server)
-            .with_options(RuntimeOptions {
+        let mut runtime =
+            ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
                 metrics_sink: Some(Arc::clone(&metrics_sink)),
                 ..Default::default()
             });
@@ -946,8 +975,8 @@ mod tests {
             ContractSpec::new("LEG1", 1, 1, 100_000),
             ContractSpec::new("LEG2", 1, 1, 100_000),
         );
-        let mut runtime = ExchangeRuntime::new(gateway, runner, server)
-            .with_options(RuntimeOptions {
+        let mut runtime =
+            ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
                 combo: Some(ComboRuntime::new(engine)),
                 ..Default::default()
             });
