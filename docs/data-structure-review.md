@@ -312,6 +312,43 @@ meet a strict single-digit-microsecond p99 goal. CPU affinity helps the p99 but
 does not remove the multi-thread handoff and kernel TCP cost. Kernel bypass is
 explicitly out of scope for now.
 
+### 20. Load + latency at target rates
+
+`tests/trading_load_latency.rs` sends commands from member client threads while
+the main thread drives the runtime; private responses are timestamped per
+client order.
+
+Single member, paced at ~100k/s:
+
+```text
+members=1 target=100000/s n=100000 elapsed=690.601234ms rate=144801/s
+p50=6990591ns p99=24708451ns p999=24798999ns
+```
+
+Single member, unpaced burst:
+
+```text
+members=1 n=100000 elapsed=659.870668ms rate=151545/s
+p50=386540086ns p99=526246687ns
+```
+
+16 members, 1M orders, unpaced:
+
+```text
+members=16 n=1000000 elapsed=6.748838569s rate=148174/s
+p50=3685213480ns p99=5867985585ns
+```
+
+Interpretation:
+
+- one process tops out near 150k order/s in this synthetic burst
+- at the sustainable rate, single-member p99 is ~25µs
+- at 1M burst, latency is backlog-dominated (seconds), not a usable p99
+- the 8-member paced run was distorted by busy-spin sender threads competing
+  for CPUs; its latency is not a valid production figure
+- reaching 1M order/s and a microsecond p99 requires separate gateway/core
+  processes or a different latency-oriented design, not just this data structure
+
 ## Remaining data-structure candidates
 
 1. **Event vectors**
