@@ -239,6 +239,7 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn gateway_mut(&mut self) -> &mut GatewayRuntime {
         &mut self.gateway
     }
