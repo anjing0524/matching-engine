@@ -292,6 +292,26 @@ routing across many books on one thread. Observations:
 - each `TradingCore` is still single-contract; a multi-contract wrapper and
   sequence/event merge do not exist yet
 
+### 19. End-to-end single-member latency
+
+Profile: `tests/trading_latency_e2e.rs`
+
+```text
+LATENCY_ITERS=100000
+e2e_latency: p50=7613ns p99=26545ns p999=62618ns max=338934ns
+
+taskset -c 2,3 (two CPUs)
+e2e_latency: p50=7619ns p99=22297ns p999=53269ns max=3001435ns
+```
+
+Boundary: TCP command write -> gateway -> middleware -> core -> private
+response read, one member, one outstanding order, standard Linux TCP stack.
+
+The p50 is single-digit microseconds, but p99 is ~22–27µs. This does **not**
+meet a strict single-digit-microsecond p99 goal. CPU affinity helps the p99 but
+does not remove the multi-thread handoff and kernel TCP cost. Kernel bypass is
+explicitly out of scope for now.
+
 ## Remaining data-structure candidates
 
 1. **Event vectors**
