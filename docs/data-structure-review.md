@@ -354,6 +354,34 @@ What the valid runs establish:
 - 1M aggregate throughput is not measurable from this same-process harness;
   it needs an external load generator and / or multiple gateway/core hosts
 
+### 21. Out-of-process latency and busy-poll find
+
+`tests/trading_remote_latency.rs` starts `trading-engine` in a child process and
+runs only the member client in the test process, avoiding same-process client /
+runtime contention.
+
+First run exposed a real production bug: the runtime binaries slept 1ms (or
+100µs in split mode) in their tick loops. Remote p50 was ~1.1ms because of that
+sleep alone. The runtime loops now busy-poll with `spin_loop()`.
+
+After removing the sleeps:
+
+```text
+LATENCY_ITERS=100000, no CPU pinning
+p50=6996ns p99=24844ns p999=35500ns
+
+taskset -c 2,3
+p50=3157ns p99=8937ns p999=24752ns max=2943106ns
+```
+
+So:
+
+- busy-poll fixes the millisecond-scale poll floor
+- unpinned p99 is ~25µs on the 4C/8T host
+- with client and server pinned to two CPUs, p99 is ~8.9µs
+- p99.9 remains ~25µs and max outliers remain milliseconds
+- kernel bypass is still not used
+
 ## Remaining data-structure candidates## Remaining data-structure candidates
 
 1. **Event vectors**
