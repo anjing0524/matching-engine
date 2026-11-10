@@ -5,10 +5,10 @@
 //! gateway session.
 
 use crate::trading::combo::runtime::{ComboRuntime, ComboRuntimeSnapshot};
-use crate::trading::core::plugins::PreTradePlugin;
 use crate::trading::core::CoreSnapshot;
 #[cfg(test)]
 use crate::trading::core::TradingCore;
+use crate::trading::core::plugins::PreTradePlugin;
 use crate::trading::gateway::runtime::GatewayRuntime;
 use crate::trading::gateway::server::GatewayServerHandle;
 use crate::trading::market_data::MarketDataPublisher;
