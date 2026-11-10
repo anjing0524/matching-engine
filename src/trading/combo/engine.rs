@@ -122,12 +122,12 @@ pub struct ComboEngine {
     leg2_positions: Positions,
     leg1_frozen: FrozenClose,
     leg2_frozen: FrozenClose,
-    close_reservations: std::collections::HashMap<u64, (CloseKey, CloseKey, u64)>,
+    close_reservations: crate::shared::collections::U64MixMap<(CloseKey, CloseKey, u64)>,
     max_open_qty_per_user: Option<u64>,
-    open_qty_per_user: std::collections::HashMap<u64, u64>,
+    open_qty_per_user: crate::shared::collections::U64MixMap<u64>,
     margin_config: Option<ComboMarginConfig>,
-    margin_balance: std::collections::HashMap<u64, u128>,
-    margin_reservations: std::collections::HashMap<u64, u128>,
+    margin_balance: crate::shared::collections::U64MixMap<u128>,
+    margin_reservations: crate::shared::collections::U64MixMap<u128>,
 }
 
 /// Serializable state for combo queue, leg books, positions, and margin.
@@ -163,12 +163,12 @@ impl ComboEngine {
             leg2_positions: Positions::new(),
             leg1_frozen: FrozenClose::new(),
             leg2_frozen: FrozenClose::new(),
-            close_reservations: std::collections::HashMap::new(),
+            close_reservations: crate::shared::collections::U64MixMap::default(),
             max_open_qty_per_user: None,
-            open_qty_per_user: std::collections::HashMap::new(),
+            open_qty_per_user: crate::shared::collections::U64MixMap::default(),
             margin_config: None,
-            margin_balance: std::collections::HashMap::new(),
-            margin_reservations: std::collections::HashMap::new(),
+            margin_balance: crate::shared::collections::U64MixMap::default(),
+            margin_reservations: crate::shared::collections::U64MixMap::default(),
         }
     }
 

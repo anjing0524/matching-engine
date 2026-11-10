@@ -4,8 +4,9 @@
 //! spread-price/FIFO queue and are later executed atomically against the two
 //! leg books. This slice implements the queue and cancellation only.
 
+use crate::shared::collections::U64MixMap;
 use crate::trading::core::protocol::{Hedge, Offset, Side};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 
 /// One resting combination order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -26,7 +27,7 @@ pub struct ComboOrder {
 pub struct ComboQueue {
     bids: BTreeMap<u64, VecDeque<ComboOrder>>,
     asks: BTreeMap<u64, VecDeque<ComboOrder>>,
-    locations: HashMap<u64, (Side, u64)>,
+    locations: U64MixMap<(Side, u64)>,
     next_arrival: u64,
 }
 
