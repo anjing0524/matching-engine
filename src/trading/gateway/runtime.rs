@@ -6,6 +6,8 @@
 
 use crate::shared::collections::{U64MixMap, U64MixSet};
 use crate::trading::combo::engine::ComboPrivateFill;
+#[cfg(test)]
+use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::gateway::GatewayFrame;
 use crate::trading::gateway::auth::GatewayCredentials;
 use crate::trading::gateway::private_replay::{
