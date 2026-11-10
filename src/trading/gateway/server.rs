@@ -254,4 +254,48 @@ mod tests {
             }
         );
     }
+    #[test]
+    fn concurrent_writes_keep_frames_intact() {
+        let (handle, rx) = start("127.0.0.1:0").unwrap();
+        let mut stream = TcpStream::connect(handle.addr()).unwrap();
+        stream.set_nodelay(true).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 1,
+                    auth_token: 0,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 4,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, GatewayEvent::Frame { .. }));
+        let handle = Arc::new(handle);
+
+        let mut writers = Vec::new();
+        for thread_id in 0..4u64 {
+            let handle = Arc::clone(&handle);
+            writers.push(std::thread::spawn(move || {
+                for index in 0..100u64 {
+                    let seq = thread_id * 100 + index;
+                    handle.send(1, GatewayFrame::Heartbeat { seq }).unwrap();
+                }
+            }));
+        }
+        for _ in 0..400 {
+            let mut bytes = [0u8; GATEWAY_FRAME_SIZE];
+            stream.read_exact(&mut bytes).unwrap();
+            assert!(matches!(
+                GatewayFrame::decode(&bytes).unwrap(),
+                GatewayFrame::Heartbeat { .. }
+            ));
+        }
+        for writer in writers {
+            writer.join().unwrap();
+        }
+    }
 }
