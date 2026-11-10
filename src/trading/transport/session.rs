@@ -291,4 +291,32 @@ mod tests {
         assert!(!registry.acknowledge_private(9, 1));
         assert!(registry.is_empty());
     }
+    #[test]
+    fn secondary_indexes_follow_takeover_and_close() {
+        let mut registry = SessionRegistry::new();
+        assert!(registry.open(session(1)));
+        assert_eq!(
+            registry.find_active_by_user(20).map(|s| s.session_id),
+            Some(1)
+        );
+        assert_eq!(registry.closed_count(), 0);
+
+        let replacement = session(2);
+        assert_eq!(registry.open_or_takeover(replacement), Ok(Some(1)));
+        assert_eq!(
+            registry.find_active_by_user(20).map(|s| s.session_id),
+            Some(2)
+        );
+        assert_eq!(registry.active_count(), 1);
+        assert_eq!(registry.closed_count(), 1);
+
+        assert!(registry.close(2));
+        assert!(registry.find_active_by_user(20).is_none());
+        assert_eq!(registry.active_count(), 0);
+        assert_eq!(registry.closed_count(), 2);
+
+        assert_eq!(registry.prune_closed(1), 1);
+        assert_eq!(registry.closed_count(), 1);
+        assert_eq!(registry.len(), 1);
+    }
 }
