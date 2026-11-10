@@ -1839,7 +1839,7 @@ mod tests {
             crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
         )
         .unwrap();
-        let loaded = crate::trading::snapshot::snapshot_file::load(
+        let loaded: CoreSnapshot = crate::trading::snapshot::snapshot_file::load(
             &path,
             crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
         )
