@@ -179,9 +179,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ticks = 0u64;
     loop {
         gateway.poll();
-        for (connection_id, replay) in gateway.take_all_replays() {
+        for (connection_id, replay) in gateway.take_replay_batches() {
             for event in replay {
-                let _ = server.send_private(connection_id, &event);
+                if let trading_system_engine::trading::gateway::private_replay::ReplayEvent::Core(
+                    event,
+                ) = event
+                {
+                    let _ = server.send_private(connection_id, &event);
+                }
             }
         }
         let private: Vec<_> = std::iter::from_fn(|| private_consumer.recv())

@@ -24,8 +24,8 @@ use std::time::{Duration, Instant};
 struct ConnectionState {
     last_seen: Instant,
     bucket: Option<TokenBucket>,
-    replay: Option<Vec<PrivateEvent>>,
-    combo_replay: Option<Vec<ComboPrivateFill>>,
+    /// Already seq-ordered core/combo replay queue for this connection.
+    replay: Vec<ReplayEvent>,
     redirect: Option<String>,
 }
 
@@ -34,8 +34,7 @@ impl ConnectionState {
         Self {
             last_seen: Instant::now(),
             bucket: None,
-            replay: None,
-            combo_replay: None,
+            replay: Vec::new(),
             redirect: None,
         }
     }
@@ -45,7 +44,7 @@ impl ConnectionState {
 pub struct GatewayEffects {
     pub events: usize,
     pub redirects: Vec<(u64, String)>,
-    pub replays: HashMap<u64, Vec<ReplayEvent>>,
+    pub replays: Vec<(u64, Vec<ReplayEvent>)>,
     pub active_sessions: usize,
     pub closed_sessions: usize,
 }
@@ -214,14 +213,20 @@ impl GatewayRuntime {
                     .connections
                     .entry(connection_id)
                     .or_insert_with(ConnectionState::new);
-                let replay = self.private_replay.replay(user_id, last_private_seq);
-                if !replay.is_empty() {
-                    state.replay = Some(replay);
-                }
-                let combo_replay = self.combo_replay.replay(user_id, last_private_seq);
-                if !combo_replay.is_empty() {
-                    state.combo_replay = Some(combo_replay);
-                }
+                let mut replay: Vec<ReplayEvent> = self
+                    .private_replay
+                    .replay(user_id, last_private_seq)
+                    .into_iter()
+                    .map(ReplayEvent::Core)
+                    .collect();
+                replay.extend(
+                    self.combo_replay
+                        .replay(user_id, last_private_seq)
+                        .into_iter()
+                        .map(ReplayEvent::Combo),
+                );
+                replay.sort_by_key(ReplayEvent::seq);
+                state.replay = replay;
             }
             GatewayFrame::Command(mut command) => {
                 if let Some((capacity, refill)) = self.rate_limit {
@@ -316,46 +321,32 @@ impl GatewayRuntime {
         expired
     }
 
-    /// Takes replay events queued for a newly logged-in connection.
+    /// Takes core replay events queued for a newly logged-in connection.
     pub fn take_replay(&mut self, connection_id: u64) -> Option<Vec<PrivateEvent>> {
-        self.connections
-            .get_mut(&connection_id)
-            .and_then(|state| state.replay.take())
-    }
-
-    /// Drains all queued replay batches.
-    pub fn take_all_replays(&mut self) -> HashMap<u64, Vec<PrivateEvent>> {
-        let mut replays = HashMap::new();
-        for (connection_id, state) in &mut self.connections {
-            if let Some(replay) = state.replay.take() {
-                replays.insert(*connection_id, replay);
-            }
-        }
-        replays
+        let state = self.connections.get_mut(&connection_id)?;
+        let replay: Vec<PrivateEvent> = std::mem::take(&mut state.replay)
+            .into_iter()
+            .filter_map(|event| match event {
+                ReplayEvent::Core(event) => Some(event),
+                ReplayEvent::Combo(_) => None,
+            })
+            .collect();
+        (!replay.is_empty()).then_some(replay)
     }
 
     /// Drains core and combo replay batches in per-user sequence order.
     #[must_use]
-    pub fn take_replay_batches(&mut self) -> HashMap<u64, Vec<ReplayEvent>> {
-        let mut merged: HashMap<u64, Vec<ReplayEvent>> = HashMap::new();
+    pub fn take_replay_batches(&mut self) -> Vec<(u64, Vec<ReplayEvent>)> {
+        let mut batches = Vec::new();
         for (connection_id, state) in &mut self.connections {
-            if let Some(core) = state.replay.take() {
-                merged
-                    .entry(*connection_id)
-                    .or_default()
-                    .extend(core.into_iter().map(ReplayEvent::Core));
+            if state.replay.is_empty() {
+                continue;
             }
-            if let Some(combo) = state.combo_replay.take() {
-                merged
-                    .entry(*connection_id)
-                    .or_default()
-                    .extend(combo.into_iter().map(ReplayEvent::Combo));
-            }
-        }
-        for events in merged.values_mut() {
+            let mut events = std::mem::take(&mut state.replay);
             events.sort_by_key(ReplayEvent::seq);
+            batches.push((*connection_id, events));
         }
-        merged
+        batches
     }
 
     fn assign_private_seq(&mut self, user_id: u64) -> u64 {
@@ -1067,7 +1058,12 @@ mod tests {
         let mut replay = None;
         for _ in 0..50 {
             runtime.poll();
-            if let Some(events) = runtime.take_replay_batches().remove(&2) {
+            if let Some(events) = runtime
+                .take_replay_batches()
+                .into_iter()
+                .find(|(id, _)| *id == 2)
+                .map(|(_, events)| events)
+            {
                 replay = Some(events);
                 break;
             }
