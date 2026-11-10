@@ -4,12 +4,16 @@
 //! identity and the last private sequence used for reconnect replay. This slice
 //! is an in-memory registry; network connections and authentication are later.
 
-use crate::shared::collections::U64MixMap;
+use crate::shared::collections::{U64MixMap, U128MixMap};
 use std::collections::VecDeque;
 
 /// Rejection for a zero or duplicate session id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SessionOpenError;
+
+fn identity_key(info: &SessionInfo) -> u128 {
+    (u128::from(info.member_id) << 64) | (u128::from(info.user_id) << 32) | u128::from(info.seat_id)
+}
 
 /// One authenticated trading session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,6 +37,8 @@ pub struct SessionRegistry {
     by_user: U64MixMap<u64>,
     /// gateway_id -> active session ids
     by_gateway: U64MixMap<Vec<u64>>,
+    /// (member, user, seat) -> active session id
+    by_identity: U128MixMap<u128, u64>,
     /// Closed session ids in close order, for bounded pruning.
     closed_order: VecDeque<u64>,
 }
@@ -67,6 +73,8 @@ impl SessionRegistry {
             .entry(u64::from(info.gateway_id))
             .or_default()
             .push(info.session_id);
+        self.by_identity
+            .insert(identity_key(&info), info.session_id);
     }
 
     fn deactivate(&mut self, session_id: u64) -> bool {
@@ -90,6 +98,10 @@ impl SessionRegistry {
                 self.by_gateway.remove(&gateway_id);
             }
         }
+        let identity = identity_key(session);
+        if self.by_identity.get(&identity) == Some(&session_id) {
+            self.by_identity.remove(&identity);
+        }
         self.closed_order.push_back(session_id);
         true
     }
@@ -105,16 +117,10 @@ impl SessionRegistry {
             return Err(SessionOpenError);
         }
         let replaced = self
-            .sessions
-            .values()
-            .find(|session| {
-                session.active
-                    && session.member_id == info.member_id
-                    && session.user_id == info.user_id
-                    && session.seat_id == info.seat_id
-                    && session.session_id != info.session_id
-            })
-            .map(|session| session.session_id);
+            .by_identity
+            .get(&identity_key(&info))
+            .copied()
+            .filter(|session_id| *session_id != info.session_id);
         if let Some(old) = replaced {
             self.deactivate(old);
         }
