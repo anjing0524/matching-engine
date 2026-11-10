@@ -87,6 +87,7 @@ impl SessionRegistry {
         session.active = false;
         let user_id = u64::from(session.user_id);
         let gateway_id = u64::from(session.gateway_id);
+        let identity = identity_key(session);
         self.active_count -= 1;
         self.closed_count += 1;
         if self.by_user.get(&user_id) == Some(&session_id) {
@@ -98,7 +99,6 @@ impl SessionRegistry {
                 self.by_gateway.remove(&gateway_id);
             }
         }
-        let identity = identity_key(session);
         if self.by_identity.get(&identity) == Some(&session_id) {
             self.by_identity.remove(&identity);
         }
