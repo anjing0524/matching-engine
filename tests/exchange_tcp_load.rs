@@ -77,7 +77,10 @@ fn multi_gateway_tcp_fanout() {
         }
         let _ = received_tx.send(received);
     });
-    let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions { market_data: Some(publisher), ..Default::default() });
+    let mut runtime = ExchangeRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
+        market_data: Some(publisher),
+        ..Default::default()
+    });
 
     let total = clients * per_client;
     let mut streams = Vec::new();
