@@ -539,4 +539,27 @@ mod tests {
         );
         assert_eq!(ids.len(), count);
     }
+    #[test]
+    fn login_then_eof_emits_frame_then_closed() {
+        let (handle, rx) = start("127.0.0.1:0").unwrap();
+        let mut stream = std::net::TcpStream::connect(handle.addr()).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 1,
+                    auth_token: 0,
+                    user_id: 1,
+                    seat_id: 1,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        drop(stream);
+        let first = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(first, GatewayEvent::Frame { .. }));
+        let second = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(second, GatewayEvent::Closed { .. }));
+    }
 }
