@@ -45,8 +45,8 @@ binaries:  trading-engine / trading-core / trading-middleware / trading-gateway
 
 ```bash
 cargo build --release --bins
-cargo test --all-features
-cargo clippy --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --check
 ```
 

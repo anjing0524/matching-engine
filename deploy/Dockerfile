@@ -4,6 +4,7 @@ RUN apk add --no-cache musl-dev build-base
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY crates ./crates
 COPY benches ./benches
 COPY examples ./examples
 RUN cargo build --release --bin trading-engine

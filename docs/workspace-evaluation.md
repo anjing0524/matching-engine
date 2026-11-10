@@ -20,6 +20,13 @@ Direct dependencies: 9
 Clean release build: 52.07s on the Fedora i7-8559U (8 logical CPUs)
 ```
 
+Current workspace:
+
+```text
+trading-system-engine (root)
+crates/trading-domain
+```
+
 Current grouped modules:
 
 ```text
@@ -125,7 +132,10 @@ need justifies the extra public-interface work.
 
 ## Decision
 
-Keep `trading-system-engine` as one Cargo package. The module cycles have been
-removed, so a future three-crate split no longer requires an architectural
-rewrite; only do it when a concrete reuse, team, or build-time requirement
-appears.
+The package is now a workspace. Step 1 extracted `trading-domain`, which owns the
+order book and shared value types. The root `trading-system-engine` package still
+owns kernel, gateway, transport, snapshot, market data, and binaries.
+
+This was done because the module cycles were already removed and the domain
+crate has no runtime dependencies; it is the lowest-risk first split. The next
+step, if still useful, is extracting `trading-kernel` from the root package.
