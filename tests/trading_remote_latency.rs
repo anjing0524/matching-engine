@@ -63,7 +63,7 @@ fn read_frame(stream: &mut TcpStream, buffer: &mut Vec<u8>) -> GatewayFrame {
             Ok(0) => panic!("server closed"),
             Ok(count) => buffer.extend_from_slice(&chunk[..count]),
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_micros(10));
+                std::hint::spin_loop();
             }
             Err(error) => panic!("read failed: {error}"),
         }
