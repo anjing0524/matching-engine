@@ -5,10 +5,10 @@ use clap::Parser;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use trading_system_engine::trading::gateway_runtime::GatewayRuntime;
-use trading_system_engine::trading::gateway_server::start as start_gateway;
+use trading_system_engine::trading::gateway::gateway_runtime::GatewayRuntime;
+use trading_system_engine::trading::gateway::gateway_server::start as start_gateway;
 use trading_system_engine::trading::market_data::MarketDataPublisher;
-use trading_system_engine::trading::middleware::MiddlewareSequencer;
+use trading_system_engine::trading::transport::middleware::MiddlewareSequencer;
 use trading_system_engine::trading::transport::{
     create, create_private_event_transport, create_public_event_transport,
     open_private_event_consumer, open_public_event_consumer,
@@ -86,21 +86,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .public_log
         .as_deref()
         .map(|path| {
-            trading_system_engine::trading::result_log::PublicResultLog::create(Path::new(path))
+            trading_system_engine::trading::transport::result_log::PublicResultLog::create(Path::new(path))
         })
         .transpose()?;
     let mut private_log = args
         .private_log
         .as_deref()
         .map(|path| {
-            trading_system_engine::trading::result_log::PrivateResultLog::create(Path::new(path))
+            trading_system_engine::trading::transport::result_log::PrivateResultLog::create(Path::new(path))
         })
         .transpose()?;
     let mut rotating_public_log = args
         .public_log_dir
         .as_deref()
         .map(|dir| {
-            trading_system_engine::trading::result_log::RotatingPublicResultLog::open(
+            trading_system_engine::trading::transport::result_log::RotatingPublicResultLog::open(
                 Path::new(dir),
                 "public",
                 args.result_log_max_bytes,
@@ -112,7 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .private_log_dir
         .as_deref()
         .map(|dir| {
-            trading_system_engine::trading::result_log::RotatingPrivateResultLog::open(
+            trading_system_engine::trading::transport::result_log::RotatingPrivateResultLog::open(
                 Path::new(dir),
                 "private",
                 args.result_log_max_bytes,
@@ -139,14 +139,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         gateway = gateway.with_auth_token(token);
     }
     let health_directory = args.redirect_endpoints.as_deref().and_then(|endpoints| {
-        trading_system_engine::trading::gateway_directory::GatewayDirectory::new(
+        trading_system_engine::trading::gateway::gateway_directory::GatewayDirectory::new(
             endpoints.split(',').map(str::to_string),
         )
         .ok()
         .map(Arc::new)
     });
     let mut health_monitor = health_directory.as_ref().map(|directory| {
-        trading_system_engine::trading::gateway_directory::HealthMonitor::start(
+        trading_system_engine::trading::gateway::gateway_directory::HealthMonitor::start(
             Arc::clone(directory),
             Duration::from_secs(1),
             Duration::from_millis(200),

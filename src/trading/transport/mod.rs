@@ -1,0 +1,13 @@
+//! Middleware sequencing, shared-memory rings, and command/result logs.
+
+pub mod command_log;
+pub mod middleware;
+pub mod result_log;
+pub mod runner;
+pub mod transport;
+
+pub use self::middleware::MiddlewareSequencer;
+pub use self::runner::CoreRunner;
+pub use self::transport::{
+    CommandConsumer, CommandTransportError, PrivateEventProducer, PublicEventProducer, create,
+};

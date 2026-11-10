@@ -27,8 +27,8 @@ TradingRuntime
 - `domain`: tick 价格订单簿，无 I/O。
 - `trading::core`: 确定性业务状态机；订单、持仓、冻结、竞价、组合队列。
 - `trading::gateway_*`: 会员连接、认证、session、限速、private replay。
-- `trading::middleware` / `transport`: 全局序号与共享内存 ring。
-- `trading::event_fanout`: result log、repair、market data、计数。
+- `trading::transport::middleware` / `transport`: 全局序号与共享内存 ring。
+- `trading::runtime::event_fanout`: result log、repair、market data、计数。
 - `trading::runtime`: 组合 runtime，`tick()` 驱动。
 
 详细 ownership 与边界见 [docs/architecture-map.md](docs/architecture-map.md)。

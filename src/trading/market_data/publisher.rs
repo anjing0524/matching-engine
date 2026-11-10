@@ -1,0 +1,275 @@
+//! UDP market-data publisher/subscriber.
+//!
+//! `PublicEvent` records are fixed 128-byte packets. The same wire format is
+//! used for unicast repair and multicast distribution; this slice provides the
+//! UDP endpoints and packet codec, not the NACK/retransmit loop.
+
+use crate::trading::core::public_events::PublicEvent;
+use crate::trading::transport::{PUBLIC_EVENT_SLOT_SIZE, decode_public_event, encode_public_event};
+use std::io;
+use std::net::{SocketAddr, UdpSocket};
+use std::time::Duration;
+
+/// UDP sender for public events. The target may be a multicast group.
+pub struct MarketDataPublisher {
+    socket: UdpSocket,
+    target: SocketAddr,
+    multicast: Option<(String, String, u16, std::net::Ipv4Addr)>,
+}
+
+impl MarketDataPublisher {
+    /// Binds a local UDP socket and stores the destination.
+    ///
+    /// # Errors
+    /// Returns an I/O error if bind fails.
+    pub fn bind(local: &str, target: SocketAddr) -> io::Result<Self> {
+        let socket = UdpSocket::bind(local)?;
+        Ok(Self {
+            socket,
+            target,
+            multicast: None,
+        })
+    }
+
+    /// Binds a publisher targeting an IPv4 multicast group and port.
+    ///
+    /// # Errors
+    /// Returns an I/O error if bind/address parsing fails.
+    pub fn bind_multicast(local: &str, group: &str, port: u16) -> io::Result<Self> {
+        Self::bind_multicast_on(local, group, port, std::net::Ipv4Addr::LOCALHOST)
+    }
+
+    /// Binds a multicast publisher on a specific local interface.
+    ///
+    /// # Errors
+    /// Returns an I/O error if bind/address parsing fails.
+    pub fn bind_multicast_on(
+        local: &str,
+        group: &str,
+        port: u16,
+        interface: std::net::Ipv4Addr,
+    ) -> io::Result<Self> {
+        let group: std::net::Ipv4Addr = group
+            .parse()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let local: SocketAddr = local
+            .parse()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let socket = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        )?;
+        socket.set_reuse_address(true)?;
+        socket.bind(&local.into())?;
+        socket.set_multicast_loop_v4(true)?;
+        socket.set_multicast_if_v4(&interface)?;
+        let socket: UdpSocket = socket.into();
+        Ok(Self {
+            socket,
+            target: SocketAddr::from((group, port)),
+            multicast: Some((local.to_string(), group.to_string(), port, interface)),
+        })
+    }
+
+    /// Rebinds a multicast publisher to a different local interface.
+    ///
+    /// # Errors
+    /// Returns an I/O error for unicast publishers or bind failure.
+    pub fn switch_interface(&mut self, interface: std::net::Ipv4Addr) -> io::Result<()> {
+        let Some((local, group, port, _)) = &self.multicast else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "publisher is not multicast",
+            ));
+        };
+        let replacement = Self::bind_multicast_on(local, group, *port, interface)?;
+        self.socket = replacement.socket;
+        self.target = replacement.target;
+        self.multicast = replacement.multicast;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn multicast_interface(&self) -> Option<std::net::Ipv4Addr> {
+        self.multicast
+            .as_ref()
+            .map(|(_, _, _, interface)| *interface)
+    }
+
+    /// Sends one public event packet.
+    ///
+    /// # Errors
+    /// Returns an I/O error from the UDP send.
+    pub fn send(&self, event: &PublicEvent) -> io::Result<()> {
+        self.socket
+            .send_to(&encode_public_event(event), self.target)
+            .map(|_| ())
+    }
+
+    #[must_use]
+    pub fn target(&self) -> SocketAddr {
+        self.target
+    }
+}
+
+/// UDP receiver for public events.
+pub struct MarketDataSubscriber {
+    socket: UdpSocket,
+}
+
+impl MarketDataSubscriber {
+    /// Binds a local UDP socket.
+    ///
+    /// # Errors
+    /// Returns an I/O error if bind fails.
+    pub fn bind(local: &str) -> io::Result<Self> {
+        let local: SocketAddr = local
+            .parse()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let socket = socket2::Socket::new(
+            socket2::Domain::for_address(local),
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        )?;
+        socket.set_recv_buffer_size(4 * 1024 * 1024)?;
+        socket.bind(&local.into())?;
+        let socket: UdpSocket = socket.into();
+        socket.set_read_timeout(Some(Duration::from_secs(2)))?;
+        Ok(Self { socket })
+    }
+
+    /// Joins an IPv4 multicast group.
+    ///
+    /// # Errors
+    /// Returns an I/O error if the group address/port is invalid or join fails.
+    pub fn join_multicast(&self, group: &str) -> io::Result<()> {
+        let group: std::net::Ipv4Addr = group
+            .parse()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        self.socket
+            .join_multicast_v4(&group, &std::net::Ipv4Addr::UNSPECIFIED)
+    }
+
+    /// Binds a subscriber on all interfaces and joins an IPv4 multicast group.
+    ///
+    /// # Errors
+    /// Returns an I/O error if bind/join fails.
+    pub fn bind_multicast(port: u16, group: &str) -> io::Result<Self> {
+        Self::bind_multicast_on(port, group, std::net::Ipv4Addr::LOCALHOST)
+    }
+
+    /// Binds a multicast subscriber on a specific local interface.
+    ///
+    /// # Errors
+    /// Returns an I/O error if bind/join fails.
+    pub fn bind_multicast_on(
+        port: u16,
+        group: &str,
+        interface: std::net::Ipv4Addr,
+    ) -> io::Result<Self> {
+        let group: std::net::Ipv4Addr = group
+            .parse()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let socket = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        )?;
+        socket.set_reuse_address(true)?;
+        socket.set_recv_buffer_size(4 * 1024 * 1024)?;
+        socket.bind(&SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, port)).into())?;
+        socket.set_multicast_loop_v4(true)?;
+        socket.join_multicast_v4(&group, &interface)?;
+        let socket: UdpSocket = socket.into();
+        socket.set_read_timeout(Some(Duration::from_secs(2)))?;
+        Ok(Self { socket })
+    }
+
+    /// Receives one public event.
+    ///
+    /// # Errors
+    /// Returns an I/O error for timeout/transport failures or invalid packets.
+    pub fn recv(&self) -> io::Result<PublicEvent> {
+        let mut buf = [0u8; PUBLIC_EVENT_SLOT_SIZE];
+        let (len, _) = self.socket.recv_from(&mut buf)?;
+        if len != PUBLIC_EVENT_SLOT_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid public-event packet length",
+            ));
+        }
+        decode_public_event(&buf)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("{error:?}")))
+    }
+
+    #[must_use]
+    pub fn local_addr(&self) -> Option<SocketAddr> {
+        self.socket.local_addr().ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::trading::core::public_events::PublicEventType;
+
+    fn event() -> PublicEvent {
+        PublicEvent {
+            seq: 7,
+            event_type: PublicEventType::Trade,
+            trading_ts_ns: 99,
+            phase: 3,
+            instrument_id: 5,
+            order_id: 11,
+            trade_id: 12,
+            buy_order_id: 13,
+            sell_order_id: 14,
+            side: Some(crate::trading::core::protocol::Side::Buy),
+            price_ticks: 50_000,
+            quantity: 9,
+            volume: 0,
+        }
+    }
+
+    #[test]
+    fn multicast_publisher_and_subscriber() {
+        let group = "239.255.42.99";
+        let subscriber = MarketDataSubscriber::bind_multicast(0, group).unwrap();
+        let port = subscriber.local_addr().unwrap().port();
+        let publisher = MarketDataPublisher::bind_multicast("0.0.0.0:0", group, port).unwrap();
+        publisher.send(&event()).unwrap();
+        assert_eq!(subscriber.recv().unwrap(), event());
+    }
+
+    #[test]
+    fn multicast_interface_can_switch() {
+        let subscriber = MarketDataSubscriber::bind_multicast(0, "239.255.42.98").unwrap();
+        let port = subscriber.local_addr().unwrap().port();
+        let mut publisher = MarketDataPublisher::bind_multicast_on(
+            "0.0.0.0:0",
+            "239.255.42.98",
+            port,
+            std::net::Ipv4Addr::LOCALHOST,
+        )
+        .unwrap();
+        assert_eq!(
+            publisher.multicast_interface(),
+            Some(std::net::Ipv4Addr::LOCALHOST)
+        );
+        publisher
+            .switch_interface(std::net::Ipv4Addr::LOCALHOST)
+            .unwrap();
+        publisher.send(&event()).unwrap();
+        assert_eq!(subscriber.recv().unwrap(), event());
+    }
+
+    #[test]
+    fn publisher_sends_packet_to_subscriber() {
+        let subscriber = MarketDataSubscriber::bind("127.0.0.1:0").unwrap();
+        let target = subscriber.local_addr().unwrap();
+        let publisher = MarketDataPublisher::bind("127.0.0.1:0", target).unwrap();
+        publisher.send(&event()).unwrap();
+        assert_eq!(subscriber.recv().unwrap(), event());
+    }
+}

@@ -27,7 +27,7 @@ trading-core \
 ```
 
 4. Replay the post-snapshot command log with
-   `trading::replay::replay_from_snapshot`.
+   `trading::snapshot::replay::replay_from_snapshot`.
 5. Compare the replayed core snapshot with the expected snapshot if one is
    available; reject on mismatch.
 6. Admit commands only after replay completes.

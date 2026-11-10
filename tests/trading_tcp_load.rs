@@ -10,16 +10,16 @@ use trading_system_engine::domain::orderbook::ContractSpec;
 use trading_system_engine::shared::SymbolId;
 use trading_system_engine::trading::core::TradingCore;
 use trading_system_engine::trading::gateway::GatewayFrame;
-use trading_system_engine::trading::gateway_runtime::GatewayRuntime;
-use trading_system_engine::trading::gateway_server::start;
+use trading_system_engine::trading::gateway::gateway_runtime::GatewayRuntime;
+use trading_system_engine::trading::gateway::gateway_server::start;
 use trading_system_engine::trading::market_data::{MarketDataPublisher, MarketDataSubscriber};
-use trading_system_engine::trading::middleware::MiddlewareSequencer;
-use trading_system_engine::trading::plugins::NoPlugins;
-use trading_system_engine::trading::protocol::{
+use trading_system_engine::trading::transport::middleware::MiddlewareSequencer;
+use trading_system_engine::trading::core::plugins::NoPlugins;
+use trading_system_engine::trading::core::protocol::{
     Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
     VolumeCondition,
 };
-use trading_system_engine::trading::runner::CoreRunner;
+use trading_system_engine::trading::transport::runner::CoreRunner;
 use trading_system_engine::trading::runtime::{RuntimeOptions, TradingRuntime};
 use trading_system_engine::trading::transport::create;
 

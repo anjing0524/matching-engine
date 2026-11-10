@@ -5,13 +5,13 @@ use std::time::Instant;
 use trading_system_engine::domain::orderbook::ContractSpec;
 use trading_system_engine::shared::SymbolId;
 use trading_system_engine::trading::core::TradingCore;
-use trading_system_engine::trading::middleware::MiddlewareSequencer;
-use trading_system_engine::trading::plugins::NoPlugins;
-use trading_system_engine::trading::protocol::{
+use trading_system_engine::trading::transport::middleware::MiddlewareSequencer;
+use trading_system_engine::trading::core::plugins::NoPlugins;
+use trading_system_engine::trading::core::protocol::{
     Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
     VolumeCondition,
 };
-use trading_system_engine::trading::runner::CoreRunner;
+use trading_system_engine::trading::transport::runner::CoreRunner;
 use trading_system_engine::trading::transport::create;
 
 fn command(seq: u64) -> Command {

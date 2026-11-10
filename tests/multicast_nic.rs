@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 use trading_system_engine::trading::market_data::{MarketDataPublisher, MarketDataSubscriber};
-use trading_system_engine::trading::public_events::{PublicEvent, PublicEventType};
+use trading_system_engine::trading::core::public_events::{PublicEvent, PublicEventType};
 
 fn event() -> PublicEvent {
     PublicEvent {

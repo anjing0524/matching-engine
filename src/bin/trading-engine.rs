@@ -10,15 +10,15 @@ use std::time::Duration;
 use trading_system_engine::domain::orderbook::ContractSpec;
 use trading_system_engine::shared::SymbolId;
 use trading_system_engine::trading::core::TradingCore;
-use trading_system_engine::trading::gateway_directory::{GatewayDirectory, HealthMonitor};
-use trading_system_engine::trading::gateway_runtime::GatewayRuntime;
-use trading_system_engine::trading::gateway_server::start as start_gateway;
+use trading_system_engine::trading::gateway::gateway_directory::{GatewayDirectory, HealthMonitor};
+use trading_system_engine::trading::gateway::gateway_runtime::GatewayRuntime;
+use trading_system_engine::trading::gateway::gateway_server::start as start_gateway;
 use trading_system_engine::trading::market_data::MarketDataPublisher;
-use trading_system_engine::trading::metrics::TradingMetrics;
-use trading_system_engine::trading::metrics_server;
-use trading_system_engine::trading::middleware::MiddlewareSequencer;
-use trading_system_engine::trading::plugins::NoPlugins;
-use trading_system_engine::trading::runner::CoreRunner;
+use trading_system_engine::trading::market_data::metrics::TradingMetrics;
+use trading_system_engine::trading::market_data::metrics_server;
+use trading_system_engine::trading::transport::middleware::MiddlewareSequencer;
+use trading_system_engine::trading::core::plugins::NoPlugins;
+use trading_system_engine::trading::transport::runner::CoreRunner;
 use trading_system_engine::trading::runtime::{RuntimeOptions, TradingRuntime};
 use trading_system_engine::trading::transport::create;
 
@@ -164,7 +164,7 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
         .public_log
         .as_ref()
         .map(|path| {
-            trading_system_engine::trading::result_log::PublicResultLog::create(
+            trading_system_engine::trading::transport::result_log::PublicResultLog::create(
                 std::path::Path::new(path),
             )
         })
@@ -173,7 +173,7 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
         .private_log
         .as_ref()
         .map(|path| {
-            trading_system_engine::trading::result_log::PrivateResultLog::create(
+            trading_system_engine::trading::transport::result_log::PrivateResultLog::create(
                 std::path::Path::new(path),
             )
         })

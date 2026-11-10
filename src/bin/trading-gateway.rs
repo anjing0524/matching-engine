@@ -1,7 +1,7 @@
 //! Standalone member gateway: relays frames to the middleware gateway listener.
 
 use clap::Parser;
-use trading_system_engine::trading::gateway_proxy;
+use trading_system_engine::trading::gateway::gateway_proxy;
 
 #[derive(Parser)]
 struct Args {

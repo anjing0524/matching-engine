@@ -5,9 +5,9 @@ use std::io::Write;
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use trading_system_engine::trading::gateway::GatewayFrame;
-use trading_system_engine::trading::gateway_runtime::GatewayRuntime;
-use trading_system_engine::trading::gateway_server::start;
-use trading_system_engine::trading::middleware::MiddlewareSequencer;
+use trading_system_engine::trading::gateway::gateway_runtime::GatewayRuntime;
+use trading_system_engine::trading::gateway::gateway_server::start;
+use trading_system_engine::trading::transport::middleware::MiddlewareSequencer;
 use trading_system_engine::trading::transport::create;
 
 #[test]
