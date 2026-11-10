@@ -7,7 +7,7 @@
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command as ProcessCommand, Stdio};
 use std::time::{Duration, Instant};
 
 use trading_system_engine::trading::core::protocol::{
@@ -79,7 +79,7 @@ fn remote_single_member_latency_profile() {
         .unwrap_or(100_000);
     let warmup = iterations / 10;
     let addr = free_addr();
-    let mut server: Child = Command::new(env!("CARGO_BIN_EXE_trading-engine"))
+    let mut server: Child = ProcessCommand::new(env!("CARGO_BIN_EXE_trading-engine"))
         .args([
             "run",
             "--listen",
