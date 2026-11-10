@@ -19,4 +19,6 @@ pub mod exchange;
 pub mod shared;
 
 pub use domain::orderbook::{ContractSpec, TickBasedOrderBook};
-pub use shared::protocol::{NewOrderRequest, OrderConfirmation, OrderStatus, OrderStatusType, OrderType, TradeNotification};
+pub use shared::protocol::{
+    NewOrderRequest, OrderConfirmation, OrderStatus, OrderStatusType, OrderType, TradeNotification,
+};

@@ -9,5 +9,7 @@ pub mod protocol;
 pub mod spsc_ring;
 pub mod symbol;
 
-pub use protocol::{NewOrderRequest, OrderConfirmation, OrderStatus, OrderStatusType, OrderType, TradeNotification};
+pub use protocol::{
+    NewOrderRequest, OrderConfirmation, OrderStatus, OrderStatusType, OrderType, TradeNotification,
+};
 pub use symbol::SymbolId;
