@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if args.iterations > 0 && ticks >= args.iterations {
             break;
         }
-        std::thread::sleep(Duration::from_micros(100));
+        std::hint::spin_loop();
     }
     Ok(())
 }

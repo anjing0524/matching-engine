@@ -213,7 +213,7 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
         if args.iterations > 0 && ticks >= args.iterations {
             break;
         }
-        std::thread::sleep(Duration::from_millis(1));
+        std::hint::spin_loop();
     }
     metrics_server.stop();
     if let Some(monitor) = &mut health_monitor {
