@@ -6,12 +6,16 @@
 
 use crate::trading::combo::runtime::{ComboRuntime, ComboRuntimeSnapshot};
 use crate::trading::core::plugins::PreTradePlugin;
-use crate::trading::core::{CoreSnapshot, TradingCore};
+use crate::trading::core::CoreSnapshot;
+#[cfg(test)]
+use crate::trading::core::TradingCore;
 use crate::trading::gateway::runtime::GatewayRuntime;
 use crate::trading::gateway::server::GatewayServerHandle;
 use crate::trading::market_data::MarketDataPublisher;
 use crate::trading::market_data::metrics::TradingMetrics;
-use crate::trading::market_data::repair::{NackRequest, RepairServer};
+#[cfg(test)]
+use crate::trading::market_data::repair::NackRequest;
+use crate::trading::market_data::repair::RepairServer;
 use crate::trading::runtime::event_fanout::EventFanout;
 use crate::trading::transport::result_log::{PrivateResultLog, PublicResultLog};
 use crate::trading::transport::runner::CoreRunner;
