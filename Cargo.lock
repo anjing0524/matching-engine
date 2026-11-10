@@ -693,6 +693,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "trading-domain"
+version = "0.1.0"
+dependencies = [
+ "memmap2",
+ "serde",
+ "smallvec",
+]
+
+[[package]]
 name = "trading-system-engine"
 version = "0.1.0"
 dependencies = [
@@ -707,6 +716,7 @@ dependencies = [
  "tempfile",
  "tikv-jemallocator",
  "tracing",
+ "trading-domain",
 ]
 
 [[package]]

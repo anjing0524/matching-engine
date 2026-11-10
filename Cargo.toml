@@ -4,7 +4,12 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 
+[workspace]
+members = ["crates/trading-domain"]
+resolver = "3"
+
 [dependencies]
+trading-domain = { path = "crates/trading-domain" }
 serde = { version = "1.0", features = ["derive"] }
 tracing = "0.1"
 tikv-jemallocator = "0.5"

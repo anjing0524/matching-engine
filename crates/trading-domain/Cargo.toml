@@ -1,0 +1,10 @@
+[package]
+name = "trading-domain"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+
+[dependencies]
+memmap2 = "0.9"
+serde = { version = "1.0", features = ["derive"] }
+smallvec = "1.13"
