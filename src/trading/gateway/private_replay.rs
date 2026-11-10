@@ -6,25 +6,41 @@
 
 use crate::trading::combo::engine::ComboPrivateFill;
 use crate::trading::core::private_events::PrivateEvent;
-use std::collections::{HashMap, VecDeque};
 
-/// Per-user bounded replay log.
+/// Events that carry a per-user private sequence.
+pub trait ReplaySequenced {
+    fn seq(&self) -> u64;
+}
+
+impl ReplaySequenced for PrivateEvent {
+    fn seq(&self) -> u64 {
+        self.seq
+    }
+}
+
+impl ReplaySequenced for ComboPrivateFill {
+    fn seq(&self) -> u64 {
+        self.seq
+    }
+}
+
+/// Per-user bounded replay log shared by core and combo producers.
 #[derive(Debug, Default)]
-pub struct PrivateReplayBuffer {
-    per_user: HashMap<u64, VecDeque<PrivateEvent>>,
+pub struct ReplayBuffer<T> {
+    per_user: std::collections::HashMap<u64, std::collections::VecDeque<T>>,
     capacity_per_user: usize,
 }
 
-impl PrivateReplayBuffer {
+impl<T: Clone + ReplaySequenced> ReplayBuffer<T> {
     #[must_use]
     pub fn new(capacity_per_user: usize) -> Self {
         Self {
-            per_user: HashMap::new(),
+            per_user: std::collections::HashMap::new(),
             capacity_per_user,
         }
     }
 
-    pub fn push(&mut self, user_id: u64, event: PrivateEvent) {
+    pub fn push(&mut self, user_id: u64, event: T) {
         if self.capacity_per_user == 0 {
             return;
         }
@@ -37,13 +53,13 @@ impl PrivateReplayBuffer {
 
     /// Returns events with `seq > last_private_seq`, oldest first.
     #[must_use]
-    pub fn replay(&self, user_id: u64, last_private_seq: u64) -> Vec<PrivateEvent> {
+    pub fn replay(&self, user_id: u64, last_private_seq: u64) -> Vec<T> {
         self.per_user
             .get(&user_id)
             .map(|queue| {
                 queue
                     .iter()
-                    .filter(|event| event.seq > last_private_seq)
+                    .filter(|event| event.seq() > last_private_seq)
                     .cloned()
                     .collect()
             })
@@ -52,56 +68,24 @@ impl PrivateReplayBuffer {
 
     #[must_use]
     pub fn len(&self, user_id: u64) -> usize {
-        self.per_user.get(&user_id).map_or(0, VecDeque::len)
+        self.per_user
+            .get(&user_id)
+            .map_or(0, std::collections::VecDeque::len)
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.per_user.values().all(VecDeque::is_empty)
-    }
-}
-
-/// Per-user bounded replay log for combo private fills.
-#[derive(Debug, Default)]
-pub struct ComboPrivateReplayBuffer {
-    per_user: HashMap<u64, VecDeque<ComboPrivateFill>>,
-    capacity_per_user: usize,
-}
-
-impl ComboPrivateReplayBuffer {
-    #[must_use]
-    pub fn new(capacity_per_user: usize) -> Self {
-        Self {
-            per_user: HashMap::new(),
-            capacity_per_user,
-        }
-    }
-
-    pub fn push(&mut self, user_id: u64, event: ComboPrivateFill) {
-        if self.capacity_per_user == 0 {
-            return;
-        }
-        let queue = self.per_user.entry(user_id).or_default();
-        if queue.len() == self.capacity_per_user {
-            queue.pop_front();
-        }
-        queue.push_back(event);
-    }
-
-    #[must_use]
-    pub fn replay(&self, user_id: u64, last_private_seq: u64) -> Vec<ComboPrivateFill> {
         self.per_user
-            .get(&user_id)
-            .map(|queue| {
-                queue
-                    .iter()
-                    .filter(|event| event.seq > last_private_seq)
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
+            .values()
+            .all(std::collections::VecDeque::is_empty)
     }
 }
+
+/// Core private-event replay log.
+pub type PrivateReplayBuffer = ReplayBuffer<PrivateEvent>;
+
+/// Combo private-fill replay log.
+pub type ComboPrivateReplayBuffer = ReplayBuffer<ComboPrivateFill>;
 
 /// One replayed private effect from either producer.
 #[derive(Clone, Debug, PartialEq, Eq)]
