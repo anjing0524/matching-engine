@@ -260,7 +260,6 @@ impl TradingCore {
             pending_open,
             frozen_close,
             auction_orders: self.auction_orders.clone(),
-            auction_meta,
             auction_order_seq: self.auction_order_seq,
             phase: self.phase,
             trading_day: self.trading_day,
