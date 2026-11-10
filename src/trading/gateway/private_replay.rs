@@ -4,6 +4,7 @@
 //! events after `last_private_seq`; middleware replays them before resuming live
 //! delivery.
 
+use crate::shared::collections::U64MixMap;
 use crate::trading::combo::engine::ComboPrivateFill;
 use crate::trading::core::private_events::PrivateEvent;
 
@@ -27,7 +28,7 @@ impl ReplaySequenced for ComboPrivateFill {
 /// Per-user bounded replay log shared by core and combo producers.
 #[derive(Debug, Default)]
 pub struct ReplayBuffer<T> {
-    per_user: std::collections::HashMap<u64, std::collections::VecDeque<T>>,
+    per_user: U64MixMap<std::collections::VecDeque<T>>,
     capacity_per_user: usize,
 }
 
@@ -35,7 +36,7 @@ impl<T: Clone + ReplaySequenced> ReplayBuffer<T> {
     #[must_use]
     pub fn new(capacity_per_user: usize) -> Self {
         Self {
-            per_user: std::collections::HashMap::new(),
+            per_user: U64MixMap::default(),
             capacity_per_user,
         }
     }

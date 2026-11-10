@@ -4,6 +4,7 @@
 //! are stamped with that session/member and submitted to the ordered command
 //! ring. Private downlink is a later slice.
 
+use crate::shared::collections::U64MixMap;
 use crate::trading::combo::engine::ComboPrivateFill;
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::gateway::GatewayFrame;
@@ -53,10 +54,10 @@ pub struct GatewayEffects {
 pub struct GatewayRuntime {
     middleware: MiddlewareSequencer,
     events: Receiver<GatewayEvent>,
-    connections: HashMap<u64, ConnectionState>,
+    connections: U64MixMap<ConnectionState>,
     private_replay: PrivateReplayBuffer,
     combo_replay: ComboPrivateReplayBuffer,
-    next_private_seq: HashMap<u64, u64>,
+    next_private_seq: U64MixMap<u64>,
     rate_limit: Option<(f64, f64)>,
     auth_token: Option<u64>,
     credentials: Option<GatewayCredentials>,
@@ -79,10 +80,10 @@ impl GatewayRuntime {
         Self {
             middleware,
             events,
-            connections: HashMap::new(),
+            connections: U64MixMap::default(),
             private_replay: PrivateReplayBuffer::new(replay_capacity),
             combo_replay: ComboPrivateReplayBuffer::new(replay_capacity),
-            next_private_seq: HashMap::new(),
+            next_private_seq: U64MixMap::default(),
             rate_limit: None,
             auth_token: None,
             credentials: None,

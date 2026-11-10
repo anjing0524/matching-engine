@@ -4,7 +4,7 @@
 //! identity and the last private sequence used for reconnect replay. This slice
 //! is an in-memory registry; network connections and authentication are later.
 
-use std::collections::HashMap;
+use crate::shared::collections::U64MixMap;
 
 /// Rejection for a zero or duplicate session id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,7 +25,7 @@ pub struct SessionInfo {
 /// Registry keyed by session id.
 #[derive(Debug, Default)]
 pub struct SessionRegistry {
-    sessions: HashMap<u64, SessionInfo>,
+    sessions: U64MixMap<SessionInfo>,
 }
 
 impl SessionRegistry {
