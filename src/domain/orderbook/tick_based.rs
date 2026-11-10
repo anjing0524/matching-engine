@@ -13,42 +13,14 @@
 //! - 预期比BTreeMap快50-80%
 
 use crate::shared::collections::fast_bitmap::FastBitmap;
+use crate::shared::collections::identity::U64IdentityMap;
 use crate::shared::protocol::{
     NewOrderRequest, OrderConfirmation, OrderStatus, OrderStatusType, OrderType, TradeNotification,
 };
 use crate::shared::symbol::SymbolId;
 use smallvec::SmallVec;
-use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
 
-/// Identity hasher for dense, monotonically increasing order IDs.
-///
-/// `order_locations` is only keyed by order IDs assigned by this book, so the
-/// identity function distributes them perfectly across hashbrown buckets and
-/// avoids SipHash on every fill and cancellation.
-#[derive(Default)]
-struct OrderIdHasher(u64);
-
-impl Hasher for OrderIdHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        for byte in bytes {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        self.0 = hash;
-    }
-
-    fn write_u64(&mut self, value: u64) {
-        self.0 = value;
-    }
-}
-
-type OrderLocationMap = HashMap<u64, OrderLocation, BuildHasherDefault<OrderIdHasher>>;
+type OrderLocationMap = U64IdentityMap<OrderLocation>;
 
 /// Sentinel for "no node" in the intrusive linked list.
 const NONE: u32 = u32::MAX;
