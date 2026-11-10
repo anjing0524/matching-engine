@@ -75,7 +75,8 @@ fn run_member(
     let user_id = member as u32 + 1;
     let price = 50_000 + member as i64;
     let base = member.saturating_mul(orders);
-    let mut sent_times = vec![0u64; orders];
+    let mut sent_times = vec![u64::MAX; orders];
+    let mut acked_flags = vec![false; orders];
     let mut sent = 0usize;
     let mut acked = 0usize;
     let mut pending = Vec::with_capacity(264 * in_flight.max(1));
