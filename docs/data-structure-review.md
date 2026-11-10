@@ -76,6 +76,18 @@ Latest benchmark:
 | crossing 200k | 1,902,807 cmd/s | 2,317,146 cmd/s |
 | resting 200k | 1,107,047 cmd/s | 1,186,502 cmd/s |
 
+### 6. Single replay queue and pending index
+
+`ConnectionState` now holds one seq-ordered `Vec<ReplayEvent>` instead of
+separate `Option<Vec<PrivateEvent>>` and `Option<Vec<ComboPrivateFill>>` fields.
+`GatewayRuntime` also keeps `replay_pending: U64MixSet`, so a tick drains only
+connections that actually have queued replay instead of scanning every
+connection.
+
+`take_replay_batches` now returns `Vec<(u64, Vec<ReplayEvent>)>`; the temporary
+`HashMap<u64, Vec<ReplayEvent>>` is gone. `take_all_replays` was removed and the
+middleware binary drains `take_replay_batches` directly.
+
 ## Remaining data-structure candidates
 
 1. **Event vectors**
