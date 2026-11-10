@@ -63,40 +63,32 @@ treat the numbers as directional.
 persistent `auction_meta` map was removed. `uncross_auction` builds one transient
 lookup for the duration of the uncross. `CORE_SNAPSHOT_VERSION` is now `6`.
 
+### 5. Packed position keys
+
+`PositionKey` and `CloseKey` now implement `Hash` by packing account/side/hedge/
+offset into one `u128`; `Positions` and `FrozenClose` use `U128MixMap`. This
+removes struct-field SipHash from every fill and reservation lookup.
+
+Latest benchmark:
+
+| workload | before all changes | after |
+|---|---:|---:|
+| crossing 200k | 1,902,807 cmd/s | 2,317,146 cmd/s |
+| resting 200k | 1,107,047 cmd/s | 1,186,502 cmd/s |
+
 ## Remaining data-structure candidates
 
-1. **Positions key hashing**
-   `Positions` and `FrozenClose` hash composite keys on every fill. A packed
-   `u64`/`u128` key or an account-indexed arena would remove struct hashing, but
-   account IDs can be sparse; measure before changing.
-
-2. **Event vectors**
+1. **Event vectors**
    Production already uses `execute_with_plugins_discard`; `CoreEvent` vectors
    remain only on the test/API surface. Do not add more variants without a
    discard path.
 
-3. **Gateway replay batching**
-   `take_all_replays` / `take_replay_batches` build temporary maps and re-merge
-   `ReplayEvent`s. A single downlink-owned queue would remove the temporary
-   allocations, but reconnect is not hot.
-
-2. **Positions key hashing**
-   `Positions` and `FrozenClose` hash composite keys on every fill. A packed
-   `u64`/`u128` key or an account-indexed arena would remove struct hashing, but
-   account IDs can be sparse; measure before changing.
-
-3. **Event vectors**
-   Production already uses `execute_with_plugins_discard`; `CoreEvent` vectors
-   remain only on the test/API surface. Do not add more variants without a
-   discard path.
-
-4. **Gateway replay batching**
+2. **Gateway replay batching**
    `take_all_replays` / `take_replay_batches` build temporary maps and re-merge
    `ReplayEvent`s. A single downlink-owned queue would remove the temporary
    allocations, but reconnect is not hot.
 
 ## Next recommended step
 
-Drop `auction_meta` and derive auction metadata from the auction order list
-during uncross. It removes a persistent duplicate map without changing the hot
-continuous path.
+Make the gateway replay path own one queue instead of rebuilding
+`HashMap<u64, Vec<ReplayEvent>>` batches on every reconnect tick.
