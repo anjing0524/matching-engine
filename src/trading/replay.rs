@@ -25,7 +25,7 @@ pub fn apply(core: &mut TradingCore, commands: impl IntoIterator<Item = Command>
     let plugin = NoPlugins;
     let mut applied = 0;
     for command in commands {
-        let _ = core.execute_with_plugins(command, &plugin);
+        core.execute_with_plugins_discard(command, &plugin);
         applied += 1;
     }
     applied
