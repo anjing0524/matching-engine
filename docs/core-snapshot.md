@@ -38,7 +38,8 @@ The current implementation also provides versioned JSON persistence:
 
 - `snapshot_json()` / `restore_snapshot_json()`
 - `save_snapshot(path)` writes a temporary file and renames it atomically
-- `load_snapshot(path)` rejects unknown versions
+- `snapshot_file::load::<CoreSnapshot>(path, CORE_SNAPSHOT_VERSION)` rejects
+  unknown versions
 
 Implemented corruption detection:
 

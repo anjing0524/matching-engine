@@ -1,0 +1,83 @@
+# Data-structure review
+
+Date: 2026-11-10
+
+## What changed
+
+### 1. Shared mixed hashing for dense IDs
+
+New module: `src/shared/collections/identity.rs`
+
+```text
+U64IdentityMap / U64IdentitySet   identity hashing
+U64MixMap / U64MixSet             splitmix64 mixing
+```
+
+The order book already used identity hashing for `order_locations`. The kernel
+and the hot gateway/session maps now use the mixed variant:
+
+```text
+TradingCore::orders
+TradingCore::auction_meta
+GatewayRuntime::connections
+GatewayRuntime::next_private_seq
+SessionRegistry::sessions
+ReplayBuffer::per_user
+```
+
+Rejected: plain identity hashing for the kernel. Dense sequential IDs produced
+poor hashbrown control-bit distribution and regressed the resting workload.
+The splitmix64 finalizer avoids SipHash while keeping distribution.
+
+### 2. Removed the parallel `public_orders` set
+
+`OrderMeta` now carries `public: bool`; the kernel no longer maintains a second
+hash set of resting public order IDs. This removes one hash lookup per fill and
+cancel and one full-ID set from core memory.
+
+`CORE_SNAPSHOT_VERSION` is now `5` because `OrderMeta` gained a persisted field.
+
+### 3. Unified private replay buffers
+
+`core` and `combo` replay buffers are one generic `ReplayBuffer<T>` keyed by a
+`ReplaySequenced` trait, with producer aliases.
+
+## Benchmark evidence
+
+Fedora i7-8559U, `trading_core_benchmark`, sample-size 10.
+
+| workload | before | after |
+|---|---:|---:|
+| crossing 200k | 1,902,807 cmd/s | 2,037,448 cmd/s |
+| resting 200k | 1,107,047 cmd/s | 1,162,600 cmd/s |
+
+The benchmark is a wall-clock harness, not a stabilised criterion benchmark;
+treat the numbers as directional.
+
+## Remaining data-structure candidates
+
+1. **Auction metadata duplication**
+   `auction_orders: Vec<AuctionOrder>` already holds user/side/offset/hedge,
+   while `auction_meta: HashMap<u64, ...>` repeats it. Build the lookup only for
+   the duration of `uncross_auction`; drop the persistent map.
+
+2. **Positions key hashing**
+   `Positions` and `FrozenClose` hash composite keys on every fill. A packed
+   `u64`/`u128` key or an account-indexed arena would remove struct hashing, but
+   account IDs can be sparse; measure before changing.
+
+3. **Event vectors**
+   Production already uses `execute_with_plugins_discard`; `CoreEvent` vectors
+   remain only on the test/API surface. Do not add more variants without a
+   discard path.
+
+4. **Gateway replay batching**
+   `take_all_replays` / `take_replay_batches` build temporary maps and re-merge
+   `ReplayEvent`s. A single downlink-owned queue would remove the temporary
+   allocations, but reconnect is not hot.
+
+## Next recommended step
+
+Drop `auction_meta` and derive auction metadata from the auction order list
+during uncross. It removes a persistent duplicate map without changing the hot
+continuous path.
