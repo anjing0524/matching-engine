@@ -142,6 +142,30 @@ removed; `CORE_SNAPSHOT_VERSION` is now `7`.
 into them instead of `mem::take`-ing a new Vec every tick; `drain(..)` leaves
 the buffers' capacity in place for the next tick.
 
+### 13. 64k gateway profile
+
+Ignored test:
+
+```text
+cargo test --release --lib trading::gateway::runtime::tests::gateway_64k_profile -- --ignored --nocapture
+```
+
+Fedora result:
+
+```text
+gateway_64k: lookup=2.522362ms poll_1000=36.991µs dispatch=24.490622ms replay=1.949319ms
+```
+
+Interpretation:
+
+- 64k `find_active_by_user` lookups: ~2.5ms total (~39ns each)
+- 1000 `poll_effects` ticks with 64k connections: ~37µs total
+- 64k private dispatch calls: ~24.5ms including server-send error paths
+- 64k replay batches: ~1.95ms
+
+The pending indexes removed the full scans as intended. The remaining dispatch
+cost is mostly per-event delivery and allocation, not map lookup.
+
 ## Remaining data-structure candidates
 
 1. **Event vectors**
