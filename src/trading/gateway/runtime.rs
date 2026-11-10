@@ -1264,4 +1264,33 @@ mod tests {
         }
         panic!("command did not reach the command ring");
     }
+    #[test]
+    #[ignore = "64k connection profile; run explicitly"]
+    fn idle_expiry_64k_profile() {
+        use std::sync::mpsc::channel;
+
+        let path = std::env::temp_dir().join(format!(
+            "trading-system-engine-idle-profile-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (_sender, events) = channel();
+        let mut runtime = GatewayRuntime::new(middleware, events);
+        for id in 1..=64_000u64 {
+            let mut state = ConnectionState::new();
+            state.last_seen = Instant::now();
+            runtime.connections.insert(id, state);
+        }
+        let start = Instant::now();
+        let expired = runtime.expire_idle(Duration::from_secs(3600));
+        println!(
+            "idle_expiry_64k: {} connections in {:?}",
+            runtime.connections.len(),
+            start.elapsed()
+        );
+        assert!(expired.is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
 }
