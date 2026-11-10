@@ -63,6 +63,10 @@ fn multi_member_load_latency_profile() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(12_500);
     let total = members * per_member;
+    let target_rate: u64 = std::env::var("LATENCY_RATE")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
     let path = std::env::temp_dir().join(format!(
         "trading-system-engine-load-latency-{}",
         std::process::id()
@@ -149,7 +153,19 @@ fn multi_member_load_latency_profile() {
         senders.push(std::thread::spawn(move || {
             let base = member * per_member;
             let price = 50_000 + member as i64;
+            let interval_ns = if target_rate == 0 {
+                0
+            } else {
+                1_000_000_000u64.saturating_mul(members as u64) / target_rate
+            };
             for seq in 0..per_member {
+                if interval_ns > 0 {
+                    let target =
+                        shared.start + Duration::from_nanos(interval_ns.saturating_mul(seq as u64));
+                    while Instant::now() < target {
+                        std::hint::spin_loop();
+                    }
+                }
                 let side = if seq % 2 == 0 { Side::Buy } else { Side::Sell };
                 let frame = GatewayFrame::Command(command(
                     base as u64 + seq as u64 + 1,
@@ -185,7 +201,7 @@ fn multi_member_load_latency_profile() {
         samples[index]
     };
     println!(
-        "load_latency: members={members} n={} elapsed={:?} rate={:.0}/s p50={}ns p99={}ns p999={}ns max={}ns",
+        "load_latency: members={members} target={target_rate}/s n={} elapsed={:?} rate={:.0}/s p50={}ns p99={}ns p999={}ns max={}ns",
         samples.len(),
         elapsed,
         samples.len() as f64 / elapsed.as_secs_f64(),
