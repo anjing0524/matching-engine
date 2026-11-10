@@ -248,6 +248,30 @@ Remaining limits:
 - io_uring is intentionally not used yet; it needs a syscall profile and a
   container seccomp decision first
 
+### 17. Single-core latency profile
+
+Synthetic core-only command latency (`Command → TradingCore`, no gateway,
+middleware, sockets, or wall clock), release build, Fedora:
+
+```text
+CORE_LATENCY_ITERS=5000000
+core_latency: n=5000000 p50=281ns p99=1707ns p999=3989ns max=178357173ns
+core_latency: n=5000000 p50=281ns p99=1744ns p999=3768ns max=165342945ns
+```
+
+Interpretation:
+
+- p99 is ~1.7µs for the synthetic limit-order path
+- p99.9 is ~3.8µs
+- 5M commands complete in roughly 2.5s (~2M cmd/s), so a 1M order/s target is
+  within this synthetic single-core capacity
+- the 165–178ms max values are scheduler/preemption or allocator outliers, not
+  matching arithmetic; production needs an isolated CPU and realistic workload
+- this is **core-internal latency**, not TCP wire-to-wire latency
+
+Remaining caveats: one contract per `TradingCore`, no multi-contract routing,
+no network stack, and no real order mix/plugin chain in this profile.
+
 ## Remaining data-structure candidates
 
 1. **Event vectors**
