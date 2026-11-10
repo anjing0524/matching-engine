@@ -110,6 +110,17 @@ RSS sampler range: 108,096–143,380 KB (60 samples)
 exit status: 0
 ```
 
+Post-refactor 1-hour regression (EventFanout, feature gate, combo fast path):
+
+```text
+7,636,600,000 commands in 3600.01s
+≈ 2,121,271 cmd/s
+Elapsed: 1:00:00
+Maximum resident set size: 140,764 KB
+RSS sampler range: 101,872–134,188 KB
+exit status: 0
+```
+
 Earlier 60-second run before the fixes was ~1.10M cmd/s and memory grew without
 bound.
 

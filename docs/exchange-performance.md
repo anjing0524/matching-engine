@@ -75,6 +75,8 @@ combo cancel:           7,338,229 cancel/s
 combo atomic fills:       926,210 fill/s
 60s soak:               2,121,725 cmd/s
 5-minute soak max RSS:    140,656 KB
+1-hour soak:            7,636,600,000 commands, 2,121,271 cmd/s
+1-hour max RSS:           140,764 KB
 ```
 
 These numbers include the kernel outcome projection, EventFanout, unified
