@@ -54,6 +54,11 @@ path = "src/bin/standby.rs"
 required-features = ["legacy"]
 
 
+[[example]]
+name = "network_server"
+path = "examples/network_server.rs"
+required-features = ["legacy"]
+
 [[test]]
 name = "chaos_engineering_test"
 path = "tests/chaos_engineering_test.rs"
