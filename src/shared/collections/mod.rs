@@ -7,4 +7,6 @@ pub mod fast_bitmap;
 pub mod identity;
 
 pub use fast_bitmap::FastBitmap;
-pub use identity::{U64IdentityHasher, U64IdentityMap, U64IdentitySet};
+pub use identity::{
+    U64IdentityHasher, U64IdentityMap, U64IdentitySet, U64MixHasher, U64MixMap, U64MixSet,
+};

@@ -10,7 +10,7 @@
 
 use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
 use crate::shared::SymbolId;
-use crate::shared::collections::identity::{U64IdentityMap, U64IdentitySet};
+use crate::shared::collections::identity::{U64MixMap, U64MixSet};
 use crate::shared::protocol::{NewOrderRequest, OrderType};
 use crate::trading::core::auction::{self, AuctionOrder, AuctionResult};
 use crate::trading::core::plugins::NoPlugins;
@@ -192,15 +192,15 @@ pub struct TradingCore {
     positions: Positions,
     pending_open: Positions,
     frozen_close: FrozenClose,
-    orders: U64IdentityMap<OrderMeta>,
+    orders: U64MixMap<OrderMeta>,
     private_seq: u64,
     private_events: Vec<PrivateEvent>,
     auction_orders: Vec<AuctionOrder>,
-    auction_meta: U64IdentityMap<(u64, Side, Offset, Hedge)>,
+    auction_meta: U64MixMap<(u64, Side, Offset, Hedge)>,
     auction_order_seq: u64,
     public_seq: u64,
     public_events: Vec<PublicEvent>,
-    public_orders: U64IdentitySet,
+    public_orders: U64MixSet,
     phase: TradingPhase,
     trading_day: u32,
     last_tick_seq: u64,
@@ -217,15 +217,15 @@ impl TradingCore {
             positions: Positions::new(),
             pending_open: Positions::new(),
             frozen_close: FrozenClose::new(),
-            orders: U64IdentityMap::default(),
+            orders: U64MixMap::default(),
             private_seq: 1,
             private_events: Vec::new(),
             auction_orders: Vec::new(),
-            auction_meta: U64IdentityMap::default(),
+            auction_meta: U64MixMap::default(),
             auction_order_seq: 1,
             public_seq: 1,
             public_events: Vec::new(),
-            public_orders: U64IdentitySet::default(),
+            public_orders: U64MixSet::default(),
             phase: TradingPhase::Continuous,
             trading_day: 1,
             last_tick_seq: 0,

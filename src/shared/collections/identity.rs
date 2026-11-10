@@ -32,6 +32,40 @@ impl Hasher for U64IdentityHasher {
     }
 }
 
+/// Hasher that mixes a `u64` key to avoid clustered high bits.
+#[derive(Default)]
+pub struct U64MixHasher(u64);
+
+impl Hasher for U64MixHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        self.0 = hash;
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        // splitmix64 finalizer: dense sequential IDs become well-distributed
+        // bucket and control bits.
+        let mut value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        self.0 = value ^ (value >> 31);
+    }
+}
+
+/// `HashMap<u64, V>` with mixed hashing.
+pub type U64MixMap<V> = HashMap<u64, V, BuildHasherDefault<U64MixHasher>>;
+
+/// `HashSet<u64>` with mixed hashing.
+pub type U64MixSet = HashSet<u64, BuildHasherDefault<U64MixHasher>>;
+
 /// `HashMap<u64, V>` with identity hashing.
 pub type U64IdentityMap<V> = HashMap<u64, V, BuildHasherDefault<U64IdentityHasher>>;
 
