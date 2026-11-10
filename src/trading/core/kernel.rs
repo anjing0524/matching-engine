@@ -1974,4 +1974,17 @@ mod tests {
         assert_eq!(restored.auction_order_count(), 2);
         assert_eq!(restored.snapshot(), snapshot);
     }
+    #[test]
+    fn execute_uses_business_accounting() {
+        let mut core = core();
+        let events = core.execute(wire_command(Side::Buy, 50_000, 5));
+        let order_id = match events.as_slice() {
+            [CoreEvent::Accepted { order_id, .. }] => *order_id,
+            other => panic!("expected accepted, got {other:?}"),
+        };
+        let key = PositionKey::new(1, Side::Buy, Hedge::Spec);
+        assert_eq!(core.order_status(order_id), Some(OrderStatus::Accepted));
+        assert_eq!(core.pending_open().get(key).total(), 5);
+    }
+
 }
