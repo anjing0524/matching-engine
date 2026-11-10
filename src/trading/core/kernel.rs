@@ -184,7 +184,6 @@ pub struct CoreSnapshot {
     pub last_trading_ts_ns: u64,
 }
 
-
 /// The deterministic core state machine for one contract.
 pub struct TradingCore {
     book: TickBasedOrderBook,

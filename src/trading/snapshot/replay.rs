@@ -13,7 +13,9 @@ pub fn replay_from_snapshot(
     snapshot_path: &Path,
     commands: impl IntoIterator<Item = Command>,
 ) -> Result<TradingCore, String> {
-    let snapshot = crate::trading::snapshot::snapshot_file::load::<crate::trading::core::kernel::CoreSnapshot>(
+    let snapshot = crate::trading::snapshot::snapshot_file::load::<
+        crate::trading::core::kernel::CoreSnapshot,
+    >(
         snapshot_path,
         crate::trading::snapshot::CORE_SNAPSHOT_VERSION,
     )
