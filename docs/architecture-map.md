@@ -1,8 +1,7 @@
 # Architecture map
 
-This crate ships two runtimes. They share low-level types but not a command path.
-The legacy runtime is behind the `legacy` feature (enabled by default); the
-exchange bins build with `--no-default-features`.
+This crate ships one production runtime: the exchange core. Low-level order-book
+and ring types are shared; there is no second command path.
 
 ## 1. Exchange core (production)
 
@@ -57,8 +56,7 @@ Entry points:
 
 ## When adding a feature
 
-1. Decide which runtime owns it; do not add a second path through the legacy
-   stack.
+1. Keep exchange as the only command path; do not reintroduce a second runtime.
 2. Put business state in `ExchangeCore`; keep it deterministic and I/O-free.
 3. Put output delivery in `EventFanout` or GatewayRuntime.
 4. Add a test at the narrowest interface that can observe the change.
