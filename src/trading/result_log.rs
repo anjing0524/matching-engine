@@ -398,8 +398,10 @@ mod tests {
 
     #[test]
     fn public_and_private_logs_roundtrip() {
-        let dir =
-            std::env::temp_dir().join(format!("trading-system-engine-result-log-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "trading-system-engine-result-log-{}",
+            std::process::id()
+        ));
         let _ = std::fs::create_dir_all(&dir);
         let public_path = dir.join("public.log");
         let private_path = dir.join("private.log");

@@ -48,8 +48,10 @@ fn timed_core_soak() {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(60);
-    let path =
-        std::env::temp_dir().join(format!("trading-system-engine-timed-soak-{}", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "trading-system-engine-timed-soak-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_file(&path);
     let (producer, consumer) = create(&path, 1 << 17).unwrap();
     let spec = ContractSpec::new("BTCUSDT", 1, 1, 1_000_000);

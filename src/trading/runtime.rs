@@ -304,8 +304,10 @@ mod tests {
         use crate::trading::protocol::{Command, CommandType, Hedge, Offset, Side};
         use std::io::Write;
 
-        let path =
-            std::env::temp_dir().join(format!("trading-system-engine-fanout-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "trading-system-engine-fanout-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&path);
         let (producer, consumer) = create(&path, 1024).unwrap();
         let middleware = MiddlewareSequencer::new(producer);

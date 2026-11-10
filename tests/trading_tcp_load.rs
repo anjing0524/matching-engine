@@ -43,8 +43,10 @@ fn command(id: u64, user: u32) -> Command {
 #[test]
 #[ignore = "load test; run explicitly"]
 fn multi_gateway_tcp_fanout() {
-    let path =
-        std::env::temp_dir().join(format!("trading-system-engine-tcp-load-{}", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "trading-system-engine-tcp-load-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_file(&path);
     let (producer, consumer) = create(&path, 1 << 17).unwrap();
     let middleware = MiddlewareSequencer::new(producer);
