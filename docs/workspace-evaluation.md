@@ -27,6 +27,9 @@ trading-system-engine (root)
 crates/trading-domain
 ```
 
+`trading-domain` has no mmap, network, or runtime dependency; the SPSC ring was
+moved into `trading::transport` after the first split exposed the leak.
+
 Current grouped modules:
 
 ```text
