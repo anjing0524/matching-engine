@@ -37,7 +37,8 @@ Key ownership rules:
 - `EventFanout` owns public/private result logs, repair, market-data publishing,
   and their counters.
 - Snapshots use `snapshot_file`: version, CRC32, payload bytes, atomic replace.
-- `ExchangeRuntime` composes the above; `tick()` is the only driver.
+- `ExchangeRuntime` composes the above from one `RuntimeOptions` value;
+  `tick()` is the only driver.
 
 Entry points:
 
