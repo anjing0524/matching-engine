@@ -4,10 +4,10 @@
 //! middleware. Session registration, authentication, and private responses are
 //! layered above this event stream; this slice only owns the accept/read loop.
 
+use crate::shared::collections::U64MixMap;
 use crate::trading::combo::engine::ComboPrivateFill;
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
-use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -28,11 +28,13 @@ pub enum GatewayEvent {
     },
 }
 
+type SharedStream = Arc<Mutex<TcpStream>>;
+
 /// Handle used to address and stop a running listener.
 pub struct GatewayServerHandle {
     addr: std::net::SocketAddr,
     shutdown: Arc<AtomicBool>,
-    connections: Arc<Mutex<HashMap<u64, TcpStream>>>,
+    connections: Arc<Mutex<U64MixMap<SharedStream>>>,
     join: Option<thread::JoinHandle<()>>,
 }
 
@@ -47,13 +49,19 @@ impl GatewayServerHandle {
     /// # Errors
     /// Returns an I/O error when the connection is unknown or the write fails.
     pub fn send(&self, connection_id: u64, frame: GatewayFrame) -> io::Result<()> {
-        let mut connections = self
-            .connections
+        let stream = {
+            let connections = self
+                .connections
+                .lock()
+                .map_err(|_| io::Error::other("gateway connection lock poisoned"))?;
+            connections
+                .get(&connection_id)
+                .cloned()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "gateway not connected"))?
+        };
+        let mut stream = stream
             .lock()
-            .map_err(|_| io::Error::other("gateway connection lock poisoned"))?;
-        let stream = connections
-            .get_mut(&connection_id)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "gateway not connected"))?;
+            .map_err(|_| io::Error::other("gateway stream lock poisoned"))?;
         stream.write_all(&frame.encode())
     }
 
@@ -67,8 +75,13 @@ impl GatewayServerHandle {
 
     /// Closes one gateway connection and removes it from the write map.
     pub fn close(&self, connection_id: u64) {
-        if let Ok(mut connections) = self.connections.lock()
-            && let Some(stream) = connections.remove(&connection_id)
+        let stream = self
+            .connections
+            .lock()
+            .ok()
+            .and_then(|mut connections| connections.remove(&connection_id));
+        if let Some(stream) = stream
+            && let Ok(stream) = stream.lock()
         {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
@@ -127,7 +140,7 @@ pub fn start(
     let accept_shutdown = Arc::clone(&shutdown);
     let (tx, rx) = channel();
     let next_connection = Arc::new(AtomicU64::new(1));
-    let connections = Arc::new(Mutex::new(HashMap::new()));
+    let connections = Arc::new(Mutex::new(U64MixMap::default()));
     let accept_connections = Arc::clone(&connections);
     let join = thread::Builder::new()
         .name("gateway-tcp-listener".to_string())
@@ -138,7 +151,7 @@ pub fn start(
                         let id = next_connection.fetch_add(1, Ordering::Relaxed);
                         let event_tx = tx.clone();
                         let write_stream = match stream.try_clone() {
-                            Ok(stream) => stream,
+                            Ok(stream) => Arc::new(Mutex::new(stream)),
                             Err(_) => continue,
                         };
                         if let Ok(mut map) = accept_connections.lock() {
