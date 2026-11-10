@@ -26,8 +26,32 @@ serde_json = "1.0"
 core_affinity = { version = "0.8", optional = true }
 
 [features]
+# Original persistent single-book service (WAL, standby, legacy CLI).
+# Disable with `--no-default-features` to build only the exchange runtime.
+default = ["legacy"]
+legacy = []
 # CPU affinity support (requires platform support)
 cpu-affinity = ["core_affinity"]
+
+[[bin]]
+name = "matching-engine"
+path = "src/main.rs"
+required-features = ["legacy"]
+
+[[bin]]
+name = "gateway"
+path = "src/bin/gateway.rs"
+required-features = ["legacy"]
+
+[[bin]]
+name = "ring_probe"
+path = "src/bin/ring_probe.rs"
+required-features = ["legacy"]
+
+[[bin]]
+name = "standby"
+path = "src/bin/standby.rs"
+required-features = ["legacy"]
 
 [dev-dependencies]
 bytes = "1.11"

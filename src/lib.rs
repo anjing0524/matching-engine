@@ -20,15 +20,20 @@ use tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
+#[cfg(feature = "legacy")]
 pub mod application;
 pub mod domain;
 pub mod exchange;
+#[cfg(feature = "legacy")]
 pub mod infrastructure;
+#[cfg(feature = "legacy")]
 pub mod interfaces;
 pub mod shared;
 
+#[cfg(feature = "legacy")]
 pub use application::services::PersistentMatchingService;
 pub use domain::orderbook::{ContractSpec, TickBasedOrderBook};
+#[cfg(feature = "legacy")]
 pub use infrastructure::network::{TcpConnection, TcpTransport};
 pub use shared::protocol::{
     CancelOrderRequest, ClientMessage, ErrorCode, NewOrderRequest, OrderConfirmation, OrderType,

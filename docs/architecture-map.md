@@ -1,6 +1,8 @@
 # Architecture map
 
 This crate ships two runtimes. They share low-level types but not a command path.
+The legacy runtime is behind the `legacy` feature (enabled by default); the
+exchange bins build with `--no-default-features`.
 
 ## 1. Exchange core (production)
 

@@ -40,6 +40,13 @@ WAL，校验 CRC 与序列号连续性，任何损坏都会显式报错，而不
 两套运行时共享基础类型，但命令路径独立。新增交易所功能只改 `src/exchange`；
 不要把 exchange 命令接入 legacy 路径。完整边界见 [docs/architecture-map.md](docs/architecture-map.md)。
 
+Lean exchange build（不含 legacy runtime）：
+
+```bash
+cargo build --release --no-default-features --bins
+```
+
+
 ## 快速开始
 
 要求 Rust 1.99+（edition 2024）。
