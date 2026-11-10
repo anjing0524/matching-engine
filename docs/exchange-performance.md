@@ -75,6 +75,8 @@ combo cancel:           7,338,229 cancel/s
 combo atomic fills:       926,210 fill/s
 60s soak:               2,121,725 cmd/s
 5-minute soak max RSS:    140,656 KB
+30-minute soak:        4,097,200,000 commands, 2,276,170 cmd/s
+30-minute max RSS:       140,632 KB
 1-hour soak:            7,636,600,000 commands, 2,121,271 cmd/s
 1-hour max RSS:           140,764 KB
 ```

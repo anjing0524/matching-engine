@@ -110,6 +110,17 @@ RSS sampler range: 108,096–143,380 KB (60 samples)
 exit status: 0
 ```
 
+Post-refactor 30-minute regression (after removing the duplicate core combo
+queue):
+
+```text
+4,097,200,000 commands in 1800.04s
+≈ 2,276,170 cmd/s
+Maximum resident set size: 140,632 KB
+RSS sampler range: 106,904–133,116 KB
+exit status: 0
+```
+
 Post-refactor 1-hour regression (EventFanout, feature gate, combo fast path):
 
 ```text
