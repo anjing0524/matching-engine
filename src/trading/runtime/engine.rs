@@ -183,7 +183,9 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
             combo.poll_commands();
             let effects = combo.tick_effects();
             self.metrics.public_events_sent += effects.public_sent as u64;
-            let command_events = self.gateway.dispatch_private(&self.server, effects.private_commands);
+            let command_events = self
+                .gateway
+                .dispatch_private(&self.server, effects.private_commands);
             let fill_events = self.gateway.dispatch_combo_private(
                 &self.server,
                 effects
