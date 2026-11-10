@@ -749,6 +749,28 @@ impl TickBasedOrderBook {
         self.best_ask_idx.map(|idx| self.index_to_price(idx))
     }
 
+    /// Quantity of the first FIFO order at the best bid.
+    #[must_use]
+    pub fn front_bid_quantity(&self) -> u64 {
+        self.best_bid_idx
+            .and_then(|idx| {
+                let head = self.bid_levels[idx].head;
+                (head != NONE).then(|| self.nodes[head as usize].quantity)
+            })
+            .unwrap_or(0)
+    }
+
+    /// Quantity of the first FIFO order at the best ask.
+    #[must_use]
+    pub fn front_ask_quantity(&self) -> u64 {
+        self.best_ask_idx
+            .and_then(|idx| {
+                let head = self.ask_levels[idx].head;
+                (head != NONE).then(|| self.nodes[head as usize].quantity)
+            })
+            .unwrap_or(0)
+    }
+
     /// Cancels the resting order `order_id` on behalf of `user_id`.
     ///
     /// Returns an error if the order does not exist or belongs to another user.

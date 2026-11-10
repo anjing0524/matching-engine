@@ -64,18 +64,27 @@ impl ComboExecutor {
             .leg2
             .best_bid()
             .ok_or(ComboExecError::MissingLiquidity)?;
-        let worst_leg1 = self
-            .leg1
-            .trial_execution(OrderType::Buy, self.leg1_spec.max_price, quantity)
-            .ok_or(ComboExecError::MissingLiquidity)?;
-        let worst_leg2 = self
-            .leg2
-            .trial_execution(OrderType::Sell, self.leg2_spec.min_price, quantity)
-            .ok_or(ComboExecError::MissingLiquidity)?;
-        let realized = i64::try_from(worst_leg1).unwrap_or(i64::MAX)
-            - i64::try_from(worst_leg2).unwrap_or(i64::MAX);
-        if realized > i64::try_from(spread_limit_ticks).unwrap_or(i64::MAX) {
+        let best_spread =
+            i64::try_from(ask1).unwrap_or(i64::MAX) - i64::try_from(bid2).unwrap_or(i64::MAX);
+        if best_spread > i64::try_from(spread_limit_ticks).unwrap_or(i64::MAX) {
             return Err(ComboExecError::SpreadNotSatisfied);
+        }
+        let top_liquidity = self.leg1.front_ask_quantity() >= quantity
+            && self.leg2.front_bid_quantity() >= quantity;
+        if !top_liquidity {
+            let worst_leg1 = self
+                .leg1
+                .trial_execution(OrderType::Buy, self.leg1_spec.max_price, quantity)
+                .ok_or(ComboExecError::MissingLiquidity)?;
+            let worst_leg2 = self
+                .leg2
+                .trial_execution(OrderType::Sell, self.leg2_spec.min_price, quantity)
+                .ok_or(ComboExecError::MissingLiquidity)?;
+            let realized = i64::try_from(worst_leg1).unwrap_or(i64::MAX)
+                - i64::try_from(worst_leg2).unwrap_or(i64::MAX);
+            if realized > i64::try_from(spread_limit_ticks).unwrap_or(i64::MAX) {
+                return Err(ComboExecError::SpreadNotSatisfied);
+            }
         }
 
         let (filled1, _) = sweep(
@@ -125,18 +134,27 @@ impl ComboExecutor {
             .leg2
             .best_ask()
             .ok_or(ComboExecError::MissingLiquidity)?;
-        let worst_leg1 = self
-            .leg1
-            .trial_execution(OrderType::Sell, self.leg1_spec.min_price, quantity)
-            .ok_or(ComboExecError::MissingLiquidity)?;
-        let worst_leg2 = self
-            .leg2
-            .trial_execution(OrderType::Buy, self.leg2_spec.max_price, quantity)
-            .ok_or(ComboExecError::MissingLiquidity)?;
-        let realized = i64::try_from(worst_leg1).unwrap_or(i64::MIN)
-            - i64::try_from(worst_leg2).unwrap_or(i64::MAX);
-        if realized < i64::try_from(spread_limit_ticks).unwrap_or(i64::MIN) {
+        let best_spread =
+            i64::try_from(bid1).unwrap_or(i64::MAX) - i64::try_from(ask2).unwrap_or(i64::MAX);
+        if best_spread < i64::try_from(spread_limit_ticks).unwrap_or(i64::MIN) {
             return Err(ComboExecError::SpreadNotSatisfied);
+        }
+        let top_liquidity = self.leg1.front_bid_quantity() >= quantity
+            && self.leg2.front_ask_quantity() >= quantity;
+        if !top_liquidity {
+            let worst_leg1 = self
+                .leg1
+                .trial_execution(OrderType::Sell, self.leg1_spec.min_price, quantity)
+                .ok_or(ComboExecError::MissingLiquidity)?;
+            let worst_leg2 = self
+                .leg2
+                .trial_execution(OrderType::Buy, self.leg2_spec.max_price, quantity)
+                .ok_or(ComboExecError::MissingLiquidity)?;
+            let realized = i64::try_from(worst_leg1).unwrap_or(i64::MIN)
+                - i64::try_from(worst_leg2).unwrap_or(i64::MAX);
+            if realized < i64::try_from(spread_limit_ticks).unwrap_or(i64::MIN) {
+                return Err(ComboExecError::SpreadNotSatisfied);
+            }
         }
 
         let (filled1, _) = sweep(
