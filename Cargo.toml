@@ -53,6 +53,22 @@ name = "standby"
 path = "src/bin/standby.rs"
 required-features = ["legacy"]
 
+
+[[test]]
+name = "chaos_engineering_test"
+path = "tests/chaos_engineering_test.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "crash_recovery_test"
+path = "tests/crash_recovery_test.rs"
+required-features = ["legacy"]
+
+[[test]]
+name = "gateway_split_test"
+path = "tests/gateway_split_test.rs"
+required-features = ["legacy"]
+
 [dev-dependencies]
 bytes = "1.11"
 criterion = "0.7"
