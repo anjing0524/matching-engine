@@ -548,7 +548,6 @@ mod tests {
 
     #[test]
     fn config_builder_sets_repair_capacity_and_timeout() {
-        use crate::exchange::config::ExchangeConfig;
 
         let path = std::env::temp_dir().join(format!(
             "matching-engine-exchange-runtime-config-{}",
