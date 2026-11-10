@@ -490,4 +490,50 @@ mod tests {
             writer.join().unwrap();
         }
     }
+    #[test]
+    #[ignore = "multi-connection gateway profile; run explicitly"]
+    fn many_connections_profile() {
+        use std::collections::HashSet;
+        use std::time::Instant;
+
+        let count: usize = std::env::var("GATEWAY_CONNECTIONS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(4096);
+        let (handle, rx) = start("127.0.0.1:0").unwrap();
+        let mut clients = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut stream = std::net::TcpStream::connect(handle.addr()).unwrap();
+            stream
+                .write_all(
+                    &GatewayFrame::Login {
+                        member_id: 1,
+                        auth_token: 0,
+                        user_id: 1,
+                        seat_id: 1,
+                        session_epoch: 1,
+                        last_private_seq: 0,
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            clients.push(stream);
+        }
+        let start = Instant::now();
+        let mut ids = HashSet::new();
+        for _ in 0..count {
+            match rx.recv_timeout(Duration::from_secs(10)).unwrap() {
+                GatewayEvent::Frame { connection_id, .. } => {
+                    ids.insert(connection_id);
+                }
+                GatewayEvent::Closed { .. } => panic!("connection closed early"),
+            }
+        }
+        println!(
+            "gateway_many: {count} connections in {:?}, unique_ids={}",
+            start.elapsed(),
+            ids.len()
+        );
+        assert_eq!(ids.len(), count);
+    }
 }
