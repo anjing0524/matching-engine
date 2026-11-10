@@ -3,7 +3,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: trading-runtime:local
+    image: trading-engine:local
     ports:
       - "8000:8000"
       - "9100:9100"

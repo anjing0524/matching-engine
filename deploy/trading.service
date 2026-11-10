@@ -9,7 +9,7 @@ Type=simple
 User=trading
 Group=trading
 EnvironmentFile=/etc/trading/trading.env
-ExecStart=/opt/trading/bin/trading run \
+ExecStart=/opt/trading/bin/trading-engine run \
   --listen ${TRADING_GATEWAY_LISTEN} \
   --metrics-listen ${TRADING_METRICS_LISTEN} \
   --idle-timeout-secs ${TRADING_GATEWAY_IDLE_TIMEOUT}
