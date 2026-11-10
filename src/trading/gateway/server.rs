@@ -437,6 +437,7 @@ mod tests {
         let (handle, rx) = start("127.0.0.1:0").unwrap();
         let mut stream = TcpStream::connect(handle.addr()).unwrap();
         stream.set_nodelay(true).unwrap();
+        stream.set_nonblocking(false).unwrap();
         stream
             .write_all(
                 &GatewayFrame::Login {
@@ -451,7 +452,10 @@ mod tests {
             )
             .unwrap();
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert!(matches!(event, GatewayEvent::Frame { .. }));
+        let connection_id = match event {
+            GatewayEvent::Frame { connection_id, .. } => connection_id,
+            other => panic!("expected frame, got {other:?}"),
+        };
         let handle = Arc::new(handle);
 
         let mut writers = Vec::new();
@@ -460,7 +464,9 @@ mod tests {
             writers.push(std::thread::spawn(move || {
                 for index in 0..100u64 {
                     let seq = thread_id * 100 + index;
-                    handle.send(1, GatewayFrame::Heartbeat { seq }).unwrap();
+                    handle
+                        .send(connection_id, GatewayFrame::Heartbeat { seq })
+                        .unwrap();
                 }
             }));
         }
