@@ -204,6 +204,42 @@ Residual limits, intentionally not changed now:
 - `write_all` can still block a single connection's writer; a non-blocking
   writer queue is the next design step if that shows up in a real profile
 
+### 16. Linux mio event-loop gateway
+
+The thread-per-connection gateway was replaced with one `mio` event-loop thread:
+
+```text
+Poll
+├── listener token     accept
+├── waker token        wake for writer commands / stop
+└── connection tokens  non-blocking read + write queues
+```
+
+The handle sends frames through an mpsc command channel and wakes the loop;
+each connection owns a bounded outbound `VecDeque<u8>`. The core is untouched.
+
+Measurements on Fedora:
+
+```text
+4096 connections:  582µs, 4096 unique ids
+8192 connections:  1.151ms, 8192 unique ids
+16384 connections: 2.281ms, 16384 unique ids
+
+128000 gateway orders: 187630 order/s (64 clients)
+```
+
+The earlier thread-per-connection load was 170760 order/s; treat the difference
+as directional, not a controlled before/after benchmark.
+
+Remaining limits:
+
+- one event-loop thread per gateway process; shard by `SO_REUSEPORT` or run
+  multiple gateway processes when one CPU saturates
+- outbound queues are capped at 1 MiB per connection; overflow closes the
+  connection
+- io_uring is intentionally not used yet; it needs a syscall profile and a
+  container seccomp decision first
+
 ## Remaining data-structure candidates
 
 1. **Event vectors**
