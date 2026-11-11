@@ -195,6 +195,19 @@ two-thread 64KiB:    232335/s
 
 Worse: one gateway CPU became the bottleneck. Reverted.
 
+### external client host
+
+Tried a Mac client against the Fedora server over the existing WiFi LAN. The
+link is not suitable for throughput measurement:
+
+```text
+ping RTT: min 11.8ms, avg 75.5ms, max 149.4ms (Mac -> Fedora)
+4 clients: ~8.1k/s total, p50 ~13.7ms
+```
+
+The network dominates; this says nothing about server capacity. A wired
+low-latency link or same-rack host is required.
+
 ## Interpretation
 
 ```text
