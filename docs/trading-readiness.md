@@ -62,7 +62,7 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] In-memory core snapshot for continuous book and business state
 - [x] Versioned JSON snapshot with atomic file replacement
 - [x] Snapshot includes auction staging; RegistrySnapshot covers production combo state
-- [x] RegistrySnapshot covers pairs, combo books, shared leg books/positions, margin, and private sequence
+- [x] RegistrySnapshot covers pairs, combo books, shared leg books/positions, margin, private sequence, and the one venue public sequence
 - [x] Full TradingSnapshot with version/CRC and `trading-engine run --snapshot`
 - [x] CRC32 checksum over snapshot payload
 - [x] Replay-from-snapshot helper and deterministic test

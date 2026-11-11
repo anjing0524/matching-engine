@@ -478,3 +478,52 @@ fn snapshot_file_replay_matches_continuous_execution() {
     assert!(registry_snapshot::load(&path).is_err());
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn snapshot_restores_the_one_venue_public_sequence() {
+    let mut registry = registry_with_pair();
+    registry.set_prior_settlement(1, 45_000).unwrap();
+    registry.set_prior_settlement(2, 40_000).unwrap();
+
+    rest_leg(&mut registry, leg_order(1, 100, Side::Sell, 50_000, 5));
+    let first = registry.drain_public_events();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].seq, 1);
+
+    let snapshot = registry.snapshot();
+    assert_eq!(snapshot.next_public_seq, 2);
+    let mut restored = InstrumentRegistry::new();
+    let mut value = serde_json::to_value(&snapshot).unwrap();
+    value["next_public_seq"] = serde_json::json!(0);
+    let error = restored
+        .restore_snapshot(serde_json::from_value(value).unwrap())
+        .unwrap_err();
+    assert_eq!(
+        error,
+        RegistrySnapshotError::InvalidNextPublicSeq { next_public_seq: 0 }
+    );
+
+    restored.restore_snapshot(decoded(&snapshot)).unwrap();
+    assert_eq!(restored.next_public_seq(), 2);
+
+    // Continue both streams with the same mixed leg/combo commands. The
+    // restored venue must not repeat the sequence already delivered.
+    for candidate in [&mut registry, &mut restored] {
+        rest_leg(candidate, leg_order(2, 101, Side::Buy, 40_000, 5));
+        candidate
+            .execute_combo(combo_order(1_001, 1, 11, Side::Sell, 100, 1))
+            .unwrap();
+        candidate
+            .execute_combo(combo_order(1_002, 2, 22, Side::Buy, 100, 1))
+            .unwrap();
+    }
+    let expected = registry.drain_public_events();
+    let actual = restored.drain_public_events();
+    assert_eq!(actual, expected);
+    assert_eq!(
+        expected.iter().map(|event| event.seq).collect::<Vec<_>>(),
+        vec![2, 3]
+    );
+    assert_eq!(restored.next_public_seq(), 4);
+    assert_eq!(restored.snapshot(), registry.snapshot());
+}

@@ -275,12 +275,30 @@ fn resting_combo_fill_from_a_leg_command_returns_combo_private_and_public_stats(
     producer.send(&leg_order(2, 2, Side::Sell, 50_000)).unwrap();
     let first_leg = runner.poll_events();
     assert!(first_leg.combo_private.is_empty());
+    assert_eq!(
+        first_leg
+            .public
+            .iter()
+            .map(|event| event.seq)
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
     let mut second_leg = leg_order(3, 3, Side::Buy, 40_000);
     second_leg.instrument_id = 2;
     producer.send(&second_leg).unwrap();
     let filled = runner.poll_events();
 
     assert_eq!(filled.combo_private.len(), 1, "{:?}", filled.combo_private);
+    // One venue sequence continues across both leg cores and the Combo trade.
+    assert_eq!(filled.public.first().map(|event| event.seq), Some(2));
+    assert!(
+        filled
+            .public
+            .windows(2)
+            .all(|pair| pair[0].seq + 1 == pair[1].seq),
+        "public sequence must not collide or regress: {:?}",
+        filled.public
+    );
     let fill = filled.combo_private[0];
     assert_eq!(fill.pair_id, 10);
     assert_eq!(fill.user_id, 1);
@@ -297,6 +315,10 @@ fn resting_combo_fill_from_a_leg_command_returns_combo_private_and_public_stats(
     assert_eq!(public.pair_id, 10);
     assert_eq!(public.spread_price, 10_000);
     assert_eq!(public.quantity, 1);
+    assert_eq!(
+        public.seq,
+        filled.public.last().map(|event| event.seq).unwrap()
+    );
     drop(producer);
     let _ = std::fs::remove_file(&path);
 }

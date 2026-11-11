@@ -38,7 +38,7 @@ pub struct TradingSnapshot {
     pub registry: Option<RegistrySnapshot>,
 }
 
-const TRADING_SNAPSHOT_VERSION: u32 = 6;
+const TRADING_SNAPSHOT_VERSION: u32 = 7;
 
 impl TradingSnapshot {
     /// Writes a versioned, checksummed snapshot with atomic replacement.
