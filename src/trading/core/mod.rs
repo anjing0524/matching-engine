@@ -4,6 +4,7 @@ pub mod auction;
 pub mod combo_book;
 pub mod combo_pair;
 pub mod kernel;
+pub mod leg_liquidity;
 pub mod plugins;
 pub mod positions;
 pub mod private_events;
@@ -18,4 +19,8 @@ pub use self::combo_book::{
 };
 pub use self::combo_pair::{ComboLeg, ComboPair, ComboPairError, ComboPairMargin};
 pub use self::kernel::{CoreEvent, CoreSnapshot, TradingCore};
+pub use self::leg_liquidity::{
+    ComboLegError, ComboLegExecution, LegExecutionContext, LegFill, LegLiquidityError,
+    LegLiquidityExecution, LegLiquidityPlan, PlannedLegFill,
+};
 pub use self::registry::{InstrumentRegistry, RegistryError};

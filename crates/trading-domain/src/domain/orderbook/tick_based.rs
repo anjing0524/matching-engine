@@ -72,6 +72,24 @@ pub struct RestingOrder {
     pub original_quantity: u64,
 }
 
+/// One resting order quantity executed by an atomic liquidity take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RestingFill {
+    /// Owner of the resting order.
+    pub user_id: u64,
+    /// Exchange id of the resting order.
+    pub order_id: u64,
+    /// Side of the resting order.
+    pub side: OrderType,
+    /// Resting price that was executed.
+    pub price: u64,
+    /// Quantity removed from the order.
+    pub quantity: u64,
+    /// Quantity still resting after the fill.
+    pub remaining: u64,
+}
+
 /// 合约配置
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ContractSpec {
@@ -766,6 +784,59 @@ impl TickBasedOrderBook {
         }
         self.unlink_order(location.side, location.price_idx, location.node_idx);
         Ok(())
+    }
+
+    /// Consumes `quantity` from one resting order without matching.
+    ///
+    /// The remainder keeps its price-level position, so an atomically planned
+    /// leg execution does not reorder the book. `quantity == 0`, an unknown
+    /// order, and an over-fill are rejected without mutation.
+    ///
+    /// # Errors
+    /// Returns a reason when the order is unknown, `quantity` is zero, or
+    /// `quantity` exceeds the order's resting quantity.
+    pub fn fill_resting_order(
+        &mut self,
+        order_id: u64,
+        quantity: u64,
+    ) -> Result<RestingFill, String> {
+        if quantity == 0 {
+            return Err(format!("Order {order_id} fill quantity is zero"));
+        }
+        let location = *self
+            .order_locations
+            .get(&order_id)
+            .ok_or_else(|| format!("Order {order_id} not found"))?;
+        let (user_id, price, resting) = {
+            let node = &self.nodes[location.node_idx as usize];
+            (node.user_id, node.price, node.quantity)
+        };
+        if quantity > resting {
+            return Err(format!(
+                "Order {order_id} has {resting} resting, {quantity} requested"
+            ));
+        }
+        let remaining = resting - quantity;
+        match location.side {
+            BookSide::Bid => self.bid_quantity = self.bid_quantity.saturating_sub(quantity),
+            BookSide::Ask => self.ask_quantity = self.ask_quantity.saturating_sub(quantity),
+        }
+        if remaining == 0 {
+            self.unlink_order(location.side, location.price_idx, location.node_idx);
+        } else {
+            self.nodes[location.node_idx as usize].quantity = remaining;
+        }
+        Ok(RestingFill {
+            user_id,
+            order_id,
+            side: match location.side {
+                BookSide::Bid => OrderType::Buy,
+                BookSide::Ask => OrderType::Sell,
+            },
+            price,
+            quantity,
+            remaining,
+        })
     }
 
     /// Returns the next order id that will be assigned.
