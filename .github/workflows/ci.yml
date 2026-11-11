@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal && rustup default stable
-      - name: Commit messages
+      - name: Commitlint (Conventional Commits)
         if: github.event_name == 'pull_request'
         shell: bash
         run: |
