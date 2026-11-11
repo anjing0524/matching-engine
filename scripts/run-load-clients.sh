@@ -13,8 +13,12 @@ cargo build --release --bins >/dev/null
 clients=${1:-4}
 orders=${2:-25000}
 in_flight=${3:-32}
-if (( clients < 1 || clients > 6 )); then
-  echo "clients must be 1..6 on this 4C/8T host" >&2
+middleware_cpus=${MIDDLEWARE_CPUS:-0}
+core_cpu=${CORE_CPU:-1}
+client_cpu_base=${CLIENT_CPU_BASE:-2}
+client_cpu_span=${CLIENT_CPU_SPAN:-6}
+if (( clients < 1 || clients > 10 )); then
+  echo "clients must be 1..10" >&2
   exit 2
 fi
 dir=$(mktemp -d "${TMPDIR:-/tmp}/trading-clients.XXXXXX")
@@ -49,7 +53,7 @@ PY
   return 1
 }
 
-taskset -c 0 "$root/target/release/trading-middleware" \
+taskset -c "$middleware_cpus" "$root/target/release/trading-middleware" \
   --listen "127.0.0.1:$port" \
   --command-ring "$dir/command.ring" \
   --public-ring "$dir/public.ring" \
@@ -58,7 +62,7 @@ taskset -c 0 "$root/target/release/trading-middleware" \
   >"$dir/middleware.log" 2>&1 &
 pids+=($!)
 wait_port
-taskset -c 1 "$root/target/release/trading-core" \
+taskset -c "$core_cpu" "$root/target/release/trading-core" \
   --command-ring "$dir/command.ring" \
   --public-ring "$dir/public.ring" \
   --private-ring "$dir/private.ring" \
@@ -69,7 +73,7 @@ sleep 0.2
 
 client_pids=()
 for ((i = 0; i < clients; i++)); do
-  taskset -c $((2 + i)) "$root/target/release/trading-load" \
+  taskset -c $((client_cpu_base + i % client_cpu_span)) "$root/target/release/trading-load" \
     --addr "127.0.0.1:$port" \
     --members 1 \
     --orders-per-member "$orders" \
