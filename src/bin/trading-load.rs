@@ -5,6 +5,8 @@
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
@@ -132,79 +134,71 @@ fn run_member(
     member_offset: usize,
 ) -> Vec<u64> {
     let identity = member_offset + member;
-    let mut stream = login(&addr, identity);
-    stream.set_nonblocking(true).unwrap();
+    let stream = login(&addr, identity);
+    stream.set_nodelay(true).unwrap();
+    let mut reader_stream = stream.try_clone().unwrap();
+    let mut writer_stream = stream;
     let user_id = identity as u32 + 1;
     let price = 50_000 + identity as i64;
     let base = identity.saturating_mul(orders);
-    let mut sent_times = vec![u64::MAX; orders];
-    let mut acked_flags = vec![false; orders];
-    let mut sent = 0usize;
-    let mut acked = 0usize;
-    let mut pending = Vec::with_capacity(264 * in_flight.max(1));
-    let mut pending_offset = 0usize;
-    let mut read_buffer = Vec::with_capacity(264 * 4);
-    let mut samples = Vec::with_capacity(orders);
+    let sent_times: Arc<Vec<AtomicU64>> =
+        Arc::new((0..orders).map(|_| AtomicU64::new(u64::MAX)).collect());
+    let acked_flags: Arc<Vec<AtomicBool>> =
+        Arc::new((0..orders).map(|_| AtomicBool::new(false)).collect());
+    let acked = Arc::new(AtomicUsize::new(0));
+    let reader_sent = Arc::clone(&sent_times);
+    let reader_flags = Arc::clone(&acked_flags);
+    let reader_acked = Arc::clone(&acked);
+    let window = in_flight.max(1);
+    let reader = std::thread::spawn(move || {
+        let mut samples = Vec::with_capacity(orders);
+        let mut buffer = [0u8; 264];
+        while samples.len() < orders {
+            reader_stream.read_exact(&mut buffer).unwrap();
+            let frame = GatewayFrame::decode(&buffer).unwrap();
+            let GatewayFrame::PrivateEvent(event) = frame else {
+                continue;
+            };
+            let Some(index) = (event.client_order_id as usize)
+                .checked_sub(base + 1)
+                .filter(|index| *index < orders)
+            else {
+                continue;
+            };
+            if index >= orders {
+                continue;
+            }
+            let sent = reader_sent[index].load(Ordering::Relaxed);
+            if sent == u64::MAX || reader_flags[index].swap(true, Ordering::Relaxed) {
+                continue;
+            }
+            let now = start.elapsed().as_nanos() as u64;
+            samples.push(now.saturating_sub(sent));
+            reader_acked.fetch_add(1, Ordering::Relaxed);
+        }
+        samples
+    });
 
-    while acked < orders {
-        while sent < orders && sent.saturating_sub(acked) < in_flight {
-            let id = base as u64 + sent as u64 + 1;
-            let side = if sent.is_multiple_of(2) {
+    let writer = std::thread::spawn(move || {
+        for seq in 0..orders {
+            while seq.saturating_sub(acked.load(Ordering::Relaxed)) >= window {
+                std::hint::spin_loop();
+            }
+            let id = base as u64 + seq as u64 + 1;
+            let side = if seq.is_multiple_of(2) {
                 Side::Buy
             } else {
                 Side::Sell
             };
-            sent_times[sent] = start.elapsed().as_nanos() as u64;
-            pending.extend_from_slice(
-                &GatewayFrame::Command(command(id, user_id, side, price)).encode(),
-            );
-            sent += 1;
+            sent_times[seq].store(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            writer_stream
+                .write_all(&GatewayFrame::Command(command(id, user_id, side, price)).encode())
+                .unwrap();
         }
-        loop {
-            if pending_offset >= pending.len() {
-                pending.clear();
-                pending_offset = 0;
-                break;
-            }
-            match stream.write(&pending[pending_offset..]) {
-                Ok(0) => panic!("gateway closed during write"),
-                Ok(count) => pending_offset += count,
-                Err(error) if error.kind() == ErrorKind::WouldBlock => break,
-                Err(error) => panic!("write failed: {error}"),
-            }
-        }
-        loop {
-            let mut chunk = [0u8; 1024];
-            match stream.read(&mut chunk) {
-                Ok(0) => panic!("gateway closed during read"),
-                Ok(count) => read_buffer.extend_from_slice(&chunk[..count]),
-                Err(error) if error.kind() == ErrorKind::WouldBlock => break,
-                Err(error) => panic!("read failed: {error}"),
-            }
-        }
-        while read_buffer.len() >= 264 {
-            let mut bytes = [0u8; 264];
-            bytes.copy_from_slice(&read_buffer[..264]);
-            read_buffer.drain(..264);
-            if let Ok(GatewayFrame::PrivateEvent(event)) = GatewayFrame::decode(&bytes) {
-                let Some(index) = (event.client_order_id as usize)
-                    .checked_sub(base + 1)
-                    .filter(|index| *index < orders)
-                else {
-                    continue;
-                };
-                if index < sent && !acked_flags[index] && sent_times[index] != u64::MAX {
-                    acked_flags[index] = true;
-                    acked += 1;
-                    samples.push(
-                        (start.elapsed().as_nanos() as u64).saturating_sub(sent_times[index]),
-                    );
-                }
-            }
-        }
-        std::hint::spin_loop();
-    }
-    samples
+    });
+
+    writer.join().unwrap();
+    reader.join().unwrap()
 }
 
 fn main() {
