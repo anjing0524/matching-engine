@@ -189,17 +189,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut public_events = 0u64;
     let mut stats_start = std::time::Instant::now();
     loop {
-        gateway_events += gateway.poll() as u64;
-        for (connection_id, replay) in gateway.take_replay_batches() {
-            for event in replay {
-                if let trading_system_engine::trading::gateway::private_replay::ReplayEvent::Core(
-                    event,
-                ) = event
-                {
-                    let _ = server.send(connection_id, GatewayFrame::PrivateEvent(event.clone()));
-                }
-            }
-        }
+        let idle_timeout =
+            (args.idle_timeout_secs > 0).then(|| Duration::from_secs(args.idle_timeout_secs));
+        let effects = gateway.apply_effects(&server, idle_timeout);
+        gateway_events += effects.events as u64;
         let private: Vec<_> = std::iter::from_fn(|| private_consumer.recv())
             .filter_map(Result::ok)
             .collect();
@@ -230,11 +223,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if let Some(log) = &mut public_log {
             log.sync()?;
-        }
-        if args.idle_timeout_secs > 0 {
-            for connection_id in gateway.expire_idle(Duration::from_secs(args.idle_timeout_secs)) {
-                server.close(connection_id);
-            }
         }
         ticks += 1;
         if args.stats_interval_ms > 0

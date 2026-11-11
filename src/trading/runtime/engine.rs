@@ -136,39 +136,17 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
 
     pub fn tick(&mut self) {
         let tick_start = Instant::now();
-        let effects = self.gateway.poll_effects();
+        let idle_timeout = self
+            .idle_timeout
+            .filter(|timeout| self.last_expire.elapsed() >= *timeout / 2);
+        let effects = self.gateway.apply_effects(&self.server, idle_timeout);
         self.metrics.gateway_events += effects.events as u64;
         self.metrics.active_sessions = effects.active_sessions as u64;
         self.metrics.closed_sessions = effects.closed_sessions as u64;
-        for (connection_id, address) in effects.redirects {
-            let _ = self.server.send(
-                connection_id,
-                crate::trading::gateway::GatewayFrame::Redirect {
-                    address: address.clone(),
-                },
-            );
-            self.server.close(connection_id);
-        }
-        for (connection_id, replay) in effects.replays {
-            for event in replay {
-                let sent = match &event {
-                    crate::trading::gateway::private_replay::ReplayEvent::Core(event) => {
-                        self.server.send(
-                            connection_id,
-                            crate::trading::gateway::GatewayFrame::PrivateEvent(event.clone()),
-                        )
-                    }
-                    crate::trading::gateway::private_replay::ReplayEvent::Combo(event) => {
-                        self.server.send(
-                            connection_id,
-                            crate::trading::gateway::GatewayFrame::ComboPrivate(*event),
-                        )
-                    }
-                };
-                if sent.is_ok() {
-                    self.metrics.replay_events_sent += 1;
-                }
-            }
+        self.metrics.replay_events_sent += effects.replays as u64;
+        self.metrics.idle_sessions_expired += effects.expired as u64;
+        if idle_timeout.is_some() {
+            self.last_expire = Instant::now();
         }
         let commands = self.core.poll();
         self.metrics.commands_executed += commands as u64;
@@ -204,15 +182,6 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         }
         let repaired = self.fanout.poll_repair();
         self.metrics.repair_events_sent += repaired;
-        if let Some(timeout) = self.idle_timeout
-            && self.last_expire.elapsed() >= timeout / 2
-        {
-            for connection_id in self.gateway.expire_idle(timeout) {
-                self.server.close(connection_id);
-                self.metrics.idle_sessions_expired += 1;
-            }
-            self.last_expire = Instant::now();
-        }
         self.metrics.fanout_errors = self.fanout.sink_errors();
         let elapsed_ns = u64::try_from(tick_start.elapsed().as_nanos()).unwrap_or(u64::MAX);
         self.metrics.tick_latency.observe(elapsed_ns);

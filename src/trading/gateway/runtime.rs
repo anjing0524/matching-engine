@@ -48,6 +48,17 @@ pub struct GatewayEffects {
     pub closed_sessions: usize,
 }
 
+/// Counts returned after one gateway effect application.
+pub struct AppliedGatewayEffects {
+    pub events: usize,
+    pub redirects: usize,
+    pub replays: usize,
+    pub expired: usize,
+    pub pruned: usize,
+    pub active_sessions: usize,
+    pub closed_sessions: usize,
+}
+
 /// Drains gateway events and applies them to middleware.
 pub struct GatewayRuntime {
     middleware: MiddlewareSequencer,
@@ -162,6 +173,58 @@ impl GatewayRuntime {
             replays,
             active_sessions,
             closed_sessions,
+        }
+    }
+
+    /// Applies lifecycle effects to the server in one fixed order.
+    ///
+    /// Redirects are sent before replay, ended connections are closed, idle
+    /// sessions are expired, and closed session records are pruned. Both
+    /// drivers use this operation instead of composing the drain accessors.
+    pub fn apply_effects(
+        &mut self,
+        server: &GatewayServerHandle,
+        idle_timeout: Option<Duration>,
+    ) -> AppliedGatewayEffects {
+        let effects = self.poll_effects();
+        let redirects = effects.redirects.len();
+        for (connection_id, address) in effects.redirects {
+            let _ = server.send(
+                connection_id,
+                GatewayFrame::Redirect {
+                    address: address.clone(),
+                },
+            );
+            server.close(connection_id);
+        }
+        let mut replays = 0;
+        for (connection_id, events) in effects.replays {
+            for event in events {
+                let frame = match event {
+                    ReplayEvent::Core(event) => GatewayFrame::PrivateEvent(event),
+                    ReplayEvent::Combo(fill) => GatewayFrame::ComboPrivate(fill),
+                };
+                if server.send(connection_id, frame).is_ok() {
+                    replays += 1;
+                }
+            }
+        }
+        let mut expired = 0;
+        if let Some(timeout) = idle_timeout {
+            for connection_id in self.expire_idle(timeout) {
+                server.close(connection_id);
+                expired += 1;
+            }
+        }
+        let pruned = self.prune_closed_sessions(4096);
+        AppliedGatewayEffects {
+            events: effects.events,
+            redirects,
+            replays,
+            expired,
+            pruned,
+            active_sessions: effects.active_sessions,
+            closed_sessions: effects.closed_sessions,
         }
     }
 
