@@ -276,32 +276,41 @@ fn serve_connection(
 ) {
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_nodelay(true);
-    let mut frame = [0u8; GATEWAY_FRAME_SIZE];
+    let mut buffer = vec![0u8; GATEWAY_FRAME_SIZE * 64];
+    let mut pending = Vec::with_capacity(GATEWAY_FRAME_SIZE * 4);
     loop {
         let start = stats.timing_enabled().then(std::time::Instant::now);
-        if stream.read_exact(&mut frame).is_err() {
-            break;
-        }
+        let read = stream.read(&mut buffer);
         if let Some(start) = start {
             stats
                 .read_ns
                 .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
             stats.read_calls.fetch_add(1, Ordering::Relaxed);
         }
-        match GatewayFrame::decode(&frame) {
-            Ok(frame) => {
-                stats.frames_read.fetch_add(1, Ordering::Relaxed);
-                if tx
-                    .send(GatewayEvent::Frame {
-                        connection_id: id,
-                        frame,
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
+        let count = match read {
+            Ok(0) => break,
+            Ok(count) => count,
             Err(_) => break,
+        };
+        pending.extend_from_slice(&buffer[..count]);
+        while pending.len() >= GATEWAY_FRAME_SIZE {
+            let mut frame = [0u8; GATEWAY_FRAME_SIZE];
+            frame.copy_from_slice(&pending[..GATEWAY_FRAME_SIZE]);
+            pending.drain(..GATEWAY_FRAME_SIZE);
+            let frame = match GatewayFrame::decode(&frame) {
+                Ok(frame) => frame,
+                Err(_) => return,
+            };
+            stats.frames_read.fetch_add(1, Ordering::Relaxed);
+            if tx
+                .send(GatewayEvent::Frame {
+                    connection_id: id,
+                    frame,
+                })
+                .is_err()
+            {
+                return;
+            }
         }
     }
     let _ = tx.send(GatewayEvent::Closed { connection_id: id });
