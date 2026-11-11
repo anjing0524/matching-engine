@@ -13,6 +13,10 @@ cd "$(dirname "$0")/.."
 members=${1:-2}
 orders=${2:-250000}
 in_flight=${3:-32}
+middleware_cpus=${MIDDLEWARE_CPUS:-0}
+core_cpus=${CORE_CPUS:-1}
+gateway_cpus=${GATEWAY_CPUS:-2}
+client_cpus=${CLIENT_CPUS:-4,5,6,7}
 root=$(pwd)
 dir=$(mktemp -d "${TMPDIR:-/tmp}/trading-split-aggregate.XXXXXX")
 middleware_pid=
@@ -59,7 +63,7 @@ private_ring="$dir/private.ring"
 middleware_port=$(pick_port)
 gateway_port=$(pick_port)
 
-taskset -c 0 "$root/target/release/trading-middleware" \
+taskset -c "$middleware_cpus" "$root/target/release/trading-middleware" \
   --listen "127.0.0.1:$middleware_port" \
   --command-ring "$command_ring" \
   --public-ring "$public_ring" \
@@ -69,7 +73,7 @@ taskset -c 0 "$root/target/release/trading-middleware" \
 middleware_pid=$!
 wait_port "$middleware_port"
 
-taskset -c 1 "$root/target/release/trading-core" \
+taskset -c "$core_cpus" "$root/target/release/trading-core" \
   --command-ring "$command_ring" \
   --public-ring "$public_ring" \
   --private-ring "$private_ring" \
@@ -77,7 +81,7 @@ taskset -c 1 "$root/target/release/trading-core" \
   >"$dir/core.log" 2>&1 &
 core_pid=$!
 
-taskset -c 2 "$root/target/release/trading-gateway" \
+taskset -c "$gateway_cpus" "$root/target/release/trading-gateway" \
   --listen "127.0.0.1:$gateway_port" \
   --middleware "127.0.0.1:$middleware_port" \
   >"$dir/gateway.log" 2>&1 &
@@ -85,7 +89,7 @@ gateway_pid=$!
 wait_port "$gateway_port"
 sleep 0.1
 
-taskset -c 4,5,6,7 "$root/target/release/trading-load" \
+taskset -c "$client_cpus" "$root/target/release/trading-load" \
   --addr "127.0.0.1:$gateway_port" \
   --members "$members" \
   --orders-per-member "$orders" \
