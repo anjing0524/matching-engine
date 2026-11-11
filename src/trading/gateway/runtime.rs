@@ -144,19 +144,6 @@ impl GatewayRuntime {
                         .last_seen = Instant::now();
                     self.handle_frame(connection_id, frame);
                 }
-                GatewayEvent::Frames {
-                    connection_id,
-                    frames,
-                } => {
-                    processed += frames.len();
-                    self.connections
-                        .entry(connection_id)
-                        .or_insert_with(ConnectionState::new)
-                        .last_seen = Instant::now();
-                    for frame in frames {
-                        self.handle_frame(connection_id, frame);
-                    }
-                }
                 GatewayEvent::Closed { connection_id } => {
                     processed += 1;
                     self.connections.remove(&connection_id);
