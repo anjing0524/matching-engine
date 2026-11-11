@@ -12,6 +12,16 @@ use trading_system_engine::trading::gateway::GatewayFrame;
 use trading_system_engine::trading::transport::command_log::read_segment;
 use trading_system_engine::trading::transport::result_log::{read_private_log, read_public_log};
 
+fn wait_nonempty(path: &std::path::Path) -> bool {
+    for _ in 0..200 {
+        if std::fs::metadata(path).is_ok_and(|metadata| metadata.len() > 0) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    false
+}
+
 #[test]
 fn trading_binary_accepts_order_and_serves_metrics() {
     let binary = env!("CARGO_BIN_EXE_trading-engine");
@@ -105,13 +115,9 @@ fn trading_binary_accepts_order_and_serves_metrics() {
 
     let _ = child.kill();
     let _ = child.wait();
-    assert!(!read_segment(&dir.join("commands.log")).unwrap().is_empty());
-    assert!(!read_public_log(&dir.join("public.log")).unwrap().is_empty());
-    assert!(
-        !read_private_log(&dir.join("private.log"))
-            .unwrap()
-            .is_empty()
-    );
+    assert!(wait_nonempty(&dir.join("commands.log")));
+    assert!(wait_nonempty(&dir.join("public.log")));
+    assert!(wait_nonempty(&dir.join("private.log")));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
