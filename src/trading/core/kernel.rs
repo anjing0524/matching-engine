@@ -2013,4 +2013,30 @@ mod tests {
         );
         black_box(cores);
     }
+    #[test]
+    fn every_new_order_has_a_private_client_id() {
+        use crate::trading::core::plugins::NoPlugins;
+
+        let mut core = core();
+        let mut missing = Vec::new();
+        for index in 1..=1000u64 {
+            let mut command = wire_command(Side::Buy, 50_000, 1);
+            command.client_order_id = index;
+            command.user_id = if index.is_multiple_of(2) { 1 } else { 2 };
+            command.side = if index.is_multiple_of(2) {
+                Side::Buy
+            } else {
+                Side::Sell
+            };
+            core.execute_with_plugins_discard(command, &NoPlugins);
+            let events = core.drain_private_events();
+            if !events.iter().any(|event| event.client_order_id == index) {
+                missing.push(index);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "missing private client ids: {missing:?}"
+        );
+    }
 }
