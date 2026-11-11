@@ -11,7 +11,6 @@ use std::time::Duration;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TradingConfig {
     pub private_replay_capacity: usize,
-    pub repair_buffer_capacity: usize,
     pub idle_timeout: Option<Duration>,
     pub multicast_group: Option<String>,
     pub multicast_port: Option<u16>,
@@ -24,7 +23,6 @@ impl Default for TradingConfig {
     fn default() -> Self {
         Self {
             private_replay_capacity: 1024,
-            repair_buffer_capacity: 100_000,
             idle_timeout: Some(Duration::from_secs(30)),
             multicast_group: None,
             multicast_port: None,
@@ -75,9 +73,6 @@ impl TradingConfig {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.private_replay_capacity == 0 {
             return Err("private_replay_capacity must be positive");
-        }
-        if self.repair_buffer_capacity == 0 {
-            return Err("repair_buffer_capacity must be positive");
         }
         if let Some(interface) = &self.multicast_interface
             && interface.parse::<std::net::Ipv4Addr>().is_err()

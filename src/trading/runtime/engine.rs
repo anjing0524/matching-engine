@@ -14,7 +14,6 @@ use crate::trading::gateway::server::GatewayServerHandle;
 use crate::trading::market_data::MarketDataPublisher;
 use crate::trading::market_data::metrics::TradingMetrics;
 #[cfg(test)]
-use crate::trading::market_data::repair::NackRequest;
 use crate::trading::market_data::repair::RepairServer;
 use crate::trading::runtime::event_fanout::{EventFanout, EventFanoutOptions};
 use crate::trading::transport::result_log::{PrivateResultLog, PublicResultLog};
@@ -54,7 +53,6 @@ impl TradingSnapshot {
 pub struct RuntimeOptions {
     pub public_log: Option<PublicResultLog>,
     pub private_log: Option<PrivateResultLog>,
-    pub repair_buffer_capacity: Option<usize>,
     pub repair_server: Option<RepairServer>,
     pub market_data: Option<MarketDataPublisher>,
     pub combo: Option<ComboRuntime>,
@@ -100,7 +98,6 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         self.fanout = self.fanout.with_options(EventFanoutOptions {
             public_log: options.public_log,
             private_log: options.private_log,
-            repair_buffer_capacity: options.repair_buffer_capacity,
             repair_server: options.repair_server,
             market_data: options.market_data,
         });
@@ -123,15 +120,6 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
     #[must_use]
     pub fn public_sent(&self) -> u64 {
         self.fanout.public_sent()
-    }
-
-    #[must_use]
-    #[cfg(test)]
-    pub(crate) fn repair(
-        &self,
-        request: NackRequest,
-    ) -> Vec<crate::trading::core::public_events::PublicEvent> {
-        self.fanout.repair(request)
     }
 
     pub fn tick(&mut self) {
@@ -530,98 +518,6 @@ mod tests {
         runtime.tick();
         let fill = subscriber.recv().unwrap();
         assert_eq!(fill.quantity, 5);
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn config_builder_sets_repair_capacity_and_timeout() {
-        let path = std::env::temp_dir().join(format!(
-            "trading-system-engine-trading-runtime-config-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        let (producer, consumer) = create(&path, 8).unwrap();
-        let middleware = MiddlewareSequencer::new(producer);
-        let (server, events) = start("127.0.0.1:0").unwrap();
-        let gateway = GatewayRuntime::new(middleware, events);
-        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
-        let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
-        let runner = CoreRunner::new(core, consumer, NoPlugins);
-        let runtime = TradingRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
-            repair_buffer_capacity: Some(3),
-            ..RuntimeOptions::default()
-        });
-        assert_eq!(
-            runtime
-                .repair(NackRequest {
-                    from_seq: 1,
-                    to_seq: 1
-                })
-                .len(),
-            0
-        );
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn runtime_public_events_fill_repair_buffer() {
-        use crate::trading::market_data::repair::NackRequest;
-
-        let path = std::env::temp_dir().join(format!(
-            "trading-system-engine-trading-runtime-repair-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        let (producer, consumer) = create(&path, 16).unwrap();
-        let middleware = MiddlewareSequencer::new(producer);
-        let (server, events) = start("127.0.0.1:0").unwrap();
-        let addr = server.addr();
-        let gateway = GatewayRuntime::new(middleware, events);
-        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
-        let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
-        let runner = CoreRunner::new(core, consumer, NoPlugins);
-        let mut runtime =
-            TradingRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
-                repair_buffer_capacity: Some(16),
-                ..Default::default()
-            });
-
-        let mut stream = TcpStream::connect(addr).unwrap();
-        stream
-            .write_all(
-                &GatewayFrame::Login {
-                    member_id: 10,
-                    auth_token: 0,
-                    user_id: 2,
-                    seat_id: 3,
-                    session_epoch: 1,
-                    last_private_seq: 0,
-                }
-                .encode(),
-            )
-            .unwrap();
-        stream
-            .write_all(&GatewayFrame::Command(command()).encode())
-            .unwrap();
-        for _ in 0..100 {
-            runtime.tick();
-            if !runtime
-                .repair(NackRequest {
-                    from_seq: 1,
-                    to_seq: 1,
-                })
-                .is_empty()
-            {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        let repaired = runtime.repair(NackRequest {
-            from_seq: 1,
-            to_seq: 10,
-        });
-        assert_eq!(repaired.len(), 1);
-        assert_eq!(repaired[0].seq, 1);
         let _ = std::fs::remove_file(&path);
     }
 
