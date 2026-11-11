@@ -2019,7 +2019,7 @@ mod tests {
 
         let mut core = core();
         let mut missing = Vec::new();
-        for index in 1..=1000u64 {
+        for index in 1..=100_000u64 {
             let mut command = wire_command(Side::Buy, 50_000, 1);
             command.client_order_id = index;
             command.user_id = if index.is_multiple_of(2) { 1 } else { 2 };
