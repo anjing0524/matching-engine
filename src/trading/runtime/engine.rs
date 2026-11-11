@@ -146,6 +146,7 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         self.metrics.private_events_sent += sent as u64;
         let public_sent = self.fanout.emit(&[], &self.public_events);
         self.metrics.public_events_sent += public_sent;
+        self.public_events.clear();
         if let Some(combo) = &mut self.combo {
             combo.poll_commands();
             let effects = combo.tick_effects();
