@@ -23,7 +23,8 @@ combo replay.
 
 If split combo execution becomes a product requirement, it needs its own spec
 and its own combo command/private-event transport. It must not be inferred from
-this ADR's absence.
+this ADR's absence. See ADR-0002 for the exchange-level combo product decision and
+the single-process delivery phase.
 
 ## Consequences
 
