@@ -68,63 +68,6 @@ fn login(addr: &str, member: usize) -> TcpStream {
     stream
 }
 
-fn write_all_nonblocking(stream: &mut TcpStream, bytes: &[u8]) {
-    let mut written = 0;
-    while written < bytes.len() {
-        match stream.write(&bytes[written..]) {
-            Ok(0) => panic!("gateway closed during write"),
-            Ok(count) => written += count,
-            Err(error) if error.kind() == ErrorKind::WouldBlock => std::hint::spin_loop(),
-            Err(error) => panic!("write failed: {error}"),
-        }
-    }
-}
-
-fn run_serial_member(addr: String, member: usize, orders: usize, member_offset: usize) -> Vec<u64> {
-    let identity = member_offset + member;
-    let mut stream = login(&addr, identity);
-    stream.set_nonblocking(true).unwrap();
-    let user_id = identity as u32 + 1;
-    let price = 50_000 + identity as i64;
-    let base = identity.saturating_mul(orders);
-    let mut samples = Vec::with_capacity(orders);
-    let mut buffer = Vec::with_capacity(264 * 4);
-    for seq in 0..orders {
-        let id = base as u64 + seq as u64 + 1;
-        let side = if seq.is_multiple_of(2) {
-            Side::Buy
-        } else {
-            Side::Sell
-        };
-        let frame = GatewayFrame::Command(command(id, user_id, side, price));
-        write_all_nonblocking(&mut stream, &frame.encode());
-        let request_start = Instant::now();
-        loop {
-            if buffer.len() >= 264 {
-                let mut bytes = [0u8; 264];
-                bytes.copy_from_slice(&buffer[..264]);
-                buffer.drain(..264);
-                if matches!(
-                    GatewayFrame::decode(&bytes),
-                    Ok(GatewayFrame::PrivateEvent(_))
-                ) {
-                    break;
-                }
-                continue;
-            }
-            let mut chunk = [0u8; 1024];
-            match stream.read(&mut chunk) {
-                Ok(0) => panic!("gateway closed during read"),
-                Ok(count) => buffer.extend_from_slice(&chunk[..count]),
-                Err(error) if error.kind() == ErrorKind::WouldBlock => std::hint::spin_loop(),
-                Err(error) => panic!("read failed: {error}"),
-            }
-        }
-        samples.push(u64::try_from(request_start.elapsed().as_nanos()).unwrap_or(u64::MAX));
-    }
-    samples
-}
-
 fn run_member(
     addr: String,
     member: usize,
@@ -211,11 +154,7 @@ fn main() {
         let in_flight = args.in_flight;
         let orders = args.orders_per_member;
         workers.push(std::thread::spawn(move || {
-            if in_flight == 1 {
-                run_serial_member(addr, member, orders, args_offset)
-            } else {
-                run_member(addr, member, orders, in_flight, start, args_offset)
-            }
+            run_member(addr, member, orders, in_flight, start, args_offset)
         }));
     }
     let mut samples = Vec::with_capacity(args.members * args.orders_per_member);
