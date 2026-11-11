@@ -234,6 +234,7 @@ pub fn start(
             addr,
             shutdown,
             connections,
+            stats,
             join: Some(join),
         },
         rx,
