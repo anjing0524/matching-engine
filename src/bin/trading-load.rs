@@ -89,6 +89,8 @@ fn run_member(
     let acked_flags: Arc<Vec<AtomicBool>> =
         Arc::new((0..orders).map(|_| AtomicBool::new(false)).collect());
     let acked = Arc::new(AtomicUsize::new(0));
+    let sent_count = Arc::new(AtomicUsize::new(0));
+    let done = Arc::new(AtomicBool::new(false));
     let reader_sent = Arc::clone(&sent_times);
     let reader_flags = Arc::clone(&acked_flags);
     let reader_acked = Arc::clone(&acked);
@@ -122,6 +124,29 @@ fn run_member(
         samples
     });
 
+    let monitor_sent = Arc::clone(&sent_count);
+    let monitor_acked = Arc::clone(&acked);
+    let monitor_flags = Arc::clone(&acked_flags);
+    let monitor_done = Arc::clone(&done);
+    let monitor = std::thread::spawn(move || {
+        let mut last = 0;
+        while !monitor_done.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let now = monitor_acked.load(Ordering::Relaxed);
+            if now == last && now < orders {
+                let sent = monitor_sent.load(Ordering::Relaxed);
+                let missing: Vec<usize> = (0..sent)
+                    .filter(|index| !monitor_flags[*index].load(Ordering::Relaxed))
+                    .take(20)
+                    .collect();
+                eprintln!(
+                    "load_stall member={member} sent={sent} acked={now} missing_first={missing:?}"
+                );
+                break;
+            }
+            last = now;
+        }
+    });
     let writer = std::thread::spawn(move || {
         for seq in 0..orders {
             while seq.saturating_sub(acked.load(Ordering::Relaxed)) >= window {
@@ -137,11 +162,14 @@ fn run_member(
             writer_stream
                 .write_all(&GatewayFrame::Command(command(id, user_id, side, price)).encode())
                 .unwrap();
+            sent_count.fetch_add(1, Ordering::Relaxed);
         }
     });
 
     writer.join().unwrap();
-    reader.join().unwrap()
+    reader.join().unwrap();
+    done.store(true, Ordering::Relaxed);
+    monitor.join().unwrap()
 }
 
 fn main() {
