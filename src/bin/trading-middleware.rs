@@ -236,8 +236,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if args.stats_interval_ms > 0
             && stats_start.elapsed() >= Duration::from_millis(args.stats_interval_ms)
         {
+            let submitted = gateway.middleware_mut().submitted();
             eprintln!(
-                "middleware_stats ticks={ticks} gateway_events={gateway_events} private={private_events} public={public_events}"
+                "middleware_stats ticks={ticks} gateway_events={gateway_events} submitted={submitted} private={private_events} public={public_events}"
             );
             stats_start = std::time::Instant::now();
         }

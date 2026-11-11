@@ -20,6 +20,7 @@ pub struct MiddlewareSequencer {
     rotating_log: Option<RotatingCommandLog>,
     schedule: Option<ScheduleDriver>,
     sessions: SessionRegistry,
+    submitted: u64,
 }
 
 impl MiddlewareSequencer {
@@ -33,6 +34,7 @@ impl MiddlewareSequencer {
             rotating_log: None,
             schedule: None,
             sessions: SessionRegistry::new(),
+            submitted: 0,
         }
     }
 
@@ -60,6 +62,12 @@ impl MiddlewareSequencer {
     }
 
     #[must_use]
+    /// Number of commands successfully submitted to the core ring.
+    #[must_use]
+    pub fn submitted(&self) -> u64 {
+        self.submitted
+    }
+
     pub fn session_counts(&self) -> (usize, usize) {
         (self.sessions.active_count(), self.sessions.closed_count())
     }
@@ -156,6 +164,7 @@ impl MiddlewareSequencer {
             log.append(&command).map_err(CommandTransportError::Io)?;
         }
         self.next_global_seq += 1;
+        self.submitted += 1;
         Ok(global_seq)
     }
 
