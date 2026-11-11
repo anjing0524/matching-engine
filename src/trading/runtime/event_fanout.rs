@@ -1,6 +1,6 @@
 //! Output fan-out for public/private projections.
 //!
-//! One module owns result logs, repair buffers, the market-data publisher, and
+//! One module owns result logs, repair forwarding, the market-data publisher, and
 //! their counters. The runtime only decides when to publish.
 
 use crate::trading::core::private_events::PrivateEvent;

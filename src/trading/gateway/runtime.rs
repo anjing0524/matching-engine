@@ -335,23 +335,6 @@ impl GatewayRuntime {
         redirects
     }
 
-    /// Drains all sessions owned by a gateway before planned failover.
-    ///
-    /// Returns the drained connection ids; callers should close their TCP
-    /// connections. Retained private replay lets clients reconnect with
-    /// `last_private_seq`.
-    pub fn drain_gateway(&mut self, gateway_id: u32) -> Vec<u64> {
-        let drained = self.middleware.sessions_mut().drain_gateway(gateway_id);
-        for connection_id in &drained {
-            let redirect = self.policy.redirect_target().map(str::to_string);
-            let mut state = ConnectionState::new();
-            state.redirect = redirect;
-            self.connections.insert(*connection_id, state);
-            self.redirect_pending.insert(*connection_id);
-        }
-        drained
-    }
-
     /// Closes sessions idle for at least `timeout`.
     ///
     /// Returns the connection ids that were expired. The caller should also
