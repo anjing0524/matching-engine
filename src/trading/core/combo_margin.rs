@@ -9,9 +9,13 @@
 //! Margin is reported per account and leg. Hedged long and short positions on
 //! the same leg are margined with the single-side-largest rule: the required
 //! amount is the larger side, never their sum.
+//!
+//! Entry also consults the account's configured available-margin balance. The
+//! two leg estimates are reserved from one account balance, so an entry that
+//! cannot cover both legs is refused before either estimate is recorded.
 
 use crate::shared::collections::identity::{U64MixMap, U128MixMap};
-use crate::trading::core::combo_pair::ComboPair;
+use crate::trading::core::combo_pair::{ComboLeg, ComboPair};
 use crate::trading::core::protocol::Side;
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FmtResult};
@@ -39,13 +43,50 @@ impl LegMargin {
     /// Required margin under the single-side-largest rule.
     #[must_use]
     pub const fn required(&self) -> u128 {
-        if self.long_trade_margin > self.short_trade_margin {
-            self.long_trade_margin
-        } else {
-            self.short_trade_margin
+        largest_side(self.long_trade_margin, self.short_trade_margin)
+    }
+}
+
+/// Why the leg-level margin ledger refused to reserve a Combo Order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ComboMarginError {
+    /// The account's available margin cannot cover one leg's estimate.
+    ///
+    /// Availability is what remains of the configured balance after every
+    /// already-frozen estimate and every actual trade-price margin on the
+    /// account's legs; `required` is the estimate this entry still needs on
+    /// `leg`. The first leg is considered first, so a second-leg shortfall is
+    /// measured after reserving the first leg.
+    InsufficientMargin {
+        /// Owning user account.
+        account_id: u64,
+        /// Leg whose estimate does not fit in the remaining availability.
+        leg: ComboLeg,
+        /// Estimated margin this entry needs on the leg.
+        required: u128,
+        /// Available margin when the leg was considered.
+        available: u128,
+    },
+}
+
+impl Display for ComboMarginError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Self::InsufficientMargin {
+                account_id,
+                leg,
+                required,
+                available,
+            } => write!(
+                formatter,
+                "account {account_id} has {available} margin available on combo {leg} leg but the entry needs {required}"
+            ),
         }
     }
 }
+
+impl Error for ComboMarginError {}
 
 /// Margin frozen by one resting or filled Combo Order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -79,6 +120,29 @@ struct LegMarginState {
     frozen: u128,
     long_trade_margin: u128,
     short_trade_margin: u128,
+}
+
+impl LegMarginState {
+    const fn required(&self) -> u128 {
+        largest_side(self.long_trade_margin, self.short_trade_margin)
+    }
+}
+
+/// Inputs for reserving one Combo Order's estimated leg margin.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ComboEntryMargin {
+    /// Exchange id the new Combo Order will receive.
+    pub order_id: u64,
+    /// Owning user account.
+    pub account_id: u64,
+    /// Requested Combo Order quantity.
+    pub quantity: u64,
+    /// First leg's prior settlement price.
+    pub leg1_prior_settlement: u64,
+    /// Second leg's prior settlement price.
+    pub leg2_prior_settlement: u64,
+    /// Account balance to reserve from; `None` means no configured limit.
+    pub balance: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -202,43 +266,68 @@ pub(crate) struct ComboMarginLedger {
 }
 
 impl ComboMarginLedger {
-    /// Freezes prior-settlement margin for a newly accepted Combo Order.
-    pub(crate) fn freeze(
+    /// Reserves prior-settlement margin for a newly accepted Combo Order.
+    ///
+    /// Both leg estimates are reserved from one account balance. The first leg
+    /// is checked first, so the second-leg check already accounts for the first
+    /// leg's reservation. Nothing is recorded unless both legs fit.
+    ///
+    /// # Errors
+    /// Returns [`ComboMarginError::InsufficientMargin`] when the configured
+    /// balance cannot cover the leg estimate. Passing `None` means the account
+    /// has no configured balance and is not limited.
+    pub(crate) fn try_freeze(
         &mut self,
         pair: &ComboPair,
-        order_id: u64,
-        account_id: u64,
-        quantity: u64,
-        leg1_prior_settlement: u64,
-        leg2_prior_settlement: u64,
-    ) -> ComboMarginFreeze {
+        entry: ComboEntryMargin,
+    ) -> Result<ComboMarginFreeze, ComboMarginError> {
         let leg1_frozen = margin_amount(
-            leg1_prior_settlement,
+            entry.leg1_prior_settlement,
             pair.margin.multiplier,
             pair.margin.leg1_rate_bps,
-            quantity,
+            entry.quantity,
         );
         let leg2_frozen = margin_amount(
-            leg2_prior_settlement,
+            entry.leg2_prior_settlement,
             pair.margin.multiplier,
             pair.margin.leg2_rate_bps,
-            quantity,
+            entry.quantity,
         );
-        let leg1 = self.leg_state(account_id, pair.leg1_instrument_id);
+        if let Some(balance) = entry.balance {
+            let available = self.available(entry.account_id, balance);
+            if leg1_frozen > available {
+                return Err(ComboMarginError::InsufficientMargin {
+                    account_id: entry.account_id,
+                    leg: ComboLeg::First,
+                    required: leg1_frozen,
+                    available,
+                });
+            }
+            let after_first_leg = available - leg1_frozen;
+            if leg2_frozen > after_first_leg {
+                return Err(ComboMarginError::InsufficientMargin {
+                    account_id: entry.account_id,
+                    leg: ComboLeg::Second,
+                    required: leg2_frozen,
+                    available: after_first_leg,
+                });
+            }
+        }
+        let leg1 = self.leg_state(entry.account_id, pair.leg1_instrument_id);
         leg1.frozen = leg1.frozen.saturating_add(leg1_frozen);
-        let leg2 = self.leg_state(account_id, pair.leg2_instrument_id);
+        let leg2 = self.leg_state(entry.account_id, pair.leg2_instrument_id);
         leg2.frozen = leg2.frozen.saturating_add(leg2_frozen);
 
         let freeze = ComboMarginFreeze {
-            order_id,
+            order_id: entry.order_id,
             pair_id: pair.pair_id,
-            account_id,
-            remaining: quantity,
+            account_id: entry.account_id,
+            remaining: entry.quantity,
             leg1_frozen,
             leg2_frozen,
         };
         self.reservations.insert(
-            order_id,
+            entry.order_id,
             Reservation {
                 freeze,
                 leg1_instrument_id: pair.leg1_instrument_id,
@@ -246,11 +335,33 @@ impl ComboMarginLedger {
                 multiplier: pair.margin.multiplier,
                 leg1_rate_bps: pair.margin.leg1_rate_bps,
                 leg2_rate_bps: pair.margin.leg2_rate_bps,
-                leg1_prior_settlement,
-                leg2_prior_settlement,
+                leg1_prior_settlement: entry.leg1_prior_settlement,
+                leg2_prior_settlement: entry.leg2_prior_settlement,
             },
         );
-        freeze
+        Ok(freeze)
+    }
+
+    /// Returns the account's remaining margin under a configured balance.
+    ///
+    /// Every leg Contract the account trades is charged either its frozen
+    /// estimate or its required actual margin, whichever applies; hedged long
+    /// and short actual margin on one leg is charged once, at the larger side.
+    /// The result saturates at zero, so over-consumed actual margin never wraps.
+    pub(crate) fn available(&self, account_id: u64, balance: u64) -> u128 {
+        let used = self.used(account_id);
+        u128::from(balance).saturating_sub(used)
+    }
+
+    fn used(&self, account_id: u64) -> u128 {
+        self.leg_margins
+            .iter()
+            .filter(|(key, _)| leg_key_parts(**key).0 == account_id)
+            .fold(0, |total, (_, state)| {
+                total
+                    .saturating_add(state.frozen)
+                    .saturating_add(state.required())
+            })
     }
 
     /// Releases the estimate for `filled` quantity of one Combo Order.
@@ -533,6 +644,15 @@ fn margin_amount(price_ticks: u64, multiplier: u64, rate_bps: u64, quantity: u64
         .saturating_mul(u128::from(quantity))
         .saturating_mul(u128::from(rate_bps))
         / MARGIN_RATE_DENOMINATOR
+}
+
+/// Returns the larger of an account's actual long and short margin on one leg.
+const fn largest_side(long_trade_margin: u128, short_trade_margin: u128) -> u128 {
+    if long_trade_margin > short_trade_margin {
+        long_trade_margin
+    } else {
+        short_trade_margin
+    }
 }
 
 fn leg_key(account_id: u64, instrument_id: u32) -> u128 {
