@@ -1073,12 +1073,6 @@ impl TickBasedOrderBook {
         &self.spec.symbol
     }
 
-    /// Returns the owner of resting order `order_id`, if present.
-    #[must_use]
-    pub fn order_owner(&self, order_id: u64) -> Option<u64> {
-        self.get_order_status(order_id).map(|status| status.user_id)
-    }
-
     /// Validates an incoming order against the contract specification.
     ///
     /// # Errors
@@ -1098,29 +1092,6 @@ impl TickBasedOrderBook {
                 "price {} is outside [{}, {}] or not on a {} tick",
                 order.price, self.spec.min_price, self.spec.max_price, self.spec.tick_size
             ));
-        }
-        Ok(())
-    }
-
-    /// Validates an order and checks that its own price level can accept a
-    /// resting order.
-    ///
-    /// The service calls this before writing to the WAL so a full queue is
-    /// rejected up front rather than acknowledged and silently dropped.
-    ///
-    /// # Errors
-    /// Returns a human-readable rejection reason.
-    pub fn can_accept_order(&self, order: &NewOrderRequest) -> Result<(), String> {
-        self.validate_order(order)?;
-        let idx = self
-            .price_to_index(order.price)
-            .ok_or_else(|| "price is outside the tick grid".to_string())?;
-        let side = match order.order_type {
-            OrderType::Buy => BookSide::Bid,
-            OrderType::Sell => BookSide::Ask,
-        };
-        if self.level(side, idx).len as usize >= self.spec.queue_capacity {
-            return Err("price-level queue is full".to_string());
         }
         Ok(())
     }

@@ -139,18 +139,6 @@ impl MarketDataSubscriber {
         Ok(Self { socket })
     }
 
-    /// Joins an IPv4 multicast group.
-    ///
-    /// # Errors
-    /// Returns an I/O error if the group address/port is invalid or join fails.
-    pub fn join_multicast(&self, group: &str) -> io::Result<()> {
-        let group: std::net::Ipv4Addr = group
-            .parse()
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-        self.socket
-            .join_multicast_v4(&group, &std::net::Ipv4Addr::UNSPECIFIED)
-    }
-
     /// Binds a subscriber on all interfaces and joins an IPv4 multicast group.
     ///
     /// # Errors

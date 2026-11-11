@@ -45,12 +45,6 @@ impl TokenBucket {
     }
 }
 
-/// Refill interval implied by a per-second rate, for sleep-based callers.
-#[must_use]
-pub fn refill_interval(refill_per_sec: f64) -> Option<Duration> {
-    (refill_per_sec > 0.0).then(|| Duration::from_secs_f64(1.0 / refill_per_sec))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

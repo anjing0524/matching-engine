@@ -334,17 +334,6 @@ pub fn read_public_log_dir(directory: &Path) -> io::Result<Vec<PublicEvent>> {
         .collect()
 }
 
-/// Reads all private segments in a directory.
-///
-/// # Errors
-/// Returns an I/O error for read/decode failures.
-pub fn read_private_log_dir(directory: &Path) -> io::Result<Vec<PrivateEvent>> {
-    read_dir_slots(directory, PRIVATE_EVENT_SLOT_SIZE)?
-        .iter()
-        .map(|slot| decode_private_event(slot).map_err(|error| invalid(&format!("{error:?}"))))
-        .collect()
-}
-
 fn read_dir_slots(directory: &Path, slot_size: usize) -> io::Result<Vec<[u8; 128]>> {
     let mut paths = Vec::new();
     for entry in std::fs::read_dir(directory)? {

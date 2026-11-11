@@ -69,14 +69,6 @@ impl SymbolId {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         table.names.get(self.0 as usize).map(Arc::clone)
     }
-
-    /// Runs `f` with the symbol name without allocating.
-    pub fn with_name<R>(self, f: impl FnOnce(&str) -> R) -> Option<R> {
-        let table = SYMBOLS
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        table.names.get(self.0 as usize).map(|name| f(name))
-    }
 }
 
 impl Serialize for SymbolId {
