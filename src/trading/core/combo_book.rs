@@ -1,13 +1,18 @@
-//! Base Combo Order book for one Combo Pair.
+//! Base Combo Order book and direct matching for one Combo Pair.
 //!
 //! M1 rests only directly submitted base combo orders. Derived implied orders
 //! are matching candidates and have no insertion path here, so the public combo
 //! book never contains them. The book is keyed by spread price and time; spread
 //! prices are signed because a combo quote may be negative.
 //!
-//! The book has no matching and no public market-data projection. It stores the
-//! owner and session metadata later tickets need for cancel, fills, and private
-//! replay.
+//! A submitted Combo Order acts as a taker against the opposite side in
+//! price-time priority. Each execution is atomic: one equal quantity leaves the
+//! buy and the sell Combo Order together, and neither side can fill alone. A
+//! residual taker quantity rests. The book also tracks the last direct Combo
+//! trade price that the SHFE-style execution-price rule consumes.
+//!
+//! The book has no public market-data projection. It stores the owner and
+//! session metadata later tickets need for cancel, fills, and private replay.
 
 use crate::shared::collections::U64MixMap;
 use crate::trading::core::protocol::{
@@ -39,6 +44,30 @@ impl ComboOrderOwner {
             client_order_id,
         }
     }
+}
+
+/// One atomic direct Combo Fill.
+///
+/// Both sides carry the same quantity. The resting order and the incoming
+/// taker order never produce a single-sided execution: a direct combo trade
+/// always consumes a buy Combo Order and a sell Combo Order together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ComboFill {
+    /// Combo Pair this execution belongs to.
+    pub pair_id: u32,
+    /// Execution spread price, inside both limits.
+    pub spread_price: i64,
+    /// Equal quantity executed on the buy and sell Combo Orders.
+    pub quantity: u64,
+    /// Exchange id of the buy-side Combo Order.
+    pub buy_order_id: u64,
+    /// Exchange id of the sell-side Combo Order.
+    pub sell_order_id: u64,
+    /// Owner of the buy-side Combo Order.
+    pub buy_owner: ComboOrderOwner,
+    /// Owner of the sell-side Combo Order.
+    pub sell_owner: ComboOrderOwner,
 }
 
 /// One resting base Combo Order.
@@ -185,6 +214,7 @@ pub struct ComboBook {
     asks: BTreeMap<i64, VecDeque<ComboOrder>>,
     locations: U64MixMap<(Side, i64)>,
     next_arrival_seq: u64,
+    last_trade_price: Option<i64>,
 }
 
 impl ComboBook {
@@ -197,6 +227,7 @@ impl ComboBook {
             asks: BTreeMap::new(),
             locations: U64MixMap::default(),
             next_arrival_seq: 0,
+            last_trade_price: None,
         }
     }
 
@@ -212,7 +243,70 @@ impl ComboBook {
     /// Returns [`ComboBookError`] for a duplicate id, zero quantity, an invalid
     /// remaining quantity, or an order built for another pair. No order rests
     /// in that case.
-    pub fn rest(&mut self, mut order: ComboOrder) -> Result<ComboOrder, ComboBookError> {
+    pub fn rest(&mut self, order: ComboOrder) -> Result<ComboOrder, ComboBookError> {
+        self.validate_order(&order)?;
+        Ok(self.insert(order))
+    }
+
+    /// Submits one base Combo Order, matching it as a taker before resting.
+    ///
+    /// The incoming order walks the opposite side in price-time priority while
+    /// its limit crosses. Every execution is one atomic [`ComboFill`] with the
+    /// same quantity on the buy and sell Combo Orders. A partially filled
+    /// incoming order rests with its residual quantity.
+    ///
+    /// # Errors
+    /// Returns [`ComboBookError`] for a duplicate id, zero quantity, an invalid
+    /// remaining quantity, or an order built for another pair. No book mutates
+    /// in that case.
+    pub fn submit(&mut self, mut order: ComboOrder) -> Result<Vec<ComboEvent>, ComboBookError> {
+        self.validate_order(&order)?;
+        let mut events = Vec::new();
+        let resting_side = order.side.opposite();
+        while order.remaining > 0 {
+            let Some(resting) = self.best_order(resting_side).copied() else {
+                break;
+            };
+            if !crosses(order.side, order.spread_price, resting.spread_price) {
+                break;
+            }
+            let quantity = order.remaining.min(resting.remaining);
+            let spread_price =
+                self.execution_price(order.side, order.spread_price, resting.spread_price);
+            self.consume_resting(resting.order_id, quantity)?;
+            order.remaining -= quantity;
+            self.last_trade_price = Some(spread_price);
+            let (buy_order_id, buy_owner, sell_order_id, sell_owner) = match order.side {
+                Side::Buy => (order.order_id, order.owner, resting.order_id, resting.owner),
+                Side::Sell => (resting.order_id, resting.owner, order.order_id, order.owner),
+            };
+            events.push(ComboEvent::Filled {
+                fill: ComboFill {
+                    pair_id: self.pair_id,
+                    spread_price,
+                    quantity,
+                    buy_order_id,
+                    sell_order_id,
+                    buy_owner,
+                    sell_owner,
+                },
+            });
+        }
+        if order.remaining > 0 {
+            events.push(ComboEvent::Rested {
+                order: self.insert(order),
+            });
+        }
+        Ok(events)
+    }
+
+    /// Returns the spread price of the last direct Combo Fill on this pair.
+    #[must_use]
+    pub fn last_trade_price(&self) -> Option<i64> {
+        self.last_trade_price
+    }
+
+    fn validate_order(&self, order: &ComboOrder) -> Result<(), ComboBookError> {
         if order.pair_id != self.pair_id {
             return Err(ComboBookError::PairMismatch {
                 book_pair_id: self.pair_id,
@@ -236,7 +330,10 @@ impl ComboBook {
                 order_id: order.order_id,
             });
         }
+        Ok(())
+    }
 
+    fn insert(&mut self, mut order: ComboOrder) -> ComboOrder {
         order.arrival_seq = self.next_arrival_seq;
         self.next_arrival_seq += 1;
         self.levels_mut(order.side)
@@ -245,7 +342,65 @@ impl ComboBook {
             .push_back(order);
         self.locations
             .insert(order.order_id, (order.side, order.spread_price));
-        Ok(order)
+        order
+    }
+
+    /// Reduces a resting order by `quantity`, removing it when exhausted.
+    fn consume_resting(&mut self, order_id: u64, quantity: u64) -> Result<(), ComboBookError> {
+        let Some(&(side, spread_price)) = self.locations.get(&order_id) else {
+            return Err(ComboBookError::UnknownOrder { order_id });
+        };
+        let (order_exhausted, level_is_empty) = {
+            let levels = self.levels_mut(side);
+            let Some(queue) = levels.get_mut(&spread_price) else {
+                return Err(ComboBookError::UnknownOrder { order_id });
+            };
+            let Some(index) = queue.iter().position(|order| order.order_id == order_id) else {
+                return Err(ComboBookError::UnknownOrder { order_id });
+            };
+            let Some(resting) = queue.get_mut(index) else {
+                return Err(ComboBookError::UnknownOrder { order_id });
+            };
+            debug_assert!(quantity <= resting.remaining);
+            resting.remaining -= quantity;
+            if resting.remaining == 0 {
+                queue.remove(index);
+                (true, queue.is_empty())
+            } else {
+                (false, false)
+            }
+        };
+        if level_is_empty {
+            self.levels_mut(side).remove(&spread_price);
+        }
+        if order_exhausted {
+            self.locations.remove(&order_id);
+        }
+        Ok(())
+    }
+
+    /// Returns the direct trade price for a crossed pair of Combo Orders.
+    ///
+    /// The exchange rule takes the median of the buy limit, sell limit, and
+    /// last Combo trade price. With no previous trade it uses the midpoint of
+    /// the two limits, rounded toward the resting order's limit: down for a buy
+    /// taker and up for a sell taker. Both limits are tick counts, so the
+    /// rounded midpoint is a deterministic, valid spread tick.
+    fn execution_price(&self, taker_side: Side, taker_limit: i64, resting_limit: i64) -> i64 {
+        let (buy_limit, sell_limit) = match taker_side {
+            Side::Buy => (taker_limit, resting_limit),
+            Side::Sell => (resting_limit, taker_limit),
+        };
+        if let Some(last) = self.last_trade_price {
+            return last.clamp(sell_limit, buy_limit);
+        }
+        let sum = i128::from(buy_limit) + i128::from(sell_limit);
+        let floor = sum.div_euclid(2);
+        let midpoint = match taker_side {
+            Side::Buy => floor,
+            Side::Sell => floor + sum.rem_euclid(2),
+        };
+        i64::try_from(midpoint).unwrap_or(buy_limit)
     }
 
     /// Removes and returns a resting order owned by `user_id`.
@@ -351,6 +506,14 @@ impl ComboBook {
     }
 }
 
+/// Returns true when `taker_limit` accepts a trade at `resting_price`.
+fn crosses(taker_side: Side, taker_limit: i64, resting_price: i64) -> bool {
+    match taker_side {
+        Side::Buy => resting_price <= taker_limit,
+        Side::Sell => resting_price >= taker_limit,
+    }
+}
+
 /// One successful Combo Book state transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -359,6 +522,11 @@ pub enum ComboEvent {
     Rested {
         /// Stored order, including its exchange id and arrival sequence.
         order: ComboOrder,
+    },
+    /// Two opposite base orders executed atomically.
+    Filled {
+        /// The atomic Combo Fill.
+        fill: ComboFill,
     },
     /// A resting base order was removed by cancel.
     Canceled {

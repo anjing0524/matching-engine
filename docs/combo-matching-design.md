@@ -127,6 +127,14 @@ M2 extends step 4 to implied-out:
 combo + one leg order -> derived other-leg order -> match against leg book
 ```
 
+## Direct combo execution price
+
+Two opposite base Combo Orders execute at the SHFE-style direct trade price:
+the median of the buy limit, the sell limit, and the last combo trade price on
+that pair. Before the first trade, use the midpoint of the two limits, rounded
+toward the resting order's limit (down for a buy taker, up for a sell taker).
+Every direct fill updates the pair's last combo trade price.
+
 ## Atomic fill plan
 
 For each candidate:
