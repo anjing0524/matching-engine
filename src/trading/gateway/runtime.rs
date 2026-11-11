@@ -192,6 +192,11 @@ impl GatewayRuntime {
     ) -> AppliedGatewayEffects {
         let effects = self.poll_effects();
         let redirects = effects.redirects.len();
+        let redirected: Vec<u64> = effects
+            .redirects
+            .iter()
+            .map(|(connection_id, _)| *connection_id)
+            .collect();
         for (connection_id, address) in effects.redirects {
             let _ = server.send(
                 connection_id,
@@ -199,7 +204,6 @@ impl GatewayRuntime {
                     address: address.clone(),
                 },
             );
-            server.close(connection_id);
         }
         let mut replays = 0;
         for (connection_id, events) in effects.replays {
@@ -219,6 +223,9 @@ impl GatewayRuntime {
                 server.close(connection_id);
                 expired += 1;
             }
+        }
+        for connection_id in redirected {
+            server.close(connection_id);
         }
         self.prune_closed_sessions(CLOSED_SESSION_RETAIN);
         AppliedGatewayEffects {
