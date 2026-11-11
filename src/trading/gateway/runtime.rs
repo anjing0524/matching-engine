@@ -352,7 +352,7 @@ impl GatewayRuntime {
         let expired: Vec<u64> = self
             .connections
             .iter()
-            .filter(|(_, state)| self.policy.idle_expired(state.last_seen, now, timeout))
+            .filter(|(_, state)| SessionPolicy::idle_expired(state.last_seen, now, timeout))
             .map(|(id, _)| *id)
             .collect();
         for id in &expired {

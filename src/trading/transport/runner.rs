@@ -14,6 +14,25 @@ use crate::trading::transport::{
 };
 use std::collections::VecDeque;
 
+fn flush_queue<T>(
+    producer: &crate::trading::transport::CommandProducer,
+    pending: &mut std::collections::VecDeque<T>,
+    events: Vec<T>,
+) {
+    pending.extend(events);
+    while let Some(event) = pending.front() {
+        match producer.send(event) {
+            Ok(()) => {
+                pending.pop_front();
+            }
+            Err(CommandTransportError::Full) => break,
+            Err(_) => {
+                pending.pop_front();
+            }
+        }
+    }
+}
+
 /// Snapshot restore failure returned by [`CoreRunner`].
 #[derive(Debug)]
 pub struct CoreRestoreError(String);
@@ -79,37 +98,16 @@ impl<P: PreTradePlugin> CoreRunner<P> {
         let Some(producer) = &self.public_producer else {
             return;
         };
-        self.pending_public.extend(self.core.drain_public_events());
-        while let Some(event) = self.pending_public.front() {
-            match producer.send(event) {
-                Ok(()) => {
-                    self.pending_public.pop_front();
-                }
-                Err(CommandTransportError::Full) => break,
-                Err(_) => {
-                    self.pending_public.pop_front();
-                }
-            }
-        }
+        let events = self.core.drain_public_events();
+        flush_queue(producer, &mut self.pending_public, events);
     }
 
     fn flush_private(&mut self) {
         let Some(producer) = &self.private_producer else {
             return;
         };
-        self.pending_private
-            .extend(self.core.drain_private_events());
-        while let Some(event) = self.pending_private.front() {
-            match producer.send(event) {
-                Ok(()) => {
-                    self.pending_private.pop_front();
-                }
-                Err(CommandTransportError::Full) => break,
-                Err(_) => {
-                    self.pending_private.pop_front();
-                }
-            }
-        }
+        let events = self.core.drain_private_events();
+        flush_queue(producer, &mut self.pending_private, events);
     }
 
     #[cfg(test)]

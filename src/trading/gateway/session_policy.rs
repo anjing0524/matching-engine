@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 /// Token-bucket rate limit used by gateway command admission.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RateLimit {
+    /// Burst capacity in tokens.
     pub capacity: f64,
+    /// Tokens replenished per second.
     pub refill_per_sec: f64,
 }
 
@@ -63,7 +65,7 @@ impl SessionPolicy {
     }
 
     #[must_use]
-    pub fn idle_expired(&self, last_seen: Instant, now: Instant, timeout: Duration) -> bool {
+    pub fn idle_expired(last_seen: Instant, now: Instant, timeout: Duration) -> bool {
         now.duration_since(last_seen) >= timeout
     }
 
@@ -86,10 +88,17 @@ mod tests {
 
     #[test]
     fn idle_expiry_is_a_policy_decision() {
-        let policy = SessionPolicy::default();
         let now = Instant::now();
-        assert!(policy.idle_expired(now - Duration::from_secs(2), now, Duration::from_secs(1)));
-        assert!(!policy.idle_expired(now, now, Duration::from_secs(1)));
+        assert!(SessionPolicy::idle_expired(
+            now - Duration::from_secs(2),
+            now,
+            Duration::from_secs(1)
+        ));
+        assert!(!SessionPolicy::idle_expired(
+            now,
+            now,
+            Duration::from_secs(1)
+        ));
     }
 
     #[test]
