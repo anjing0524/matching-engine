@@ -11,6 +11,7 @@
 use crate::domain::orderbook::ContractSpec;
 use crate::shared::SymbolId;
 use crate::shared::collections::identity::U64MixMap;
+use crate::trading::core::combo_pair::{ComboLeg, ComboPair, ComboPairError};
 use crate::trading::core::kernel::{CoreEvent, TradingCore};
 use crate::trading::core::plugins::{NoPlugins, PreTradePlugin};
 use crate::trading::core::protocol::{Command, CommandType};
@@ -64,14 +65,16 @@ impl Display for RegistryError {
 
 impl Error for RegistryError {}
 
-/// Owns one ordinary Contract core per instrument id.
+/// Owns one ordinary Contract core per instrument id and the static Combo
+/// Pairs that trade them.
 ///
-/// Register instruments before matching starts; the registry is static for the
-/// lifetime of a trading day. Commands are routed by [`Command::instrument_id`]
-/// and rejected when that id is unknown.
+/// Register instruments and pairs before matching starts; the registry is
+/// static for the lifetime of a trading day. Commands are routed by
+/// [`Command::instrument_id`] and rejected when that id is unknown.
 #[derive(Default)]
 pub struct InstrumentRegistry {
     instruments: U64MixMap<TradingCore>,
+    pairs: U64MixMap<ComboPair>,
 }
 
 impl InstrumentRegistry {
@@ -80,6 +83,7 @@ impl InstrumentRegistry {
     pub fn new() -> Self {
         Self {
             instruments: U64MixMap::default(),
+            pairs: U64MixMap::default(),
         }
     }
 
@@ -104,6 +108,48 @@ impl InstrumentRegistry {
         let symbol = SymbolId::intern(&spec.symbol);
         self.instruments.insert(key, TradingCore::new(spec, symbol));
         Ok(())
+    }
+
+    /// Registers one static Combo Pair over two ordinary Contracts.
+    ///
+    /// Call during startup configuration. The registry exposes no command that
+    /// creates or replaces a pair while matching runs.
+    ///
+    /// # Errors
+    /// Returns [`ComboPairError`] when the definition is not a valid static
+    /// pair. No pair is registered in that case.
+    pub fn register_pair(&mut self, pair: ComboPair) -> Result<(), ComboPairError> {
+        if self.pairs.contains_key(&u64::from(pair.pair_id)) {
+            return Err(ComboPairError::DuplicatePairId {
+                pair_id: pair.pair_id,
+            });
+        }
+        validate_pair(&self.instruments, &pair)?;
+        self.pairs.insert(u64::from(pair.pair_id), pair);
+        Ok(())
+    }
+
+    /// Looks up the Combo Pair for `pair_id`.
+    #[must_use]
+    pub fn pair(&self, pair_id: u32) -> Option<&ComboPair> {
+        self.pairs.get(&u64::from(pair_id))
+    }
+
+    /// Returns true when `pair_id` resolves to a Combo Pair.
+    #[must_use]
+    pub fn contains_pair(&self, pair_id: u32) -> bool {
+        self.pairs.contains_key(&u64::from(pair_id))
+    }
+
+    /// Returns the number of registered Combo Pairs.
+    #[must_use]
+    pub fn pair_count(&self) -> usize {
+        self.pairs.len()
+    }
+
+    /// Iterates over registered Combo Pairs in unspecified order.
+    pub fn pairs(&self) -> impl Iterator<Item = &ComboPair> {
+        self.pairs.values()
     }
 
     /// Returns the number of registered instruments.
@@ -197,6 +243,55 @@ impl InstrumentRegistry {
         }
         Ok(())
     }
+}
+
+const MAX_MARGIN_RATE_BPS: u64 = 10_000;
+
+fn validate_pair(
+    instruments: &U64MixMap<TradingCore>,
+    pair: &ComboPair,
+) -> Result<(), ComboPairError> {
+    if pair.pair_id == 0 {
+        return Err(ComboPairError::InvalidPairId { pair_id: 0 });
+    }
+    if pair.leg1_instrument_id == pair.leg2_instrument_id {
+        return Err(ComboPairError::IdenticalLegs {
+            pair_id: pair.pair_id,
+            instrument_id: pair.leg1_instrument_id,
+        });
+    }
+    for (leg, instrument_id) in [
+        (ComboLeg::First, pair.leg1_instrument_id),
+        (ComboLeg::Second, pair.leg2_instrument_id),
+    ] {
+        if !instruments.contains_key(&u64::from(instrument_id)) {
+            return Err(ComboPairError::UnknownLegInstrument {
+                pair_id: pair.pair_id,
+                leg,
+                instrument_id,
+            });
+        }
+    }
+    if pair.spread_tick == 0 {
+        return Err(ComboPairError::InvalidSpreadTick {
+            pair_id: pair.pair_id,
+            spread_tick: pair.spread_tick,
+        });
+    }
+    let margin = pair.margin;
+    let reason = if margin.multiplier == 0 {
+        "multiplier must be positive"
+    } else if margin.leg1_rate_bps > MAX_MARGIN_RATE_BPS {
+        "first-leg margin rate must not exceed 10000 bps"
+    } else if margin.leg2_rate_bps > MAX_MARGIN_RATE_BPS {
+        "second-leg margin rate must not exceed 10000 bps"
+    } else {
+        return Ok(());
+    };
+    Err(ComboPairError::InvalidMargin {
+        pair_id: pair.pair_id,
+        reason,
+    })
 }
 
 fn validate_spec(instrument_id: u32, spec: &ContractSpec) -> Result<(), RegistryError> {
