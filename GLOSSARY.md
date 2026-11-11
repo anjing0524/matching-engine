@@ -60,7 +60,7 @@ A Combo Order consuming resting liquidity from its Leg order books.
 ## Implied-out
 
 An ordinary Leg order interacting with a resting Combo Order. Deferred beyond
-the first comma version; the pair model must not preclude it.
+the first combo version; the pair model must not preclude it.
 
 ## Atomic
 
