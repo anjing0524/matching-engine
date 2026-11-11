@@ -24,6 +24,16 @@ pub struct EventFanout {
     sink_errors: u64,
 }
 
+/// Optional sinks composed by [`EventFanout`].
+#[derive(Default)]
+pub struct EventFanoutOptions {
+    pub public_log: Option<PublicResultLog>,
+    pub private_log: Option<PrivateResultLog>,
+    pub repair_buffer_capacity: Option<usize>,
+    pub repair_server: Option<RepairServer>,
+    pub market_data: Option<MarketDataPublisher>,
+}
+
 impl EventFanout {
     #[must_use]
     pub fn new() -> Self {
@@ -31,32 +41,12 @@ impl EventFanout {
     }
 
     #[must_use]
-    pub fn with_public_log(mut self, log: PublicResultLog) -> Self {
-        self.public_log = Some(log);
-        self
-    }
-
-    #[must_use]
-    pub fn with_private_log(mut self, log: PrivateResultLog) -> Self {
-        self.private_log = Some(log);
-        self
-    }
-
-    #[must_use]
-    pub fn with_repair_buffer(mut self, capacity: usize) -> Self {
-        self.repair_buffer = Some(RepairBuffer::new(capacity));
-        self
-    }
-
-    #[must_use]
-    pub fn with_repair_server(mut self, server: RepairServer) -> Self {
-        self.repair_server = Some(server);
-        self
-    }
-
-    #[must_use]
-    pub fn with_market_data(mut self, publisher: MarketDataPublisher) -> Self {
-        self.market_data = Some(publisher);
+    pub fn with_options(mut self, options: EventFanoutOptions) -> Self {
+        self.public_log = options.public_log;
+        self.private_log = options.private_log;
+        self.repair_buffer = options.repair_buffer_capacity.map(RepairBuffer::new);
+        self.repair_server = options.repair_server;
+        self.market_data = options.market_data;
         self
     }
 
@@ -75,7 +65,17 @@ impl EventFanout {
         self.sink_errors
     }
 
-    pub fn log_private(&mut self, events: &[PrivateEvent]) {
+    /// Logs private events and publishes public events through all sinks.
+    ///
+    /// Returns how many public events were handed to the market-data publisher.
+    pub fn emit(&mut self, private: &[PrivateEvent], public: &[PublicEvent]) -> u64 {
+        self.log_private(private);
+        let before = self.public_sent;
+        self.publish_public(public);
+        self.public_sent - before
+    }
+
+    fn log_private(&mut self, events: &[PrivateEvent]) {
         let Some(log) = &mut self.private_log else {
             return;
         };
@@ -89,7 +89,7 @@ impl EventFanout {
         }
     }
 
-    pub fn publish_public(&mut self, events: &[PublicEvent]) {
+    fn publish_public(&mut self, events: &[PublicEvent]) {
         if let Some(log) = &mut self.public_log {
             for event in events {
                 if log.append(event).is_err() {

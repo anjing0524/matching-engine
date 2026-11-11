@@ -16,7 +16,7 @@ use crate::trading::market_data::metrics::TradingMetrics;
 #[cfg(test)]
 use crate::trading::market_data::repair::NackRequest;
 use crate::trading::market_data::repair::RepairServer;
-use crate::trading::runtime::event_fanout::EventFanout;
+use crate::trading::runtime::event_fanout::{EventFanout, EventFanoutOptions};
 use crate::trading::transport::result_log::{PrivateResultLog, PublicResultLog};
 use crate::trading::transport::runner::CoreRunner;
 use std::sync::{Arc, Mutex};
@@ -97,21 +97,13 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
 
     #[must_use]
     pub fn with_options(mut self, options: RuntimeOptions) -> Self {
-        if let Some(public) = options.public_log {
-            self.fanout = self.fanout.with_public_log(public);
-        }
-        if let Some(private) = options.private_log {
-            self.fanout = self.fanout.with_private_log(private);
-        }
-        if let Some(capacity) = options.repair_buffer_capacity {
-            self.fanout = self.fanout.with_repair_buffer(capacity);
-        }
-        if let Some(server) = options.repair_server {
-            self.fanout = self.fanout.with_repair_server(server);
-        }
-        if let Some(publisher) = options.market_data {
-            self.fanout = self.fanout.with_market_data(publisher);
-        }
+        self.fanout = self.fanout.with_options(EventFanoutOptions {
+            public_log: options.public_log,
+            private_log: options.private_log,
+            repair_buffer_capacity: options.repair_buffer_capacity,
+            repair_server: options.repair_server,
+            market_data: options.market_data,
+        });
         self.combo = options.combo;
         self.metrics_sink = options.metrics_sink;
         self.idle_timeout = options.idle_timeout;
@@ -183,7 +175,6 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         self.core
             .core_mut()
             .drain_private_events_into(&mut self.private_events);
-        self.fanout.log_private(&self.private_events);
         let sent = self
             .gateway
             .dispatch_private(&self.server, self.private_events.drain(..));
@@ -191,9 +182,8 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         self.core
             .core_mut()
             .drain_public_events_into(&mut self.public_events);
-        let public_before = self.fanout.public_sent();
-        self.fanout.publish_public(&self.public_events);
-        self.metrics.public_events_sent += self.fanout.public_sent() - public_before;
+        let public_sent = self.fanout.emit(&self.private_events, &self.public_events);
+        self.metrics.public_events_sent += public_sent;
         if let Some(combo) = &mut self.combo {
             combo.poll_commands();
             let effects = combo.tick_effects();
