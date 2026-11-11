@@ -11,7 +11,7 @@ use crate::trading::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -28,7 +28,12 @@ pub enum GatewayEvent {
     },
 }
 
-type SharedStream = Arc<Mutex<TcpStream>>;
+enum WriterCommand {
+    Write(Vec<u8>, usize),
+    Close,
+}
+
+type WriterSender = Sender<WriterCommand>;
 
 /// Cumulative gateway socket counters.
 #[derive(Debug, Default)]
@@ -80,7 +85,7 @@ impl GatewayStats {
 pub struct GatewayServerHandle {
     addr: std::net::SocketAddr,
     shutdown: Arc<AtomicBool>,
-    connections: Arc<Mutex<U64MixMap<SharedStream>>>,
+    connections: Arc<Mutex<U64MixMap<WriterSender>>>,
     stats: Arc<GatewayStats>,
     join: Option<thread::JoinHandle<()>>,
 }
@@ -91,12 +96,12 @@ impl GatewayServerHandle {
         self.addr
     }
 
-    /// Sends one frame to a connected gateway.
+    /// Queues one frame for a connected gateway writer thread.
     ///
     /// # Errors
-    /// Returns an I/O error when the connection is unknown or the write fails.
+    /// Returns an I/O error when the connection is unknown or the writer stopped.
     pub fn send(&self, connection_id: u64, frame: GatewayFrame) -> io::Result<()> {
-        let stream = {
+        let writer = {
             let connections = self
                 .connections
                 .lock()
@@ -106,31 +111,9 @@ impl GatewayServerHandle {
                 .cloned()
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "gateway not connected"))?
         };
-        let encoded = frame.encode();
-        let timing = self.stats.timing_enabled();
-        let start = timing.then(std::time::Instant::now);
-        let mut stream = stream
-            .lock()
-            .map_err(|_| io::Error::other("gateway stream lock poisoned"))?;
-        let result = stream.write_all(&encoded);
-        if let Some(start) = start {
-            self.stats
-                .write_ns
-                .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
-        }
-        match result {
-            Ok(()) => {
-                self.stats.writes.fetch_add(1, Ordering::Relaxed);
-                self.stats
-                    .bytes_written
-                    .fetch_add(encoded.len() as u64, Ordering::Relaxed);
-                Ok(())
-            }
-            Err(error) => {
-                self.stats.write_errors.fetch_add(1, Ordering::Relaxed);
-                Err(error)
-            }
-        }
+        writer
+            .send(WriterCommand::Write(frame.encode().to_vec(), 1))
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "gateway writer stopped"))
     }
 
     /// Enables read/write timing counters (diagnostic mode).
@@ -151,17 +134,15 @@ impl GatewayServerHandle {
         self.send(connection_id, GatewayFrame::PrivateEvent(event.clone()))
     }
 
-    /// Closes one gateway connection and removes it from the write map.
+    /// Closes one gateway connection and stops its writer.
     pub fn close(&self, connection_id: u64) {
-        let stream = self
+        let writer = self
             .connections
             .lock()
             .ok()
             .and_then(|mut connections| connections.remove(&connection_id));
-        if let Some(stream) = stream
-            && let Ok(stream) = stream.lock()
-        {
-            let _ = stream.shutdown(std::net::Shutdown::Both);
+        if let Some(writer) = writer {
+            let _ = writer.send(WriterCommand::Close);
         }
     }
 
@@ -230,16 +211,21 @@ pub fn start(
                     Ok((stream, _)) => {
                         let id = next_connection.fetch_add(1, Ordering::Relaxed);
                         accept_stats.accepted.fetch_add(1, Ordering::Relaxed);
-                        let event_tx = tx.clone();
-                        let write_stream = match stream.try_clone() {
-                            Ok(stream) => Arc::new(Mutex::new(stream)),
+                        let writer_stream = match stream.try_clone() {
+                            Ok(stream) => stream,
                             Err(_) => continue,
                         };
+                        let (writer_tx, writer_rx) = channel();
                         if let Ok(mut map) = accept_connections.lock() {
-                            map.insert(id, write_stream);
+                            map.insert(id, writer_tx);
                         }
+                        let writer_stats = Arc::clone(&accept_stats);
+                        let _ = thread::Builder::new()
+                            .name(format!("gateway-writer-{id}"))
+                            .spawn(move || serve_writer(writer_stream, writer_rx, writer_stats));
                         let remove_connections = Arc::clone(&accept_connections);
                         let stats = Arc::clone(&accept_stats);
+                        let event_tx = tx.clone();
                         let _ = thread::Builder::new()
                             .name(format!("gateway-tcp-{id}"))
                             .spawn(move || {
@@ -248,7 +234,6 @@ pub fn start(
                                     map.remove(&id);
                                 }
                             });
-                    }
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
                     }
@@ -266,6 +251,58 @@ pub fn start(
         },
         rx,
     ))
+}
+
+fn serve_writer(
+    mut stream: TcpStream,
+    receiver: Receiver<WriterCommand>,
+    stats: Arc<GatewayStats>,
+) {
+    let _ = stream.set_nonblocking(false);
+    let _ = stream.set_nodelay(true);
+    loop {
+        let first = match receiver.recv() {
+            Ok(WriterCommand::Write(bytes, frames)) => (bytes, frames),
+            Ok(WriterCommand::Close) | Err(_) => break,
+        };
+        let mut bytes = first.0;
+        let mut frames = first.1;
+        while let Ok(command) = receiver.try_recv() {
+            match command {
+                WriterCommand::Write(more, count) => {
+                    bytes.extend_from_slice(&more);
+                    frames += count;
+                }
+                WriterCommand::Close => {
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
+                    return;
+                }
+            }
+        }
+        let timing = stats.timing_enabled();
+        let start = timing.then(std::time::Instant::now);
+        let result = stream.write_all(&bytes);
+        if let Some(start) = start {
+            stats
+                .write_ns
+                .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        }
+        match result {
+            Ok(()) => {
+                stats.writes.fetch_add(frames as u64, Ordering::Relaxed);
+                stats
+                    .bytes_written
+                    .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+            }
+            Err(_) => {
+                stats
+                    .write_errors
+                    .fetch_add(frames as u64, Ordering::Relaxed);
+                break;
+            }
+        }
+    }
+    let _ = stream.shutdown(std::net::Shutdown::Both);
 }
 
 fn serve_connection(
