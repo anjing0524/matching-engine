@@ -6,7 +6,9 @@
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::core::public_events::PublicEvent;
 use crate::trading::market_data::MarketDataPublisher;
-use crate::trading::market_data::repair::{NackRequest, RepairBuffer, RepairServer};
+#[cfg(test)]
+use crate::trading::market_data::repair::NackRequest;
+use crate::trading::market_data::repair::{RepairBuffer, RepairServer};
 use crate::trading::transport::result_log::{PrivateResultLog, PublicResultLog};
 
 /// Sink set for one runtime's projected events.
