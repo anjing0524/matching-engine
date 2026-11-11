@@ -240,6 +240,26 @@ The middleware received and submitted all 200k commands; the core consumed all
 
 The next target is the gateway reader/poll loop timing, not the matching core.
 
+### gateway counters
+
+Added gateway socket counters:
+
+```text
+accepted, frames_read, writes, bytes_written, write_errors
+```
+
+Two-member serial run:
+
+```text
+client: 20373/s p50=5.27µs p99=118.8µs
+middleware sample: accepted=2 frames_read=188333 submitted=188330
+                   writes=188330 bytes=49.7MB write_errors=0
+```
+
+The sample shows no dropped commands and no socket write errors; frames read,
+commands submitted, and private writes track one another. The low rate is
+therefore in gateway read/client pacing, not in core submission or ring drops.
+
 ## Next measurement
 
 Use an independent load-generator host/process and per-process CPU affinity:
