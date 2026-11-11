@@ -13,8 +13,8 @@ src/
 └── trading/
     ├── core/               # kernel, auction, positions, plugins, events, protocol
     ├── gateway/            # frame, runtime, server, proxy, directory, auth, replay
-    │                       # private_downlink: seq/replay/routing
-    ├── transport/          # SPSC ring, middleware, runner, session, command/result logs
+    │                       # private_downlink: seq/replay/routing/batch delivery
+    ├── transport/          # SPSC ring, middleware, runner, session directory, logs
     ├── market_data/        # publisher, tracker, repair, metrics
     ├── combo/              # queue, engine, exec, runtime, market_data, margin
     ├── snapshot/           # snapshot_file, replay
@@ -50,11 +50,16 @@ Key ownership rules:
   kernel has no sockets or file I/O.
 - `CoreRunner` drains commands and calls the kernel. It does not retain
   diagnostic `CoreEvent`s.
-- `GatewayRuntime` owns per-connection state (`ConnectionState`) and session
-  lifecycle. `PrivateDownlink` owns the single per-user private sequence,
-  replay retention, session routing, and batched delivery for core and combo
-  private effects. `poll_effects()` returns redirects, replays, and session
-  counts together.
+- `GatewayRuntime` owns per-connection state (`ConnectionState`). `PrivateDownlink`
+  owns the single per-user private sequence, replay retention, session routing,
+  and batched delivery for core and combo private effects. `poll_effects()`
+  returns redirects, replays, and session counts together.
+- `MiddlewareSequencer` owns the `SessionRegistry`; session queries go through
+  `sessions()`/`sessions_mut()`, not duplicated pass-through methods.
+- `EventFanout` accepts one `EventFanoutOptions` value and exposes `emit`;
+  result logs, repair, and market-data publishing stay inside the module.
+- `GatewayServerHandle` exposes the frame-level `send` seam; typed frame
+  constructors live on `GatewayFrame`, and the encoded batch path is internal.
 - `EventFanout` owns public/private result logs, repair, market-data publishing,
   and their counters.
 - Snapshots use `snapshot_file`: version, CRC32, payload bytes, atomic replace.
