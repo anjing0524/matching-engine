@@ -218,6 +218,23 @@ instructions in the sample, confirming that the poll loop is hot.
 The next step is command/event instrumentation in the middleware and core loops;
 CPU percentage alone cannot distinguish "busy polling" from "work saturated".
 
+### middleware/core counters
+
+Added opt-in `--stats-interval-ms` to `trading-middleware` and `trading-core`.
+
+Two-member serial run, 200k commands, middleware CPU0, core CPU1:
+
+```text
+client aggregate: 26377/s
+core_stats:       commands=200000
+middleware_stats: gateway_events≈161k, private≈211k, public≈161k
+```
+
+The core consumed the full 200k command stream, so matching itself was not the
+throughput limit in this run. Middleware/gateway ingestion and private dispatch
+are the leading suspects. Counter samples are interval snapshots, so totals are
+approximate.
+
 ## Next measurement
 
 Use an independent load-generator host/process and per-process CPU affinity:
