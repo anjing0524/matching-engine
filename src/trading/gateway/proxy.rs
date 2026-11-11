@@ -3,6 +3,8 @@
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -88,16 +90,91 @@ fn relay(member: TcpStream, upstream_addr: String) {
     let upstream_thread = thread::spawn(move || {
         let mut reader = upstream_read;
         let mut writer = member_write;
-        let _ = pump(&mut reader, &mut writer);
+        let _ = relay_stream(&mut reader, &mut writer);
         let _ = writer.shutdown(Shutdown::Both);
     });
     let mut reader = member_read;
     let mut writer = upstream_write;
-    let _ = pump(&mut reader, &mut writer);
+    let _ = relay_stream(&mut reader, &mut writer);
     let _ = writer.shutdown(Shutdown::Both);
     let _ = upstream_thread.join();
 }
 
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn relay_stream(reader: &mut TcpStream, writer: &mut TcpStream) -> io::Result<()> {
+    use std::os::raw::{c_int, c_uint};
+
+    unsafe extern "C" {
+        fn pipe(fds: *mut c_int) -> c_int;
+        fn splice(
+            fd_in: c_int,
+            off_in: *mut i64,
+            fd_out: c_int,
+            off_out: *mut i64,
+            len: usize,
+            flags: c_uint,
+        ) -> isize;
+    }
+
+    let mut fds = [0i32; 2];
+    // SAFETY: fds points to two valid c_int slots; pipe writes two descriptors.
+    if unsafe { pipe(fds.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: pipe returned two fresh descriptors owned by this function.
+    let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+    // SAFETY: same as above for the write end.
+    let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+    let input = reader.as_raw_fd();
+    let output = writer.as_raw_fd();
+    loop {
+        // SAFETY: descriptors are live for the duration of the call; null offsets
+        // request sequential socket reads.
+        let read = unsafe {
+            splice(
+                input,
+                std::ptr::null_mut(),
+                write_fd.as_raw_fd(),
+                std::ptr::null_mut(),
+                64 * 1024,
+                1,
+            )
+        };
+        if read == 0 {
+            return Ok(());
+        }
+        if read < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut moved = 0isize;
+        while moved < read {
+            // SAFETY: descriptors are live; the pipe contains exactly `read`
+            // bytes and output is a blocking socket.
+            let written = unsafe {
+                splice(
+                    read_fd.as_raw_fd(),
+                    std::ptr::null_mut(),
+                    output,
+                    std::ptr::null_mut(),
+                    (read - moved) as usize,
+                    1,
+                )
+            };
+            if written < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            moved += written;
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn relay_stream(reader: &mut TcpStream, writer: &mut TcpStream) -> io::Result<()> {
+    pump(reader, writer)
+}
+
+#[cfg(not(target_os = "linux"))]
 fn pump(reader: &mut TcpStream, writer: &mut TcpStream) -> io::Result<()> {
     let mut buffer = vec![0u8; 64 * 1024];
     loop {
