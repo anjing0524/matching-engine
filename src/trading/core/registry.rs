@@ -12,11 +12,12 @@ use crate::domain::orderbook::ContractSpec;
 use crate::shared::SymbolId;
 use crate::shared::collections::identity::U64MixMap;
 use crate::trading::core::combo_book::{
-    ComboBook, ComboCommandError, ComboEvent, ComboFill, ComboOrder, ComboOrderOwner,
-    ComboPrivateFill, ImpliedComboFill, validate_new_combo_order,
+    ComboBook, ComboBookSnapshot, ComboCommandError, ComboEvent, ComboFill, ComboOrder,
+    ComboOrderOwner, ComboPrivateFill, ImpliedComboFill, validate_new_combo_order,
 };
 use crate::trading::core::combo_margin::{
-    ComboMarginFreeze, ComboMarginLedger, LegMargin, LegMarginRate,
+    ComboMarginFreeze, ComboMarginLedger, ComboMarginSnapshot, ComboMarginSnapshotError, LegMargin,
+    LegMarginRate,
 };
 use crate::trading::core::combo_pair::{ComboLeg, ComboPair, ComboPairError};
 use crate::trading::core::kernel::{CoreEvent, TradingCore};
@@ -74,6 +75,264 @@ impl Display for RegistryError {
 }
 
 impl Error for RegistryError {}
+
+/// Why a registry snapshot could not be restored.
+///
+/// Every variant is explicit and no state changes on error: a partial snapshot
+/// (for example a pair without its book, a resting Combo Order without its
+/// margin reservation, or a private sequence that does not advance) is rejected
+/// instead of being silently repaired.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RegistrySnapshotError {
+    /// The snapshot listed one instrument id twice.
+    DuplicateInstrument {
+        /// Repeated instrument id.
+        instrument_id: u32,
+    },
+    /// An ordinary Contract core rejected its own snapshot.
+    CoreRestore {
+        /// Instrument whose state was being restored.
+        instrument_id: u32,
+        /// Reason reported by the core.
+        reason: String,
+    },
+    /// The snapshot listed one instrument's prior settlement twice.
+    DuplicatePriorSettlement {
+        /// Repeated instrument id.
+        instrument_id: u32,
+    },
+    /// A prior settlement named an instrument the snapshot does not contain.
+    UnknownPriorSettlementInstrument {
+        /// Instrument id without a snapshot.
+        instrument_id: u32,
+    },
+    /// The snapshot listed one pair id twice.
+    DuplicatePair {
+        /// Repeated pair id.
+        pair_id: u32,
+    },
+    /// A pair definition did not validate against the snapshot instruments.
+    InvalidPair {
+        /// Rejected pair id.
+        pair_id: u32,
+        /// Reason from the static-pair validator.
+        error: ComboPairError,
+    },
+    /// A pair had no Combo Book state.
+    MissingComboBook {
+        /// Pair id missing its book state.
+        pair_id: u32,
+    },
+    /// The snapshot listed one pair's Combo Book twice.
+    DuplicateComboBook {
+        /// Repeated pair id.
+        pair_id: u32,
+    },
+    /// A Combo Book snapshot named a pair the snapshot does not define.
+    UnknownComboBook {
+        /// Pair id without a pair definition.
+        pair_id: u32,
+    },
+    /// A Combo Book rejected its own snapshot.
+    ComboBookRestore {
+        /// Pair id whose book rejected the snapshot.
+        pair_id: u32,
+        /// Reason from the book.
+        error: crate::trading::core::combo_book::ComboBookError,
+    },
+    /// One exchange Combo Order id rested in more than one pair book.
+    DuplicateComboOrderId {
+        /// Repeated exchange order id.
+        order_id: u64,
+    },
+    /// The next Combo Order id would collide with a restored or referenced id.
+    InvalidNextComboOrderId {
+        /// Stored next Combo Order id.
+        next_combo_order_id: u64,
+        /// Highest exchange Combo Order id the snapshot references.
+        max_assigned_order_id: u64,
+    },
+    /// A buffered Combo Private Fill named an unregistered pair.
+    UnknownComboPrivatePair {
+        /// Sequence of the buffered fill.
+        seq: u64,
+        /// Pair id carried by the fill.
+        pair_id: u32,
+    },
+    /// Buffered Combo Private Fill sequences were not strictly increasing.
+    InvalidComboPrivateSequence {
+        /// Offending sequence.
+        seq: u64,
+    },
+    /// The next Combo Private sequence would repeat a buffered fill.
+    InvalidNextComboPrivateSeq {
+        /// Stored next Combo Private sequence.
+        next_combo_private_seq: u64,
+        /// Highest buffered Combo Private sequence.
+        max_buffered_seq: u64,
+    },
+    /// The leg margin ledger rejected its own snapshot.
+    Margin(ComboMarginSnapshotError),
+    /// A leg margin entry named an instrument the snapshot does not contain.
+    UnknownLegMarginInstrument {
+        /// Owning user account.
+        account_id: u64,
+        /// Leg Contract instrument id.
+        instrument_id: u32,
+    },
+    /// A resting Combo Order had no margin reservation.
+    MissingMarginReservation {
+        /// Resting exchange Combo Order id.
+        order_id: u64,
+    },
+    /// A margin reservation named an order that is not resting.
+    UnknownMarginReservation {
+        /// Reserved exchange Combo Order id.
+        order_id: u64,
+    },
+    /// A reservation did not match its resting Combo Order.
+    MarginReservationMismatch {
+        /// Exchange Combo Order id whose reservation disagrees.
+        order_id: u64,
+    },
+}
+
+impl Display for RegistrySnapshotError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Self::DuplicateInstrument { instrument_id } => {
+                write!(formatter, "snapshot repeats instrument {instrument_id}")
+            }
+            Self::CoreRestore {
+                instrument_id,
+                reason,
+            } => write!(
+                formatter,
+                "snapshot restore failed for instrument {instrument_id}: {reason}"
+            ),
+            Self::DuplicatePriorSettlement { instrument_id } => write!(
+                formatter,
+                "snapshot repeats prior settlement for instrument {instrument_id}"
+            ),
+            Self::UnknownPriorSettlementInstrument { instrument_id } => write!(
+                formatter,
+                "snapshot has prior settlement for unknown instrument {instrument_id}"
+            ),
+            Self::DuplicatePair { pair_id } => {
+                write!(formatter, "snapshot repeats combo pair {pair_id}")
+            }
+            Self::InvalidPair { pair_id, error } => {
+                write!(
+                    formatter,
+                    "snapshot combo pair {pair_id} is invalid: {error}"
+                )
+            }
+            Self::MissingComboBook { pair_id } => {
+                write!(formatter, "snapshot combo pair {pair_id} has no combo book")
+            }
+            Self::DuplicateComboBook { pair_id } => {
+                write!(formatter, "snapshot repeats combo book for pair {pair_id}")
+            }
+            Self::UnknownComboBook { pair_id } => {
+                write!(
+                    formatter,
+                    "snapshot has combo book for unknown pair {pair_id}"
+                )
+            }
+            Self::ComboBookRestore { pair_id, error } => {
+                write!(
+                    formatter,
+                    "snapshot combo book {pair_id} is invalid: {error}"
+                )
+            }
+            Self::DuplicateComboOrderId { order_id } => {
+                write!(formatter, "snapshot repeats combo order {order_id}")
+            }
+            Self::InvalidNextComboOrderId {
+                next_combo_order_id,
+                max_assigned_order_id,
+            } => write!(
+                formatter,
+                "snapshot next combo order id {next_combo_order_id} does not advance past {max_assigned_order_id}"
+            ),
+            Self::UnknownComboPrivatePair { seq, pair_id } => write!(
+                formatter,
+                "snapshot combo private fill {seq} names unknown pair {pair_id}"
+            ),
+            Self::InvalidComboPrivateSequence { seq } => write!(
+                formatter,
+                "snapshot combo private sequence {seq} is not strictly increasing"
+            ),
+            Self::InvalidNextComboPrivateSeq {
+                next_combo_private_seq,
+                max_buffered_seq,
+            } => write!(
+                formatter,
+                "snapshot next combo private sequence {next_combo_private_seq} does not advance past {max_buffered_seq}"
+            ),
+            Self::Margin(error) => Display::fmt(error, formatter),
+            Self::UnknownLegMarginInstrument {
+                account_id,
+                instrument_id,
+            } => write!(
+                formatter,
+                "snapshot has margin for account {account_id} on unknown leg {instrument_id}"
+            ),
+            Self::MissingMarginReservation { order_id } => write!(
+                formatter,
+                "snapshot resting combo order {order_id} has no margin reservation"
+            ),
+            Self::UnknownMarginReservation { order_id } => write!(
+                formatter,
+                "snapshot has margin reservation {order_id} with no resting order"
+            ),
+            Self::MarginReservationMismatch { order_id } => write!(
+                formatter,
+                "snapshot margin reservation {order_id} does not match its resting order"
+            ),
+        }
+    }
+}
+
+impl Error for RegistrySnapshotError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InvalidPair { error, .. } => Some(error),
+            Self::ComboBookRestore { error, .. } => Some(error),
+            Self::Margin(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+/// Serializable registry-backed combo state.
+///
+/// Captures the static Combo Pairs, every ordinary Contract core (shared leg
+/// books and positions), each pair's base Combo Book (resting orders, arrival
+/// sequence, last Combo trade price), the leg margin ledger reservations, and
+/// the registry-owned combo private buffer and sequence. A restored registry
+/// matches deterministically from the same command stream.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct RegistrySnapshot {
+    /// Ordinary Contract state, sorted by instrument id.
+    pub instruments: Vec<(u32, crate::trading::core::kernel::CoreSnapshot)>,
+    /// Static Combo Pair definitions, sorted by pair id.
+    pub pairs: Vec<ComboPair>,
+    /// Prior settlement per instrument, sorted by instrument id.
+    pub prior_settlements: Vec<(u32, u64)>,
+    /// Base Combo Book state per pair, sorted by pair id.
+    pub combo_books: Vec<ComboBookSnapshot>,
+    /// Leg-level margin ledger state.
+    pub margin: ComboMarginSnapshot,
+    /// Undrained Combo Private Fills, oldest first.
+    pub combo_private_events: Vec<ComboPrivateFill>,
+    /// Exchange id the next accepted Combo Order will receive.
+    pub next_combo_order_id: u64,
+    /// Registry-owned sequence the next Combo Private Fill will receive.
+    pub next_combo_private_seq: u64,
+}
 
 /// Owns one ordinary Contract core per instrument id, the static Combo Pairs,
 /// and one base Combo Order book per pair.
@@ -245,6 +504,257 @@ impl InstrumentRegistry {
     /// Drains Combo Private Fills produced since the last drain.
     pub fn drain_combo_private_events(&mut self) -> Vec<ComboPrivateFill> {
         std::mem::take(&mut self.combo_private_events)
+    }
+
+    /// Returns the Combo Private Fill sequence the next fill will receive.
+    #[must_use]
+    pub fn next_combo_private_seq(&self) -> u64 {
+        self.next_combo_private_seq
+    }
+
+    /// Replays buffered Combo Private Fills after `last_private_seq`.
+    ///
+    /// This is the registry-scoped reconnect seam: it returns, in sequence
+    /// order, the undrained fills a member missed. A fill is replayed exactly
+    /// when `seq > last_private_seq`. The buffer is drained by
+    /// [`Self::drain_combo_private_events`]; replay therefore cannot recover
+    /// fills that were already delivered. Full gateway log replay is outside
+    /// this scope.
+    #[must_use]
+    pub fn replay_combo_private_after(&self, last_private_seq: u64) -> Vec<ComboPrivateFill> {
+        self.combo_private_events
+            .iter()
+            .copied()
+            .filter(|fill| fill.seq > last_private_seq)
+            .collect()
+    }
+
+    /// Captures registry-backed combo state for restart or a new process.
+    ///
+    /// The captured snapshot is self-contained: restoring it rebuilds ordinary
+    /// Contract books and positions, the static pairs, base Combo Order books,
+    /// leg margin reservations, and the combo private sequence.
+    #[must_use]
+    pub fn snapshot(&self) -> RegistrySnapshot {
+        let mut instruments: Vec<(u32, crate::trading::core::kernel::CoreSnapshot)> = self
+            .instruments
+            .iter()
+            .map(|(instrument_id, core)| (*instrument_id as u32, core.snapshot()))
+            .collect();
+        instruments.sort_by_key(|(instrument_id, _)| *instrument_id);
+        let mut pairs: Vec<ComboPair> = self.pairs.values().copied().collect();
+        pairs.sort_by_key(|pair| pair.pair_id);
+        let mut prior_settlements: Vec<(u32, u64)> = self
+            .prior_settlements
+            .iter()
+            .map(|(instrument_id, price_ticks)| (*instrument_id as u32, *price_ticks))
+            .collect();
+        prior_settlements.sort_by_key(|(instrument_id, _)| *instrument_id);
+        let mut combo_books: Vec<ComboBookSnapshot> =
+            self.combo_books.values().map(ComboBook::snapshot).collect();
+        combo_books.sort_by_key(|book| book.pair_id);
+        RegistrySnapshot {
+            instruments,
+            pairs,
+            prior_settlements,
+            combo_books,
+            margin: self.margin.snapshot(),
+            combo_private_events: self.combo_private_events.clone(),
+            next_combo_order_id: self.next_combo_order_id,
+            next_combo_private_seq: self.next_combo_private_seq,
+        }
+    }
+
+    /// Replaces all registry state with a captured snapshot.
+    ///
+    /// Restore is fail-closed and all-or-none. Every instrument, pair, book,
+    /// reservation, and sequence is validated before any field changes, so an
+    /// invalid or partial snapshot leaves the running registry untouched.
+    ///
+    /// # Errors
+    /// Returns [`RegistrySnapshotError`] when the snapshot is internally
+    /// inconsistent, references state it does not contain, or would make
+    /// matching nondeterministic.
+    pub fn restore_snapshot(
+        &mut self,
+        snapshot: RegistrySnapshot,
+    ) -> Result<(), RegistrySnapshotError> {
+        let RegistrySnapshot {
+            instruments: instrument_snapshots,
+            pairs: pair_definitions,
+            prior_settlements: settlement_entries,
+            combo_books: book_snapshots,
+            margin: margin_snapshot,
+            combo_private_events,
+            next_combo_order_id,
+            next_combo_private_seq,
+        } = snapshot;
+
+        let mut instruments: U64MixMap<TradingCore> = U64MixMap::default();
+        for (instrument_id, core_snapshot) in instrument_snapshots {
+            if instruments.contains_key(&u64::from(instrument_id)) {
+                return Err(RegistrySnapshotError::DuplicateInstrument { instrument_id });
+            }
+            let mut core = TradingCore::new(core_snapshot.spec.clone(), core_snapshot.symbol);
+            core.restore_snapshot(core_snapshot).map_err(|reason| {
+                RegistrySnapshotError::CoreRestore {
+                    instrument_id,
+                    reason,
+                }
+            })?;
+            instruments.insert(u64::from(instrument_id), core);
+        }
+
+        let mut prior_settlements: U64MixMap<u64> = U64MixMap::default();
+        for (instrument_id, price_ticks) in settlement_entries {
+            if !instruments.contains_key(&u64::from(instrument_id)) {
+                return Err(RegistrySnapshotError::UnknownPriorSettlementInstrument {
+                    instrument_id,
+                });
+            }
+            if prior_settlements
+                .insert(u64::from(instrument_id), price_ticks)
+                .is_some()
+            {
+                return Err(RegistrySnapshotError::DuplicatePriorSettlement { instrument_id });
+            }
+        }
+
+        let mut pairs: U64MixMap<ComboPair> = U64MixMap::default();
+        for pair in pair_definitions {
+            if pairs.contains_key(&u64::from(pair.pair_id)) {
+                return Err(RegistrySnapshotError::DuplicatePair {
+                    pair_id: pair.pair_id,
+                });
+            }
+            validate_pair(&instruments, &pair).map_err(|error| {
+                RegistrySnapshotError::InvalidPair {
+                    pair_id: pair.pair_id,
+                    error,
+                }
+            })?;
+            pairs.insert(u64::from(pair.pair_id), pair);
+        }
+
+        let mut resting_orders: Vec<ComboOrder> = book_snapshots
+            .iter()
+            .flat_map(|book| book.bids.iter().chain(book.asks.iter()).copied())
+            .collect();
+        let mut combo_books: U64MixMap<ComboBook> = U64MixMap::default();
+        for book_snapshot in book_snapshots {
+            let pair_id = book_snapshot.pair_id;
+            if !pairs.contains_key(&u64::from(pair_id)) {
+                return Err(RegistrySnapshotError::UnknownComboBook { pair_id });
+            }
+            if combo_books.contains_key(&u64::from(pair_id)) {
+                return Err(RegistrySnapshotError::DuplicateComboBook { pair_id });
+            }
+            let mut book = ComboBook::new(pair_id);
+            book.restore_snapshot(book_snapshot)
+                .map_err(|error| RegistrySnapshotError::ComboBookRestore { pair_id, error })?;
+            combo_books.insert(u64::from(pair_id), book);
+        }
+        for pair in pairs.values() {
+            if !combo_books.contains_key(&u64::from(pair.pair_id)) {
+                return Err(RegistrySnapshotError::MissingComboBook {
+                    pair_id: pair.pair_id,
+                });
+            }
+        }
+
+        resting_orders.sort_by_key(|order| order.order_id);
+        let max_assigned_order_id = resting_orders
+            .iter()
+            .map(|order| order.order_id)
+            .chain(combo_private_events.iter().map(|fill| fill.order_id))
+            .max()
+            .unwrap_or(0);
+        if next_combo_order_id == 0 || next_combo_order_id <= max_assigned_order_id {
+            return Err(RegistrySnapshotError::InvalidNextComboOrderId {
+                next_combo_order_id,
+                max_assigned_order_id,
+            });
+        }
+        let mut resting_order_ids: U64MixMap<u32> = U64MixMap::default();
+        for order in &resting_orders {
+            if resting_order_ids
+                .insert(order.order_id, order.pair_id)
+                .is_some()
+            {
+                return Err(RegistrySnapshotError::DuplicateComboOrderId {
+                    order_id: order.order_id,
+                });
+            }
+        }
+
+        let mut previous_seq = 0;
+        for fill in &combo_private_events {
+            if fill.seq <= previous_seq {
+                return Err(RegistrySnapshotError::InvalidComboPrivateSequence { seq: fill.seq });
+            }
+            previous_seq = fill.seq;
+            if !pairs.contains_key(&u64::from(fill.pair_id)) {
+                return Err(RegistrySnapshotError::UnknownComboPrivatePair {
+                    seq: fill.seq,
+                    pair_id: fill.pair_id,
+                });
+            }
+        }
+        if next_combo_private_seq == 0 || next_combo_private_seq <= previous_seq {
+            return Err(RegistrySnapshotError::InvalidNextComboPrivateSeq {
+                next_combo_private_seq,
+                max_buffered_seq: previous_seq,
+            });
+        }
+
+        for margin in &margin_snapshot.leg_margins {
+            if !instruments.contains_key(&u64::from(margin.instrument_id)) {
+                return Err(RegistrySnapshotError::UnknownLegMarginInstrument {
+                    account_id: margin.account_id,
+                    instrument_id: margin.instrument_id,
+                });
+            }
+        }
+        let reservation_order_ids: Vec<u64> = margin_snapshot
+            .reservations
+            .iter()
+            .map(|freeze| freeze.order_id)
+            .collect();
+        let mut margin = ComboMarginLedger::default();
+        margin
+            .restore_snapshot(margin_snapshot, &pairs, &prior_settlements)
+            .map_err(RegistrySnapshotError::Margin)?;
+
+        for order in &resting_orders {
+            let Some(freeze) = margin.freeze_for(order.order_id) else {
+                return Err(RegistrySnapshotError::MissingMarginReservation {
+                    order_id: order.order_id,
+                });
+            };
+            if freeze.pair_id != order.pair_id
+                || freeze.account_id != order.owner.user_id
+                || freeze.remaining != order.remaining
+            {
+                return Err(RegistrySnapshotError::MarginReservationMismatch {
+                    order_id: order.order_id,
+                });
+            }
+        }
+        for order_id in reservation_order_ids {
+            if !resting_order_ids.contains_key(&order_id) {
+                return Err(RegistrySnapshotError::UnknownMarginReservation { order_id });
+            }
+        }
+
+        self.instruments = instruments;
+        self.pairs = pairs;
+        self.combo_books = combo_books;
+        self.prior_settlements = prior_settlements;
+        self.margin = margin;
+        self.combo_private_events = combo_private_events;
+        self.next_combo_order_id = next_combo_order_id;
+        self.next_combo_private_seq = next_combo_private_seq;
+        Ok(())
     }
 
     /// Atomically consumes matching resting liquidity from two leg books.

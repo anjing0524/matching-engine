@@ -31,7 +31,7 @@ impl Display for ComboLeg {
 /// The pair itself has no position. Each leg freezes margin from its own
 /// notional using its configured rate. The registry rejects a zero multiplier
 /// and rates above 10000 basis points.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ComboPairMargin {
     /// Contract multiplier applied to leg prices.
@@ -58,7 +58,7 @@ impl ComboPairMargin {
 ///
 /// M1 pairs have a fixed 1:1 quantity ratio. The spread price is quoted in
 /// [`Self::spread_tick`] units and may be negative.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ComboPair {
     /// Identifier used by Combo Orders.

@@ -19,12 +19,12 @@ use crate::shared::collections::U64MixMap;
 use crate::trading::core::protocol::{
     Command, CommandType, Offset, PriceType, Side, TimeCondition, TriggerType, VolumeCondition,
 };
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
 /// Owner and client identity preserved with a resting Combo Order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ComboOrderOwner {
     /// Owning user account.
@@ -104,7 +104,7 @@ pub struct ImpliedComboFill {
 /// Order owner: two for direct matching and one for an implied-in taker. The
 /// Combo Pair itself has no position; positions live on the two ordinary leg
 /// Contracts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ComboPrivateFill {
     /// Registry-owned private sequence; each user's subsequence stays ordered.
@@ -146,7 +146,7 @@ pub struct ComboPrivateFill {
 /// The exchange-assigned `order_id` is distinct from
 /// [`ComboOrderOwner::client_order_id`]. `spread_price` is signed; `remaining`
 /// starts at `quantity` and is reduced only by future matching.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ComboOrder {
     /// Exchange-assigned combo order id.
@@ -191,6 +191,28 @@ impl ComboOrder {
     }
 }
 
+/// Serializable base Combo Order book state.
+///
+/// Orders are stored in price-time priority order per side, so restoring the
+/// vectors rebuilds the same FIFO queues. `locations` is derived and therefore
+/// not stored, while the arrival sequence counter and the last Combo trade price
+/// are, so a restored book keeps both time priority and the direct execution
+/// price anchor.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct ComboBookSnapshot {
+    /// Combo Pair whose book this state belongs to.
+    pub pair_id: u32,
+    /// Resting bid orders in price order, FIFO within a price.
+    pub bids: Vec<ComboOrder>,
+    /// Resting ask orders in price order, FIFO within a price.
+    pub asks: Vec<ComboOrder>,
+    /// Arrival sequence the next resting order will receive.
+    pub next_arrival_seq: u64,
+    /// Spread price of the last direct or implied-in Combo Fill.
+    pub last_trade_price: Option<i64>,
+}
+
 /// Why a base Combo Order could not rest in or leave a [`ComboBook`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -199,6 +221,41 @@ pub enum ComboBookError {
     DuplicateOrderId {
         /// Duplicate exchange order id.
         order_id: u64,
+    },
+    /// Exchange-assigned Combo Order id zero is reserved.
+    ZeroOrderId {
+        /// Rejected exchange order id.
+        order_id: u64,
+    },
+    /// Two snapshot orders carry the same arrival sequence.
+    DuplicateArrivalSeq {
+        /// Exchange order id carrying the duplicate sequence.
+        order_id: u64,
+        /// Duplicate arrival sequence.
+        arrival_seq: u64,
+    },
+    /// A restored order sits on the wrong side list.
+    SideMismatch {
+        /// Exchange order id on the wrong list.
+        order_id: u64,
+        /// Side implied by the snapshot list.
+        expected: Side,
+        /// Side carried by the order.
+        actual: Side,
+    },
+    /// A restored book would hand out an arrival sequence that is already used.
+    InvalidNextArrivalSeq {
+        /// Stored next arrival sequence.
+        next_arrival_seq: u64,
+        /// Highest arrival sequence among the restored orders.
+        max_arrival_seq: u64,
+    },
+    /// A restored book has a bid at or above its best ask.
+    CrossedBook {
+        /// Best bid spread price in the snapshot.
+        best_bid: i64,
+        /// Best ask spread price in the snapshot.
+        best_ask: i64,
     },
     /// A base Combo Order must carry a positive quantity.
     ZeroQuantity {
@@ -241,6 +298,35 @@ impl Display for ComboBookError {
             Self::DuplicateOrderId { order_id } => {
                 write!(formatter, "combo order {order_id} is already resting")
             }
+            Self::ZeroOrderId { order_id } => {
+                write!(formatter, "combo order id {order_id} is reserved")
+            }
+            Self::DuplicateArrivalSeq {
+                order_id,
+                arrival_seq,
+            } => write!(
+                formatter,
+                "combo order {order_id} reuses arrival sequence {arrival_seq}"
+            ),
+            Self::SideMismatch {
+                order_id,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "combo order {order_id} carries side {actual:?} on the {expected:?} snapshot list"
+            ),
+            Self::InvalidNextArrivalSeq {
+                next_arrival_seq,
+                max_arrival_seq,
+            } => write!(
+                formatter,
+                "combo book next arrival sequence {next_arrival_seq} does not advance past {max_arrival_seq}"
+            ),
+            Self::CrossedBook { best_bid, best_ask } => write!(
+                formatter,
+                "combo book snapshot is crossed: bid {best_bid} at or above ask {best_ask}"
+            ),
             Self::ZeroQuantity { order_id } => {
                 write!(formatter, "combo order {order_id} has zero quantity")
             }
@@ -407,7 +493,98 @@ impl ComboBook {
         self.last_trade_price
     }
 
+    /// Captures resting base orders in price-time priority order.
+    ///
+    /// Orders are emitted in price order, FIFO within each price, so restoring
+    /// the snapshot rebuilds identical queues. The derived order-id location
+    /// index is not stored.
+    #[must_use]
+    pub fn snapshot(&self) -> ComboBookSnapshot {
+        ComboBookSnapshot {
+            pair_id: self.pair_id,
+            bids: self
+                .bids
+                .values()
+                .flat_map(|queue| queue.iter().copied())
+                .collect(),
+            asks: self
+                .asks
+                .values()
+                .flat_map(|queue| queue.iter().copied())
+                .collect(),
+            next_arrival_seq: self.next_arrival_seq,
+            last_trade_price: self.last_trade_price,
+        }
+    }
+
+    /// Replaces this book with a captured snapshot.
+    ///
+    /// Restoring is all-or-none: every order is validated against the snapshot
+    /// pair and arrival sequence before any state changes. A book that is not
+    /// empty is replaced rather than merged.
+    ///
+    /// # Errors
+    /// Returns [`ComboBookError`] for a pair mismatch, a zero order id, an
+    /// invalid remaining quantity, a duplicate order id or arrival sequence, a
+    /// side-list mismatch, or a next arrival sequence that would collide.
+    pub fn restore_snapshot(&mut self, snapshot: ComboBookSnapshot) -> Result<(), ComboBookError> {
+        let mut bids = BTreeMap::new();
+        let mut asks = BTreeMap::new();
+        let mut locations = U64MixMap::default();
+        let mut arrivals = HashSet::new();
+        let mut max_arrival_seq = None;
+        for (expected_side, orders) in [(Side::Buy, snapshot.bids), (Side::Sell, snapshot.asks)] {
+            let levels = match expected_side {
+                Side::Buy => &mut bids,
+                Side::Sell => &mut asks,
+            };
+            for order in orders {
+                validate_restored_order(&order, snapshot.pair_id, expected_side, &locations)?;
+                if !arrivals.insert(order.arrival_seq) {
+                    return Err(ComboBookError::DuplicateArrivalSeq {
+                        order_id: order.order_id,
+                        arrival_seq: order.arrival_seq,
+                    });
+                }
+                max_arrival_seq = Some(
+                    max_arrival_seq
+                        .map_or(order.arrival_seq, |max: u64| max.max(order.arrival_seq)),
+                );
+                levels
+                    .entry(order.spread_price)
+                    .or_insert_with(VecDeque::new)
+                    .push_back(order);
+                locations.insert(order.order_id, (expected_side, order.spread_price));
+            }
+        }
+        if let Some(max_arrival_seq) = max_arrival_seq
+            && snapshot.next_arrival_seq <= max_arrival_seq
+        {
+            return Err(ComboBookError::InvalidNextArrivalSeq {
+                next_arrival_seq: snapshot.next_arrival_seq,
+                max_arrival_seq,
+            });
+        }
+        if let Some(&best_bid) = bids.last_key_value().map(|(price, _)| price)
+            && let Some(&best_ask) = asks.first_key_value().map(|(price, _)| price)
+            && best_bid >= best_ask
+        {
+            return Err(ComboBookError::CrossedBook { best_bid, best_ask });
+        }
+        self.bids = bids;
+        self.asks = asks;
+        self.locations = locations;
+        self.next_arrival_seq = snapshot.next_arrival_seq;
+        self.last_trade_price = snapshot.last_trade_price;
+        Ok(())
+    }
+
     fn validate_order(&self, order: &ComboOrder) -> Result<(), ComboBookError> {
+        if order.order_id == 0 {
+            return Err(ComboBookError::ZeroOrderId {
+                order_id: order.order_id,
+            });
+        }
         if order.pair_id != self.pair_id {
             return Err(ComboBookError::PairMismatch {
                 book_pair_id: self.pair_id,
@@ -607,6 +784,51 @@ impl ComboBook {
     }
 }
 
+/// Validates one order before it is placed into a restored book.
+fn validate_restored_order(
+    order: &ComboOrder,
+    pair_id: u32,
+    expected_side: Side,
+    locations: &U64MixMap<(Side, i64)>,
+) -> Result<(), ComboBookError> {
+    if order.order_id == 0 {
+        return Err(ComboBookError::ZeroOrderId {
+            order_id: order.order_id,
+        });
+    }
+    if order.pair_id != pair_id {
+        return Err(ComboBookError::PairMismatch {
+            book_pair_id: pair_id,
+            order_pair_id: order.pair_id,
+        });
+    }
+    if order.quantity == 0 {
+        return Err(ComboBookError::ZeroQuantity {
+            order_id: order.order_id,
+        });
+    }
+    if order.remaining == 0 || order.remaining > order.quantity {
+        return Err(ComboBookError::InvalidRemaining {
+            order_id: order.order_id,
+            quantity: order.quantity,
+            remaining: order.remaining,
+        });
+    }
+    if order.side != expected_side {
+        return Err(ComboBookError::SideMismatch {
+            order_id: order.order_id,
+            expected: expected_side,
+            actual: order.side,
+        });
+    }
+    if locations.contains_key(&order.order_id) {
+        return Err(ComboBookError::DuplicateOrderId {
+            order_id: order.order_id,
+        });
+    }
+    Ok(())
+}
+
 /// Returns true when `taker_limit` accepts a trade at `resting_price`.
 fn crosses(taker_side: Side, taker_limit: i64, resting_price: i64) -> bool {
     match taker_side {
@@ -786,4 +1008,93 @@ pub(crate) fn validate_new_combo_order(command: &Command) -> Result<(), ComboCom
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn order(order_id: u64, side: Side, spread_price: i64, quantity: u64) -> ComboOrder {
+        ComboOrder::new(
+            order_id,
+            10,
+            ComboOrderOwner::new(1, 2, order_id),
+            side,
+            spread_price,
+            quantity,
+        )
+    }
+
+    fn book_with_two_orders() -> ComboBook {
+        let mut book = ComboBook::new(10);
+        book.rest(order(1, Side::Buy, 90, 3)).unwrap();
+        book.rest(order(2, Side::Buy, 90, 4)).unwrap();
+        book.rest(order(3, Side::Sell, 110, 5)).unwrap();
+        book
+    }
+
+    #[test]
+    fn snapshot_restore_preserves_queue_order_and_trade_price() {
+        let book = book_with_two_orders();
+        let snapshot = book.snapshot();
+        let mut restored = ComboBook::new(10);
+        restored.restore_snapshot(snapshot.clone()).unwrap();
+
+        assert_eq!(restored.snapshot(), snapshot);
+        assert_eq!(
+            restored.best_order(Side::Buy).map(|order| order.order_id),
+            Some(1)
+        );
+        restored
+            .submit(order(4, Side::Sell, 90, 1))
+            .expect("a crossing order must execute");
+        assert_eq!(restored.last_trade_price(), Some(90));
+    }
+
+    #[test]
+    fn restore_rejects_duplicate_arrival_sequence() {
+        let mut book = book_with_two_orders();
+        let mut snapshot = book.snapshot();
+        let mut duplicate = snapshot.bids[0];
+        duplicate.order_id = 9;
+        snapshot.bids.push(duplicate);
+
+        assert_eq!(
+            book.restore_snapshot(snapshot).unwrap_err(),
+            ComboBookError::DuplicateArrivalSeq {
+                order_id: 9,
+                arrival_seq: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn restore_rejects_a_stale_next_arrival_sequence() {
+        let mut book = book_with_two_orders();
+        let mut snapshot = book.snapshot();
+        snapshot.next_arrival_seq = 0;
+
+        assert_eq!(
+            book.restore_snapshot(snapshot).unwrap_err(),
+            ComboBookError::InvalidNextArrivalSeq {
+                next_arrival_seq: 0,
+                max_arrival_seq: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn restore_rejects_a_crossed_book() {
+        let mut book = book_with_two_orders();
+        let mut snapshot = book.snapshot();
+        snapshot.asks[0].spread_price = 90;
+
+        assert_eq!(
+            book.restore_snapshot(snapshot).unwrap_err(),
+            ComboBookError::CrossedBook {
+                best_bid: 90,
+                best_ask: 90,
+            }
+        );
+    }
 }
