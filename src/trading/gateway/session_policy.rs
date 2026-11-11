@@ -2,6 +2,7 @@
 //! redirect selection, separated from frame routing.
 
 use crate::trading::gateway::auth::GatewayCredentials;
+use std::time::{Duration, Instant};
 
 /// Policy decisions that do not require a socket or connection state.
 #[derive(Default)]
@@ -52,6 +53,11 @@ impl SessionPolicy {
     }
 
     #[must_use]
+    pub fn idle_expired(&self, last_seen: Instant, now: Instant, timeout: Duration) -> bool {
+        now.duration_since(last_seen) >= timeout
+    }
+
+    #[must_use]
     pub fn redirect_target(&self) -> Option<&str> {
         self.redirect_target.as_deref()
     }
@@ -66,6 +72,14 @@ mod tests {
         let policy = SessionPolicy::default().with_auth_token(7);
         assert!(policy.login_allowed(1, 2, 7));
         assert!(!policy.login_allowed(1, 2, 8));
+    }
+
+    #[test]
+    fn idle_expiry_is_a_policy_decision() {
+        let policy = SessionPolicy::default();
+        let now = Instant::now();
+        assert!(policy.idle_expired(now - Duration::from_secs(2), now, Duration::from_secs(1)));
+        assert!(!policy.idle_expired(now, now, Duration::from_secs(1)));
     }
 
     #[test]
