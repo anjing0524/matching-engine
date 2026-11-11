@@ -61,7 +61,6 @@ impl MiddlewareSequencer {
         self.sessions.prune_closed(keep_closed)
     }
 
-    #[must_use]
     /// Number of commands successfully submitted to the core ring.
     #[must_use]
     pub fn submitted(&self) -> u64 {
