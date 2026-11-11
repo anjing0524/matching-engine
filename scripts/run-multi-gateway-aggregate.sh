@@ -18,6 +18,10 @@ if (( gateways < 1 || gateways > 4 )); then
   echo "gateways must be 1..4" >&2
   exit 2
 fi
+if ! command -v taskset >/dev/null 2>&1; then
+  echo "taskset is required: all processes must be CPU-pinned" >&2
+  exit 2
+fi
 root=$(pwd)
 cargo build --release --bins >/dev/null
 dir=$(mktemp -d "${TMPDIR:-/tmp}/trading-multi-gateway.XXXXXX")

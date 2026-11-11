@@ -20,6 +20,10 @@ if [[ "${USE_PROXY:-1}" == "1" && $shards -gt 1 ]]; then
   echo "2 shards with proxy need more than 8 hardware threads; use USE_PROXY=0" >&2
   exit 2
 fi
+if ! command -v taskset >/dev/null 2>&1; then
+  echo "taskset is required: all processes must be CPU-pinned" >&2
+  exit 2
+fi
 root=$(pwd)
 cargo build --release --bins >/dev/null
 dir=$(mktemp -d "${TMPDIR:-/tmp}/trading-shards.XXXXXX")
