@@ -374,7 +374,10 @@ fn sell_taker_walks_bids_by_price_then_time_priority() {
 }
 
 #[test]
-fn direct_combo_fill_does_not_touch_leg_books_or_positions() {
+fn direct_combo_fill_leaves_leg_books_untouched_and_positions_combo_owners() {
+    use trading_system_engine::trading::core::positions::PositionKey;
+    use trading_system_engine::trading::core::protocol::Hedge;
+
     let mut registry = registry_with_pair();
     registry
         .execute_combo(combo_order(1001, 1, 11, Side::Sell, 100, 5))
@@ -387,9 +390,34 @@ fn direct_combo_fill_does_not_touch_leg_books_or_positions() {
         let core = registry.core(instrument_id).unwrap();
         assert_eq!(core.best_bid(), None, "leg {instrument_id} bid book moved");
         assert_eq!(core.best_ask(), None, "leg {instrument_id} ask book moved");
-        assert!(
-            core.positions().snapshot().is_empty(),
-            "leg {instrument_id} received a single-leg position"
-        );
     }
+
+    // A direct Combo Fill produces no leg trade, but both combo owners hold
+    // the resulting position on each leg Contract exactly once.
+    let leg1 = registry.core(1).unwrap();
+    let leg2 = registry.core(2).unwrap();
+    assert_eq!(
+        leg1.positions()
+            .get(PositionKey::new(2, Side::Buy, Hedge::Spec))
+            .today,
+        5
+    );
+    assert_eq!(
+        leg2.positions()
+            .get(PositionKey::new(2, Side::Sell, Hedge::Spec))
+            .today,
+        5
+    );
+    assert_eq!(
+        leg1.positions()
+            .get(PositionKey::new(1, Side::Sell, Hedge::Spec))
+            .today,
+        5
+    );
+    assert_eq!(
+        leg2.positions()
+            .get(PositionKey::new(1, Side::Buy, Hedge::Spec))
+            .today,
+        5
+    );
 }

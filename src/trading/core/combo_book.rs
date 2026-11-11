@@ -17,7 +17,7 @@
 
 use crate::shared::collections::U64MixMap;
 use crate::trading::core::protocol::{
-    Command, CommandType, PriceType, Side, TimeCondition, TriggerType, VolumeCondition,
+    Command, CommandType, Offset, PriceType, Side, TimeCondition, TriggerType, VolumeCondition,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
@@ -95,6 +95,49 @@ pub struct ImpliedComboFill {
     /// Resting first-leg price consumed by the taker.
     pub leg1_price_ticks: u64,
     /// Resting second-leg price consumed by the taker.
+    pub leg2_price_ticks: u64,
+}
+
+/// One private Combo Fill delivered to a single Combo Order owner.
+///
+/// Every atomic Combo Fill produces one private fill per participating Combo
+/// Order owner: two for direct matching and one for an implied-in taker. The
+/// Combo Pair itself has no position; positions live on the two ordinary leg
+/// Contracts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ComboPrivateFill {
+    /// Registry-owned private sequence; each user's subsequence stays ordered.
+    pub seq: u64,
+    /// Combo Pair this execution belongs to.
+    pub pair_id: u32,
+    /// Exchange id of the owner's Combo Order.
+    pub order_id: u64,
+    /// Client-assigned id preserved from the owner's Combo Order.
+    pub client_order_id: u64,
+    /// Owning user account.
+    pub user_id: u64,
+    /// Gateway session that submitted the Combo Order.
+    pub session_id: u64,
+    /// Direction of the owner's Combo Order.
+    pub side: Side,
+    /// Quantity filled on this Combo Order.
+    pub quantity: u64,
+    /// Realized spread price of the execution.
+    pub spread_price: i64,
+    /// First-leg price used to value this execution.
+    ///
+    /// Implied-in fills report the resting first-leg prices consumed. Direct
+    /// fills consume no leg liquidity, so this is the best crossing first-leg
+    /// reference price at execution time (prior settlement when no quote
+    /// exists).
+    pub leg1_price_ticks: u64,
+    /// Second-leg price used to value this execution.
+    ///
+    /// Implied-in fills report the resting second-leg prices consumed. Direct
+    /// fills consume no leg liquidity, so this is the best crossing second-leg
+    /// reference price at execution time (prior settlement when no quote
+    /// exists).
     pub leg2_price_ticks: u64,
 }
 
@@ -632,6 +675,11 @@ pub enum ComboCommandError {
         /// Rejected trigger type.
         trigger_type: TriggerType,
     },
+    /// M1 combo fills open leg positions only.
+    UnsupportedOffset {
+        /// Rejected leg offset.
+        offset: Offset,
+    },
     /// A combo order must request a positive quantity.
     ZeroQuantity {
         /// Pair id carried by the rejected command.
@@ -670,6 +718,9 @@ impl Display for ComboCommandError {
             Self::UnsupportedTriggerType { trigger_type } => {
                 write!(formatter, "unsupported combo trigger type {trigger_type:?}")
             }
+            Self::UnsupportedOffset { offset } => {
+                write!(formatter, "unsupported combo leg offset {offset:?}")
+            }
             Self::ZeroQuantity { pair_id } => {
                 write!(formatter, "combo pair {pair_id} order has zero quantity")
             }
@@ -696,8 +747,8 @@ impl From<ComboBookError> for ComboCommandError {
 
 /// Rejects command shapes M1 combo trading does not support.
 ///
-/// This is deliberately explicit: a market, FOK/FAK, or stop combo request
-/// never degrades into a GFD limit order.
+/// This is deliberately explicit: a market, FOK/FAK, stop, or close-offset
+/// combo request never degrades into an opening GFD limit order.
 pub(crate) fn validate_new_combo_order(command: &Command) -> Result<(), ComboCommandError> {
     if command.price_type != PriceType::Limit {
         return Err(ComboCommandError::UnsupportedPriceType {
@@ -717,6 +768,16 @@ pub(crate) fn validate_new_combo_order(command: &Command) -> Result<(), ComboCom
     if command.trigger_type != TriggerType::None {
         return Err(ComboCommandError::UnsupportedTriggerType {
             trigger_type: command.trigger_type,
+        });
+    }
+    if command.offset != Offset::Open {
+        return Err(ComboCommandError::UnsupportedOffset {
+            offset: command.offset,
+        });
+    }
+    if command.leg2_offset != Offset::Open {
+        return Err(ComboCommandError::UnsupportedOffset {
+            offset: command.leg2_offset,
         });
     }
     if command.quantity == 0 {

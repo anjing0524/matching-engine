@@ -156,7 +156,8 @@ produced. FOK-style all-or-none semantics are M2.
 On commit:
 
 1. remove/decrement both leg orders at their own prices
-2. update leg positions and frozen margin for leg owners
+2. update leg positions and frozen margin for leg owners, and apply the combo
+   owner's position on both leg Contracts
 3. emit ordinary leg fills
 4. emit one combo fill to the combo owner
 5. update combo price statistics
@@ -191,6 +192,19 @@ Contract:
 - combo has no position; positions and margin remain on leg Contracts
 - if either leg cannot reserve margin, the combo order is rejected atomically
 
+Prior settlement is venue state configured on the registry before matching; it
+is not a wire command. A leg without prior settlement freezes zero estimated
+margin, while actual trade-price margin still applies on fill.
+
+The private Combo Fill reports both leg prices. An implied-in fill reports the
+resting leg prices it consumed. A direct Combo Fill consumes no leg liquidity,
+so it reports the best crossing reference price on each leg, falling back to
+prior settlement and then zero; its spread remains the direct execution spread.
+
+Required margin for one account and leg is `max(long, short)` of the actual
+trade-price margin, never their sum. Frozen estimates are reported separately
+and are released as fills consume the order.
+
 Configuration supplies margin rates and limits; M1 does not auto-reload them at
 runtime.
 
@@ -198,7 +212,8 @@ runtime.
 
 - leg owner: ordinary `PrivateEvent` for its leg fill
 - combo owner: `ComboPrivateFill` with spread, leg prices, quantity
-- private sequence is per user and shared across core and combo effects
+- combo private fills carry a registry-owned private sequence; reconnect replay
+  must merge it with core per-contract sequences (#38)
 - snapshot stores combo orders, leg books/positions, margin reservations, and
   sequence state
 - reconnect replays private events after `last_private_seq`; combo effects are
