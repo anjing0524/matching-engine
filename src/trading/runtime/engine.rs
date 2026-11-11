@@ -13,7 +13,6 @@ use crate::trading::gateway::runtime::GatewayRuntime;
 use crate::trading::gateway::server::GatewayServerHandle;
 use crate::trading::market_data::MarketDataPublisher;
 use crate::trading::market_data::metrics::TradingMetrics;
-#[cfg(test)]
 use crate::trading::market_data::repair::RepairServer;
 use crate::trading::runtime::event_fanout::{EventFanout, EventFanoutOptions};
 use crate::trading::transport::result_log::{PrivateResultLog, PublicResultLog};
