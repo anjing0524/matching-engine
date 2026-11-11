@@ -15,6 +15,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+require_test_host() {
+  scripts/check-test-host.sh --strict
+}
+
 category=${1:-all}
 profile_cpus=${PROFILE_CPUS:-0-3}
 core_cpus=${PROFILE_CORE_CPUS:-0}
@@ -40,6 +44,7 @@ run_correctness() {
 }
 
 run_core() {
+  require_test_host
   pin "$core_cpus" env CORE_LATENCY_ITERS="$core_iters" \
     cargo test --release --lib trading::core::kernel::tests::core_latency_profile \
     -- --ignored --nocapture
@@ -50,21 +55,25 @@ run_core() {
 }
 
 run_e2e() {
+  require_test_host
   pin "$profile_cpus" env LATENCY_ITERS="$iters" \
     cargo test --release --test trading_latency_e2e -- --ignored --nocapture
 }
 
 run_remote() {
+  require_test_host
   pin "$profile_cpus" env LATENCY_ITERS="$iters" \
     cargo test --release --test trading_remote_latency -- --ignored --nocapture
 }
 
 run_split() {
+  require_test_host
   pin "$profile_cpus" env LATENCY_ITERS="$iters" \
     cargo test --release --test trading_split_latency -- --ignored --nocapture
 }
 
 run_load() {
+  require_test_host
   pin "$profile_cpus" env LATENCY_MEMBERS="$members" LATENCY_ORDERS="$orders" \
     cargo test --release --test trading_load_latency -- --ignored --nocapture
   pin "$profile_cpus" env LATENCY_MEMBERS="$members" LATENCY_ORDERS="$orders" \

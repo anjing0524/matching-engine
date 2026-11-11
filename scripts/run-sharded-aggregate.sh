@@ -7,6 +7,7 @@
 #   scripts/run-sharded-aggregate.sh 2 50000 32
 set -euo pipefail
 cd "$(dirname "$0")/.."
+scripts/check-test-host.sh --strict
 
 shards=${1:-2}
 orders=${2:-50000}

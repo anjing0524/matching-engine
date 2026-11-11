@@ -9,6 +9,7 @@
 #   scripts/run-split-aggregate.sh 4 250000 32
 set -euo pipefail
 cd "$(dirname "$0")/.."
+scripts/check-test-host.sh --strict
 
 members=${1:-2}
 orders=${2:-250000}
