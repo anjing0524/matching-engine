@@ -284,7 +284,7 @@ impl GatewayRuntime {
                 }
                 state.replay = replay;
             }
-            GatewayFrame::Command(mut command) => {
+            GatewayFrame::Command(command) => {
                 if let Some((capacity, refill)) = self.rate_limit {
                     let state = self
                         .connections
