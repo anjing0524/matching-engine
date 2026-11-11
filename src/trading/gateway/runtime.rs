@@ -14,6 +14,7 @@ use crate::trading::gateway::private_downlink::PrivateDownlink;
 use crate::trading::gateway::private_replay::ReplayEvent;
 use crate::trading::gateway::rate_limit::TokenBucket;
 use crate::trading::gateway::server::{GatewayEvent, GatewayServerHandle};
+use crate::trading::gateway::session_policy::SessionPolicy;
 use crate::trading::transport::middleware::MiddlewareSequencer;
 use crate::trading::transport::session::SessionInfo;
 use std::sync::mpsc::Receiver;
@@ -67,10 +68,7 @@ pub struct GatewayRuntime {
     downlink: PrivateDownlink,
     replay_pending: U64MixSet,
     redirect_pending: U64MixSet,
-    rate_limit: Option<(f64, f64)>,
-    auth_token: Option<u64>,
-    credentials: Option<GatewayCredentials>,
-    redirect_target: Option<String>,
+    policy: SessionPolicy,
     errors: u64,
 }
 
@@ -93,10 +91,7 @@ impl GatewayRuntime {
             downlink: PrivateDownlink::new(replay_capacity),
             replay_pending: U64MixSet::default(),
             redirect_pending: U64MixSet::default(),
-            rate_limit: None,
-            auth_token: None,
-            credentials: None,
-            redirect_target: None,
+            policy: SessionPolicy::default(),
             errors: 0,
         }
     }
@@ -104,28 +99,28 @@ impl GatewayRuntime {
     /// Requires every login to carry the given shared token.
     #[must_use]
     pub fn with_auth_token(mut self, token: u64) -> Self {
-        self.auth_token = Some(token);
+        self.policy = self.policy.with_auth_token(token);
         self
     }
 
     /// Requires a per-member token; unknown members are rejected.
     #[must_use]
     pub fn with_credentials(mut self, credentials: GatewayCredentials) -> Self {
-        self.credentials = Some(credentials);
+        self.policy = self.policy.with_credentials(credentials);
         self
     }
 
     /// Sets the address sent to clients displaced by a newer login.
     #[must_use]
     pub fn with_redirect_target(mut self, target: String) -> Self {
-        self.redirect_target = Some(target);
+        self.policy = self.policy.with_redirect_target(target);
         self
     }
 
     /// Enables a per-connection token bucket for command frames.
     #[must_use]
     pub fn with_rate_limit(mut self, capacity: f64, refill_per_sec: f64) -> Self {
-        self.rate_limit = Some((capacity, refill_per_sec));
+        self.policy = self.policy.with_rate_limit(capacity, refill_per_sec);
         self
     }
 
@@ -238,13 +233,7 @@ impl GatewayRuntime {
                 last_private_seq,
                 auth_token,
             } => {
-                let token_ok = if let Some(credentials) = &self.credentials {
-                    credentials.verify_login(member_id, auth_token, seat_id)
-                } else {
-                    self.auth_token
-                        .is_none_or(|expected| expected == auth_token)
-                };
-                if !token_ok {
+                if !self.policy.login_allowed(member_id, seat_id, auth_token) {
                     self.errors += 1;
                     return;
                 }
@@ -265,12 +254,12 @@ impl GatewayRuntime {
                     }
                 };
                 if let Some(old) = replaced
-                    && let Some(target) = &self.redirect_target
+                    && let Some(target) = self.policy.redirect_target()
                 {
                     self.connections
                         .entry(old)
                         .or_insert_with(ConnectionState::new)
-                        .redirect = Some(target.clone());
+                        .redirect = Some(target.to_string());
                     self.redirect_pending.insert(old);
                 }
                 let user_id = u64::from(user_id);
@@ -285,7 +274,7 @@ impl GatewayRuntime {
                 state.replay = replay;
             }
             GatewayFrame::Command(command) => {
-                if let Some((capacity, refill)) = self.rate_limit {
+                if let Some((capacity, refill)) = self.policy.rate_limit() {
                     let state = self
                         .connections
                         .entry(connection_id)
@@ -354,7 +343,7 @@ impl GatewayRuntime {
     pub fn drain_gateway(&mut self, gateway_id: u32) -> Vec<u64> {
         let drained = self.middleware.sessions_mut().drain_gateway(gateway_id);
         for connection_id in &drained {
-            let redirect = self.redirect_target.clone();
+            let redirect = self.policy.redirect_target().map(str::to_string);
             let mut state = ConnectionState::new();
             state.redirect = redirect;
             self.connections.insert(*connection_id, state);
