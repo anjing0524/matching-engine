@@ -3,7 +3,7 @@
 //! Connects one member per TCP connection, keeps multiple commands in flight,
 //! and reports aggregate throughput and private-response latency.
 
-use std::io::{ErrorKind, Read, Write};
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
