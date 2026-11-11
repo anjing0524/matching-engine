@@ -11,6 +11,9 @@
 use crate::domain::orderbook::ContractSpec;
 use crate::shared::SymbolId;
 use crate::shared::collections::identity::U64MixMap;
+use crate::trading::core::combo_book::{
+    ComboBook, ComboCommandError, ComboEvent, ComboOrder, ComboOrderOwner, validate_new_combo_order,
+};
 use crate::trading::core::combo_pair::{ComboLeg, ComboPair, ComboPairError};
 use crate::trading::core::kernel::{CoreEvent, TradingCore};
 use crate::trading::core::plugins::{NoPlugins, PreTradePlugin};
@@ -65,16 +68,17 @@ impl Display for RegistryError {
 
 impl Error for RegistryError {}
 
-/// Owns one ordinary Contract core per instrument id and the static Combo
-/// Pairs that trade them.
+/// Owns one ordinary Contract core per instrument id, the static Combo Pairs,
+/// and one base Combo Order book per pair.
 ///
 /// Register instruments and pairs before matching starts; the registry is
 /// static for the lifetime of a trading day. Commands are routed by
 /// [`Command::instrument_id`] and rejected when that id is unknown.
-#[derive(Default)]
 pub struct InstrumentRegistry {
     instruments: U64MixMap<TradingCore>,
     pairs: U64MixMap<ComboPair>,
+    combo_books: U64MixMap<ComboBook>,
+    next_combo_order_id: u64,
 }
 
 impl InstrumentRegistry {
@@ -84,6 +88,8 @@ impl InstrumentRegistry {
         Self {
             instruments: U64MixMap::default(),
             pairs: U64MixMap::default(),
+            combo_books: U64MixMap::default(),
+            next_combo_order_id: 1,
         }
     }
 
@@ -125,7 +131,9 @@ impl InstrumentRegistry {
             });
         }
         validate_pair(&self.instruments, &pair)?;
-        self.pairs.insert(u64::from(pair.pair_id), pair);
+        let key = u64::from(pair.pair_id);
+        self.pairs.insert(key, pair);
+        self.combo_books.insert(key, ComboBook::new(pair.pair_id));
         Ok(())
     }
 
@@ -150,6 +158,89 @@ impl InstrumentRegistry {
     /// Iterates over registered Combo Pairs in unspecified order.
     pub fn pairs(&self) -> impl Iterator<Item = &ComboPair> {
         self.pairs.values()
+    }
+
+    /// Returns the base Combo Order book for `pair_id`.
+    ///
+    /// The book is a combo-only interface: ordinary Contract books never expose
+    /// combo spreads or quantities.
+    #[must_use]
+    pub fn combo_book(&self, pair_id: u32) -> Option<&ComboBook> {
+        self.combo_books.get(&u64::from(pair_id))
+    }
+
+    /// Returns the base Combo Order book for `pair_id` for state inspection or
+    /// restore.
+    pub fn combo_book_mut(&mut self, pair_id: u32) -> Option<&mut ComboBook> {
+        self.combo_books.get_mut(&u64::from(pair_id))
+    }
+
+    /// Executes one Combo Order command against its pair book.
+    ///
+    /// This is the command translation seam. It accepts only M1 base combo
+    /// semantics: spread limit GFD new orders and cancels. Market, FOK/FAK,
+    /// stop-trigger, zero-quantity, unknown-pair, and duplicate-cancel requests
+    /// fail explicitly without mutating a book. Matching and implied-order
+    /// insertion are intentionally absent.
+    ///
+    /// # Errors
+    /// Returns [`ComboCommandError`] when the command names an unknown pair,
+    /// uses unsupported order semantics, or cancels a non-resting order.
+    pub fn execute_combo(
+        &mut self,
+        command: Command,
+    ) -> Result<Vec<ComboEvent>, ComboCommandError> {
+        match command.command_type {
+            CommandType::NewOrder => self.rest_combo_order(command),
+            CommandType::Cancel => self.cancel_combo_order(command),
+            command_type => Err(ComboCommandError::UnsupportedCommandType { command_type }),
+        }
+    }
+
+    fn rest_combo_order(&mut self, command: Command) -> Result<Vec<ComboEvent>, ComboCommandError> {
+        let pair_id = command.combo_id;
+        if !self.combo_books.contains_key(&u64::from(pair_id)) {
+            return Err(ComboCommandError::UnknownPair { pair_id });
+        }
+        validate_new_combo_order(&command)?;
+
+        let order_id = self.next_combo_order_id;
+        let owner = ComboOrderOwner::new(
+            u64::from(command.user_id),
+            command.session_id,
+            command.client_order_id,
+        );
+        let order = ComboOrder::new(
+            order_id,
+            pair_id,
+            owner,
+            command.side,
+            command.price_ticks,
+            command.quantity,
+        );
+        let book = self
+            .combo_books
+            .get_mut(&u64::from(pair_id))
+            .ok_or(ComboCommandError::UnknownPair { pair_id })?;
+        let order = book.rest(order)?;
+        self.next_combo_order_id = self.next_combo_order_id.saturating_add(1);
+        Ok(vec![ComboEvent::Rested { order }])
+    }
+
+    fn cancel_combo_order(
+        &mut self,
+        command: Command,
+    ) -> Result<Vec<ComboEvent>, ComboCommandError> {
+        let pair_id = command.combo_id;
+        if command.cancel_order_id == 0 {
+            return Err(ComboCommandError::MissingCancelOrderId);
+        }
+        let book = self
+            .combo_books
+            .get_mut(&u64::from(pair_id))
+            .ok_or(ComboCommandError::UnknownPair { pair_id })?;
+        let order = book.cancel_for(u64::from(command.user_id), command.cancel_order_id)?;
+        Ok(vec![ComboEvent::Canceled { order }])
     }
 
     /// Returns the number of registered instruments.
@@ -246,6 +337,12 @@ impl InstrumentRegistry {
 }
 
 const MAX_MARGIN_RATE_BPS: u64 = 10_000;
+
+impl Default for InstrumentRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 fn validate_pair(
     instruments: &U64MixMap<TradingCore>,
