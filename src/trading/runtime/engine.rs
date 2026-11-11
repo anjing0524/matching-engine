@@ -200,7 +200,7 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
                     .map(crate::trading::combo::engine::ComboFillEvent::private_fill),
             );
             self.metrics.private_events_sent += (command_events + fill_events) as u64;
-            self.metrics.combo_queue_orders = combo.engine().queue_len() as u64;
+            self.metrics.combo_queue_orders = combo.queue_len() as u64;
         }
         let repaired = self.fanout.poll_repair();
         self.metrics.repair_events_sent += repaired;
@@ -1004,12 +1004,12 @@ mod tests {
         cancel.combo_id = 7;
         cancel.cancel_order_id = 42;
         assert!(runtime.combo_mut().unwrap().submit_command(&cancel));
-        assert_eq!(runtime.combo_mut().unwrap().engine().queue_len(), 0);
+        assert_eq!(runtime.combo_mut().unwrap().queue_len(), 0);
 
         let json = serde_json::to_string(&snapshot).unwrap();
         let snapshot: TradingSnapshot = serde_json::from_str(&json).unwrap();
         runtime.restore_snapshot(snapshot).unwrap();
-        assert_eq!(runtime.combo_mut().unwrap().engine().queue_len(), 1);
+        assert_eq!(runtime.combo_mut().unwrap().queue_len(), 1);
         let _ = std::fs::remove_file(&core_path);
         let _ = std::fs::remove_file(&combo_path);
     }
