@@ -25,7 +25,9 @@ use crate::trading::core::leg_liquidity::{
     ComboLegError, ComboLegExecution, LegExecutionContext, LegLiquidityError, LegLiquidityPlan,
 };
 use crate::trading::core::plugins::{NoPlugins, PreTradePlugin};
+use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::core::protocol::{Command, CommandType, Side};
+use crate::trading::core::public_events::PublicEvent;
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
@@ -346,6 +348,7 @@ pub struct InstrumentRegistry {
     combo_books: U64MixMap<ComboBook>,
     prior_settlements: U64MixMap<u64>,
     margin_balances: U64MixMap<u64>,
+    require_explicit_margin: bool,
     margin: ComboMarginLedger,
     combo_private_events: Vec<ComboPrivateFill>,
     next_combo_order_id: u64,
@@ -362,6 +365,7 @@ impl InstrumentRegistry {
             combo_books: U64MixMap::default(),
             prior_settlements: U64MixMap::default(),
             margin_balances: U64MixMap::default(),
+            require_explicit_margin: false,
             margin: ComboMarginLedger::default(),
             combo_private_events: Vec::new(),
             next_combo_order_id: 1,
@@ -461,6 +465,28 @@ impl InstrumentRegistry {
         self.margin_balances.get(&account_id).copied()
     }
 
+    /// Requires every Combo Order account to have an explicit margin balance.
+    ///
+    /// The default is `false`, which preserves the registry's standalone
+    /// behavior: an account without a configured balance is not limited.
+    /// Production runtimes set this when a Combo Pair is configured, so an
+    /// unconfigured account is rejected at entry instead of trading unlimited.
+    pub fn set_require_explicit_margin(&mut self, required: bool) {
+        self.require_explicit_margin = required;
+    }
+
+    /// Returns true when Combo Order entry requires an explicit balance.
+    #[must_use]
+    pub fn requires_explicit_margin(&self) -> bool {
+        self.require_explicit_margin
+    }
+
+    /// Returns the exchange id the next accepted Combo Order will receive.
+    #[must_use]
+    pub fn next_combo_order_id(&self) -> u64 {
+        self.next_combo_order_id
+    }
+
     /// Returns the account's remaining margin after frozen estimates and
     /// single-side-largest actual margin.
     ///
@@ -542,6 +568,45 @@ impl InstrumentRegistry {
     #[must_use]
     pub fn next_combo_private_seq(&self) -> u64 {
         self.next_combo_private_seq
+    }
+
+    /// Drains ordinary private events from every Contract core.
+    ///
+    /// Cores are visited in ascending instrument id order so a command stream
+    /// that touches more than one leg produces the same private event order on
+    /// every run.
+    pub fn drain_private_events(&mut self) -> Vec<PrivateEvent> {
+        let mut events = Vec::new();
+        for instrument_id in self.sorted_instrument_ids() {
+            if let Some(core) = self.instruments.get_mut(&u64::from(instrument_id)) {
+                events.extend(core.drain_private_events());
+            }
+        }
+        events
+    }
+
+    /// Drains ordinary public events from every Contract core.
+    ///
+    /// Cores are visited in ascending instrument id order for deterministic
+    /// fan-out.
+    pub fn drain_public_events(&mut self) -> Vec<PublicEvent> {
+        let mut events = Vec::new();
+        for instrument_id in self.sorted_instrument_ids() {
+            if let Some(core) = self.instruments.get_mut(&u64::from(instrument_id)) {
+                events.extend(core.drain_public_events());
+            }
+        }
+        events
+    }
+
+    fn sorted_instrument_ids(&self) -> Vec<u32> {
+        let mut instrument_ids: Vec<u32> = self
+            .instruments
+            .keys()
+            .map(|instrument_id| *instrument_id as u32)
+            .collect();
+        instrument_ids.sort_unstable();
+        instrument_ids
     }
 
     /// Replays buffered Combo Private Fills after `last_private_seq`.
@@ -1129,6 +1194,12 @@ impl InstrumentRegistry {
     ) -> Result<(), ComboMarginError> {
         let leg1_prior_settlement = self.prior_settlement(pair.leg1_instrument_id).unwrap_or(0);
         let leg2_prior_settlement = self.prior_settlement(pair.leg2_instrument_id).unwrap_or(0);
+        let balance = self.margin_balance(order.owner.user_id);
+        if balance.is_none() && self.require_explicit_margin {
+            return Err(ComboMarginError::MissingMarginBalance {
+                account_id: order.owner.user_id,
+            });
+        }
         self.margin.try_freeze(
             pair,
             ComboEntryMargin {
@@ -1137,7 +1208,7 @@ impl InstrumentRegistry {
                 quantity: order.quantity,
                 leg1_prior_settlement,
                 leg2_prior_settlement,
-                balance: self.margin_balance(order.owner.user_id),
+                balance,
             },
         )?;
         Ok(())
@@ -1350,6 +1421,23 @@ impl InstrumentRegistry {
         Ok(events)
     }
 
+    /// Executes a command through the default plugin chain, discarding its
+    /// projected `CoreEvent`s.
+    ///
+    /// Private and public events are still recorded in the owning Contract
+    /// cores, so the caller drains them exactly as with the projecting variant.
+    ///
+    /// # Errors
+    /// Returns [`RegistryError::UnknownInstrument`] when an order or cancel
+    /// names an unregistered instrument.
+    pub fn execute_with_plugins_discard<P: PreTradePlugin>(
+        &mut self,
+        command: Command,
+        plugin: &P,
+    ) -> Result<(), RegistryError> {
+        self.execute_with_plugins_into(command, plugin, &mut DiscardEvents)
+    }
+
     /// Routes a command and appends its events into `out`.
     ///
     /// New orders and cancels require a registered instrument. Timing and
@@ -1419,6 +1507,14 @@ fn spread_within_limit(taker_side: Side, limit: i64, realized: i64) -> bool {
     match taker_side {
         Side::Buy => realized <= limit,
         Side::Sell => realized >= limit,
+    }
+}
+
+struct DiscardEvents;
+
+impl Extend<CoreEvent> for DiscardEvents {
+    fn extend<T: IntoIterator<Item = CoreEvent>>(&mut self, iter: T) {
+        for _ in iter {}
     }
 }
 

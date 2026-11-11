@@ -13,19 +13,22 @@ GatewayRuntime ── session/auth/rate limit/reconnect replay
   │  Command (256B), globally sequenced by MiddlewareSequencer
   ▼
 shared-memory command ring
-  │
-  ▼
-CoreRunner → TradingCore
-  │  private/public events
-  ▼
+  │  combo_id == 0                    combo_id != 0
+  ▼                                      ▼
+RegistryRunner ────────────────► InstrumentRegistry
+  │  ordinary Contract cores      │  Combo Pair books + shared leg books
+  ▼                               ▼
 TradingRuntime
-  ├─ GatewayRuntime private downlink
+  ├─ GatewayRuntime private downlink（core + combo 统一 private_seq）
   ├─ EventFanout: result logs, repair, market data
-  └─ ComboRuntime (optional)
+  └─ legacy ComboRuntime（仅兼容/测试，生产单进程不构造）
 ```
 
+单进程 `trading` 二进制始终使用 `RegistryRunner`；`CoreRunner → TradingCore`
+仅保留给 split deployment（ADR-0001）和测试。
+
 - `domain`: tick 价格订单簿，无 I/O。
-- `trading::core`: 确定性业务状态机；订单、持仓、冻结、竞价、组合队列。
+- `trading::core`: 确定性业务状态机；订单、持仓、冻结、竞价、registry 组合簿与腿级保证金。
 - `trading::gateway_*`: 会员连接、认证、session、限速、private replay。
 - `trading::transport::middleware` / `transport`: 全局序号与共享内存 ring。
 - `trading::runtime::event_fanout`: result log、repair、market data、计数。

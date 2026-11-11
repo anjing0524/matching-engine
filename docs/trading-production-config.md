@@ -31,6 +31,30 @@ Run the example:
 cargo run --example trading_production_config
 ```
 
+## Combo venue configuration
+
+The single-process `trading` binary always uses the registry runtime. Combo
+trading is enabled by `--combo-config <json>`; without it the registry contains
+the default single `BTCUSDT` Contract and any non-zero `combo_id` is rejected as
+an unknown pair rather than silently treated as an ordinary order.
+
+`ComboVenueConfig` declares ordinary Contracts, static Combo Pairs, prior
+settlements, and explicit account margin balances. See
+[`deploy/combo-venue.example.json`](../deploy/combo-venue.example.json).
+
+Fail-closed rules:
+
+- a config with Combo Pairs and no margin balances is rejected at startup;
+- every account that submits a Combo Order must have an explicit balance;
+  an unconfigured account is rejected at entry instead of trading unlimited;
+- a registry snapshot restore also enables this rule when the restored venue
+  contains pairs, because balances are configuration, not snapshot state.
+
+`--registry-snapshot <path>` restores registry-backed combo state directly.
+`--snapshot <path>` restores a full `TradingSnapshot`; the registry shape and
+the runtime command path must match. `--snapshot-out <path>` writes the full
+runtime snapshot on exit.
+
 ## Deployment notes
 
 - `gateway`: owns member TCP sessions, authentication, seat mapping, rate limits.

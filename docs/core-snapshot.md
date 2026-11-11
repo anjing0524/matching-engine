@@ -35,6 +35,24 @@ order metadata/positions/frozen reservations and auction staging, and clears
 ephemeral event buffers. The rebuilt snapshot compares equal to the captured
 snapshot in tests.
 
+## Runtime snapshot shapes
+
+`TradingRuntime::snapshot()` writes a versioned `TradingSnapshot` with two
+mutually exclusive shapes:
+
+- legacy/core runtime: `core = Some(CoreSnapshot)` and optional `combo`
+  (`ComboEngineSnapshot`)
+- production single-process registry runtime: `registry =
+  Some(RegistrySnapshot)`, with `core = None` and `combo = None`
+
+`TradingRuntime::restore_snapshot()` rejects a snapshot whose shape does not
+match the runtime command path, so a restore cannot silently mix the legacy
+single-core path with registry-backed combo state. The runtime snapshot schema
+version is 5; older snapshots must be regenerated or replayed from the command
+log. A registry restore also enables fail-closed combo margin: a restored venue
+with Combo Pairs requires explicit account balances because balances are venue
+configuration and are not part of `RegistrySnapshot`.
+
 ## Registry-backed combo snapshots
 
 `InstrumentRegistry::snapshot()` captures the M1 registry seam as one

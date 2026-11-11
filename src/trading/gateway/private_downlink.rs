@@ -2,7 +2,7 @@
 //! batched frame delivery for core and combo private events.
 
 use crate::shared::collections::U64MixMap;
-use crate::trading::combo::engine::ComboPrivateFill;
+use crate::trading::core::combo_book::ComboPrivateFill;
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::gateway::frame::GatewayFrame;
 use crate::trading::gateway::private_replay::{

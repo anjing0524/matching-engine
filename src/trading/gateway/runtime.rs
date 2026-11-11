@@ -5,7 +5,7 @@
 //! ring. Private downlink is a later slice.
 
 use crate::shared::collections::{U64MixMap, U64MixSet};
-use crate::trading::combo::engine::ComboPrivateFill;
+use crate::trading::core::combo_book::ComboPrivateFill;
 #[cfg(test)]
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::gateway::GatewayFrame;
@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn combo_private_fill_routes_to_logged_in_gateway() {
-        use crate::trading::combo::engine::ComboPrivateFill;
+        use crate::trading::core::combo_book::ComboPrivateFill;
         use crate::trading::core::protocol::Side;
         use std::io::Read;
 
@@ -508,13 +508,16 @@ mod tests {
         }
         let fill = ComboPrivateFill {
             seq: 1,
+            pair_id: 10,
             order_id: 2,
+            client_order_id: 20,
             user_id: 2,
+            session_id: 1,
             side: Side::Buy,
             quantity: 5,
-            leg1_price: 50_000,
-            leg2_price: 100,
-            spread_ticks: 49_900,
+            spread_price: 49_900,
+            leg1_price_ticks: 50_000,
+            leg2_price_ticks: 100,
         };
         assert_eq!(runtime.dispatch_combo_private(&server, [fill]), 1);
         let mut frame = [0u8; crate::trading::gateway::GATEWAY_FRAME_SIZE];
@@ -529,7 +532,7 @@ mod tests {
 
     #[test]
     fn apply_effects_replays_core_and_combo_in_order() {
-        use crate::trading::combo::engine::ComboPrivateFill;
+        use crate::trading::core::combo_book::ComboPrivateFill;
         use crate::trading::gateway::private_replay::ReplayEvent;
 
         let path = std::env::temp_dir().join(format!(
@@ -579,13 +582,16 @@ mod tests {
         };
         let combo = ComboPrivateFill {
             seq: 2,
+            pair_id: 10,
             order_id: 2,
+            client_order_id: 20,
             user_id: 2,
+            session_id: 1,
             side: Side::Buy,
             quantity: 1,
-            leg1_price: 50_000,
-            leg2_price: 100,
-            spread_ticks: 49_900,
+            spread_price: 49_900,
+            leg1_price_ticks: 50_000,
+            leg2_price_ticks: 100,
         };
         let state = runtime.connections.get_mut(&1).unwrap();
         state.replay = vec![ReplayEvent::Core(core), ReplayEvent::Combo(combo)];
@@ -1124,7 +1130,7 @@ mod tests {
 
     #[test]
     fn replay_merges_core_and_combo_sequences() {
-        use crate::trading::combo::engine::ComboPrivateFill;
+        use crate::trading::core::combo_book::ComboPrivateFill;
         use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
         use crate::trading::core::protocol::Side;
         use crate::trading::gateway::private_replay::ReplayEvent;
@@ -1175,13 +1181,16 @@ mod tests {
         };
         let combo = ComboPrivateFill {
             seq: 99,
+            pair_id: 10,
             order_id: 2,
+            client_order_id: 20,
             user_id: 2,
+            session_id: 1,
             side: Side::Buy,
             quantity: 1,
-            leg1_price: 50_000,
-            leg2_price: 100,
-            spread_ticks: 49_900,
+            spread_price: 49_900,
+            leg1_price_ticks: 50_000,
+            leg2_price_ticks: 100,
         };
         assert_eq!(runtime.dispatch_private(&server, [core]), 1);
         assert_eq!(runtime.dispatch_combo_private(&server, [combo]), 1);
