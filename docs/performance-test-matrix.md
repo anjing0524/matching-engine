@@ -336,6 +336,31 @@ aggregate measurements. The core private-id test (100k orders) passes.
 
 No reliable 1M aggregate conclusion is available yet.
 
+### buy-only protocol-correct workload
+
+To remove private-event multiplicity, the load client gained `--buy-only`:
+every command rests and emits exactly one private Accepted/Rejected event.
+
+Clean 4C/8T runs, direct middleware + core:
+
+```text
+1 member, in-flight=1:  rate=24375/s p50=16.76µs p99=39.52µs
+1 member, in-flight=32: rate=48740/s p50=264.41µs p99=351.67µs
+2 members, in-flight=32:rate=48742/s p50=518.50µs p99=3342.39µs
+```
+
+The 2-member run does not increase aggregate throughput beyond one member.
+Allocating middleware two CPUs did not change it:
+
+```text
+2 members, in-flight=32, middleware CPUs 0-1, core CPU2: rate=48741/s
+```
+
+This is now a clean, protocol-correct ingress/core observation. The plateau is in
+the gateway/middleware path, not in private-event correlation or the load
+generator. It is still far below 1M/s, but it is one middleware process on 4C/8T,
+not a multi-gateway deployment.
+
 ## Next measurement
 
 Use an independent load-generator host/process and per-process CPU affinity:
