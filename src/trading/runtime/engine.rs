@@ -135,19 +135,15 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         if idle_timeout.is_some() {
             self.last_expire = Instant::now();
         }
-        let commands = self.core.poll();
-        self.metrics.commands_executed += commands as u64;
-        self.core
-            .core_mut()
-            .drain_private_events_into(&mut self.private_events);
+        let events = self.core.poll_events();
+        self.metrics.commands_executed += events.commands as u64;
+        self.private_events.extend(events.private);
+        self.public_events.extend(events.public);
         self.fanout.emit(&self.private_events, &[]);
         let sent = self
             .gateway
             .dispatch_private(&self.server, self.private_events.drain(..));
         self.metrics.private_events_sent += sent as u64;
-        self.core
-            .core_mut()
-            .drain_public_events_into(&mut self.public_events);
         let public_sent = self.fanout.emit(&[], &self.public_events);
         self.metrics.public_events_sent += public_sent;
         if let Some(combo) = &mut self.combo {
@@ -206,7 +202,7 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         if self.gateway.session_counts().0 > 0 {
             return Err("cannot restore a snapshot while sessions are active".to_string());
         }
-        self.core.core_mut().restore_snapshot(snapshot.core)?;
+        self.core.restore_snapshot(snapshot.core)?;
         match (self.combo.as_mut(), snapshot.combo) {
             (Some(combo), Some(combo_snapshot)) => combo.restore_snapshot(combo_snapshot),
             (None, None) => Ok(()),
