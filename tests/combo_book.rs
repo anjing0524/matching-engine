@@ -26,6 +26,8 @@ fn registry_with_pair() -> InstrumentRegistry {
             ComboPairMargin::new(300, 1_200, 1_000),
         ))
         .unwrap();
+    registry.set_prior_settlement(1, 50_000).unwrap();
+    registry.set_prior_settlement(2, 45_000).unwrap();
     registry
 }
 
@@ -67,6 +69,7 @@ fn cancel_order(order_id: u64, user_id: u32) -> Command {
 fn registry_with_two_pairs() -> InstrumentRegistry {
     let mut registry = registry_with_pair();
     registry.register(3, spec("IC2501")).unwrap();
+    registry.set_prior_settlement(3, 50_000).unwrap();
     registry
         .register_pair(ComboPair::new(
             20,
@@ -411,4 +414,24 @@ fn cancel_by_another_owner_is_rejected_without_mutating_book() {
         ComboCommandError::Book(ComboBookError::NotOrderOwner { .. })
     ));
     assert!(registry.combo_book(10).unwrap().order(order_id).is_some());
+}
+
+#[test]
+fn combo_new_order_is_rejected_outside_continuous_trading() {
+    use trading_system_engine::trading::core::public_events::TradingPhase;
+    let mut registry = registry_with_pair();
+    registry
+        .core_mut(1)
+        .unwrap()
+        .set_phase(TradingPhase::Break, 1);
+    let error = registry
+        .execute_combo(combo_order(990, 1, 11, Side::Buy, 10, 5))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ComboCommandError::OutsideContinuousTrading {
+            phase: TradingPhase::Break
+        }
+    ));
+    assert_eq!(registry.combo_book(10).unwrap().len(), 0);
 }

@@ -26,6 +26,8 @@ fn registry_with_pair() -> InstrumentRegistry {
             ComboPairMargin::new(300, 1_200, 1_000),
         ))
         .unwrap();
+    registry.set_prior_settlement(1, 50_000).unwrap();
+    registry.set_prior_settlement(2, 45_000).unwrap();
     registry
 }
 

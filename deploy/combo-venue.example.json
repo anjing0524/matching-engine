@@ -21,6 +21,7 @@
       "leg1_instrument_id": 1,
       "leg2_instrument_id": 2,
       "spread_tick": 1,
+      "kind": "cross_term",
       "margin": {
         "multiplier": 300,
         "leg1_rate_bps": 1200,

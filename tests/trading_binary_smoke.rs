@@ -138,7 +138,7 @@ fn trading_binary_combo_config_completes_combo_trade() {
     {"instrument_id": 2, "symbol": "IF2502", "tick_size": 1, "min_price": 30000, "max_price": 70000}
   ],
   "pairs": [
-    {"pair_id": 10, "leg1_instrument_id": 1, "leg2_instrument_id": 2, "spread_tick": 1,
+    {"pair_id": 10, "leg1_instrument_id": 1, "leg2_instrument_id": 2, "kind": "cross_term", "spread_tick": 1,
      "margin": {"multiplier": 300, "leg1_rate_bps": 1200, "leg2_rate_bps": 1000}}
   ],
   "prior_settlements": [
@@ -272,7 +272,7 @@ fn trading_binary_rejects_combo_config_without_margin_balances() {
     {"instrument_id": 2, "symbol": "IF2502", "tick_size": 1, "min_price": 30000, "max_price": 70000}
   ],
   "pairs": [
-    {"pair_id": 10, "leg1_instrument_id": 1, "leg2_instrument_id": 2, "spread_tick": 1,
+    {"pair_id": 10, "leg1_instrument_id": 1, "leg2_instrument_id": 2, "kind": "cross_term", "spread_tick": 1,
      "margin": {"multiplier": 300, "leg1_rate_bps": 1200, "leg2_rate_bps": 1000}}
   ],
   "margin_balances": []
@@ -322,7 +322,7 @@ fn trading_binary_resting_combo_fills_when_a_leg_order_arrives() {
     {"instrument_id": 2, "symbol": "IF2502", "tick_size": 1, "min_price": 30000, "max_price": 70000}
   ],
   "pairs": [
-    {"pair_id": 10, "leg1_instrument_id": 1, "leg2_instrument_id": 2, "spread_tick": 1,
+    {"pair_id": 10, "leg1_instrument_id": 1, "leg2_instrument_id": 2, "kind": "cross_term", "spread_tick": 1,
      "margin": {"multiplier": 300, "leg1_rate_bps": 1200, "leg2_rate_bps": 1000}}
   ],
   "prior_settlements": [

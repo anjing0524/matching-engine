@@ -1011,6 +1011,15 @@ impl InstrumentRegistry {
     }
 
     fn rest_combo_order(&mut self, command: Command) -> Result<Vec<ComboEvent>, ComboCommandError> {
+        let phase = self
+            .instruments
+            .values()
+            .next()
+            .map(TradingCore::phase)
+            .unwrap_or(crate::trading::core::public_events::TradingPhase::Continuous);
+        if phase != crate::trading::core::public_events::TradingPhase::Continuous {
+            return Err(ComboCommandError::OutsideContinuousTrading { phase });
+        }
         let pair_id = command.combo_id;
         let Some(pair) = self.pairs.get(&u64::from(pair_id)).copied() else {
             return Err(ComboCommandError::UnknownPair { pair_id });
@@ -1295,8 +1304,16 @@ impl InstrumentRegistry {
         pair: &ComboPair,
         order: &ComboOrder,
     ) -> Result<(), ComboMarginError> {
-        let leg1_prior_settlement = self.prior_settlement(pair.leg1_instrument_id).unwrap_or(0);
-        let leg2_prior_settlement = self.prior_settlement(pair.leg2_instrument_id).unwrap_or(0);
+        let leg1_prior_settlement = self.prior_settlement(pair.leg1_instrument_id).ok_or(
+            ComboMarginError::MissingPriorSettlement {
+                instrument_id: pair.leg1_instrument_id,
+            },
+        )?;
+        let leg2_prior_settlement = self.prior_settlement(pair.leg2_instrument_id).ok_or(
+            ComboMarginError::MissingPriorSettlement {
+                instrument_id: pair.leg2_instrument_id,
+            },
+        )?;
         let balance = self.margin_balance(order.owner.user_id);
         if balance.is_none() && self.require_explicit_margin {
             return Err(ComboMarginError::MissingMarginBalance {

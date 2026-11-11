@@ -20,7 +20,7 @@ const VALID_CONFIG: &str = r#"
     {"instrument_id": 2, "symbol": "IF2502", "tick_size": 1, "min_price": 30000, "max_price": 70000}
   ],
   "pairs": [
-    {"pair_id": 10, "leg1_instrument_id": 1, "leg2_instrument_id": 2, "spread_tick": 1,
+    {"pair_id": 10, "leg1_instrument_id": 1, "leg2_instrument_id": 2, "kind": "cross_term", "spread_tick": 1,
      "margin": {"multiplier": 300, "leg1_rate_bps": 1200, "leg2_rate_bps": 1000}}
   ],
   "prior_settlements": [

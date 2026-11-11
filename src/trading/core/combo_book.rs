@@ -920,6 +920,11 @@ pub enum ComboCommandError {
         /// Rejected command type.
         command_type: CommandType,
     },
+    /// Combo orders are only accepted in continuous trading.
+    OutsideContinuousTrading {
+        /// Current venue phase.
+        phase: crate::trading::core::public_events::TradingPhase,
+    },
     /// M1 combo orders are limit orders only.
     UnsupportedPriceType {
         /// Rejected price type.
@@ -966,6 +971,12 @@ impl Display for ComboCommandError {
             }
             Self::UnsupportedCommandType { command_type } => {
                 write!(formatter, "unsupported combo command type {command_type:?}")
+            }
+            Self::OutsideContinuousTrading { phase } => {
+                write!(
+                    formatter,
+                    "combo orders are not accepted in phase {phase:?}"
+                )
             }
             Self::UnsupportedPriceType { price_type } => {
                 write!(formatter, "unsupported combo price type {price_type:?}")

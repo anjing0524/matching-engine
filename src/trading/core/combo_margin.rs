@@ -76,6 +76,11 @@ pub enum ComboMarginError {
         /// Owning user account without an explicit balance.
         account_id: u64,
     },
+    /// A leg has no configured prior settlement for the entry estimate.
+    MissingPriorSettlement {
+        /// Leg Contract missing its settlement.
+        instrument_id: u32,
+    },
 }
 
 impl Display for ComboMarginError {
@@ -93,6 +98,10 @@ impl Display for ComboMarginError {
             Self::MissingMarginBalance { account_id } => write!(
                 formatter,
                 "account {account_id} has no explicit combo margin balance"
+            ),
+            Self::MissingPriorSettlement { instrument_id } => write!(
+                formatter,
+                "instrument {instrument_id} has no prior settlement for combo margin"
             ),
         }
     }
