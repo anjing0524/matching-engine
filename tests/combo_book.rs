@@ -129,7 +129,9 @@ fn better_spread_price_wins_before_arrival_time() {
             .execute_combo(combo_order(client_order_id, 1, 11, Side::Buy, price, 5))
             .unwrap();
     }
-    for (client_order_id, price) in [(301, 90), (302, 80), (303, 85)] {
+    // Ask limits stay above the best bid so direct matching leaves both
+    // sides resting for the priority assertions.
+    for (client_order_id, price) in [(301, 125), (302, 130), (303, 120)] {
         registry
             .execute_combo(combo_order(client_order_id, 1, 11, Side::Sell, price, 5))
             .unwrap();
@@ -137,14 +139,14 @@ fn better_spread_price_wins_before_arrival_time() {
 
     let book = registry.combo_book(10).unwrap();
     assert_eq!(book.best_bid(), Some(110));
-    assert_eq!(book.best_ask(), Some(80));
+    assert_eq!(book.best_ask(), Some(120));
     assert_eq!(
         book.best_order(Side::Buy).unwrap().owner.client_order_id,
         202
     );
     assert_eq!(
         book.best_order(Side::Sell).unwrap().owner.client_order_id,
-        302
+        303
     );
 }
 
@@ -234,8 +236,8 @@ fn negative_spread_prices_keep_side_priority() {
     for (client_order_id, side, price) in [
         (601, Side::Buy, -75),
         (602, Side::Buy, -60),
-        (603, Side::Sell, -55),
-        (604, Side::Sell, -80),
+        (603, Side::Sell, -50),
+        (604, Side::Sell, -55),
     ] {
         registry
             .execute_combo(combo_order(client_order_id, 1, 11, side, price, 3))
@@ -244,9 +246,9 @@ fn negative_spread_prices_keep_side_priority() {
 
     let book = registry.combo_book(10).unwrap();
     assert_eq!(book.best_bid(), Some(-60));
-    assert_eq!(book.best_ask(), Some(-80));
+    assert_eq!(book.best_ask(), Some(-55));
     assert_eq!(book.best_order(Side::Buy).unwrap().spread_price, -60);
-    assert_eq!(book.best_order(Side::Sell).unwrap().spread_price, -80);
+    assert_eq!(book.best_order(Side::Sell).unwrap().spread_price, -55);
     assert_eq!(book.order(1).unwrap().spread_price, -75);
 }
 

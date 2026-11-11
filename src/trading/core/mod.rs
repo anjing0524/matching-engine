@@ -13,7 +13,8 @@ pub mod registry;
 pub mod schedule;
 
 pub use self::combo_book::{
-    ComboBook, ComboBookError, ComboCommandError, ComboEvent, ComboOrder, ComboOrderOwner,
+    ComboBook, ComboBookError, ComboCommandError, ComboEvent, ComboFill, ComboOrder,
+    ComboOrderOwner,
 };
 pub use self::combo_pair::{ComboLeg, ComboPair, ComboPairError, ComboPairMargin};
 pub use self::kernel::{CoreEvent, CoreSnapshot, TradingCore};

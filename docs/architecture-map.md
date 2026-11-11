@@ -49,8 +49,11 @@ Key ownership rules:
   close, and auction staging. Combo queue/leg books live in `ComboEngine`. The
   kernel has no sockets or file I/O.
 - `InstrumentRegistry` owns one ordinary Contract core per instrument and one
-  base Combo Book per static Combo Pair. The legacy `ComboEngine` remains a
-  separate runtime path until M1 matching moves onto the registry-backed core.
+  base Combo Book per static Combo Pair. The registry-backed M1 slice covers
+  static pairs, the base combo book, and direct price-time combo matching with
+  the SHFE-style direct trade-price rule. Implied matching, margin, and combo
+  public market data remain later slices; the legacy `ComboEngine` remains a
+  separate runtime path.
 - `CoreRunner` drains commands and calls the kernel. `poll_events()` is the one
   event projection; transport flushing is internal.
 - `GatewayRuntime` owns per-connection state (`ConnectionState`). `PrivateDownlink`

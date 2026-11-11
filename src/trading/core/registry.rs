@@ -177,11 +177,12 @@ impl InstrumentRegistry {
 
     /// Executes one Combo Order command against its pair book.
     ///
-    /// This is the command translation seam. It accepts only M1 base combo
-    /// semantics: spread limit GFD new orders and cancels. Market, FOK/FAK,
-    /// stop-trigger, zero-quantity, unknown-pair, and duplicate-cancel requests
-    /// fail explicitly without mutating a book. Matching and implied-order
-    /// insertion are intentionally absent.
+    /// This is the command translation and direct-matching seam. It accepts
+    /// only M1 base combo semantics: spread limit GFD new orders and cancels.
+    /// Market, FOK/FAK, stop-trigger, zero-quantity, unknown-pair, and
+    /// duplicate-cancel requests fail explicitly without mutating a book. A new
+    /// order matches opposite Combo Orders in price-time priority before its
+    /// residual rests. Implied-order insertion is intentionally absent.
     ///
     /// # Errors
     /// Returns [`ComboCommandError`] when the command names an unknown pair,
@@ -222,9 +223,9 @@ impl InstrumentRegistry {
             .combo_books
             .get_mut(&u64::from(pair_id))
             .ok_or(ComboCommandError::UnknownPair { pair_id })?;
-        let order = book.rest(order)?;
+        let events = book.submit(order)?;
         self.next_combo_order_id = self.next_combo_order_id.saturating_add(1);
-        Ok(vec![ComboEvent::Rested { order }])
+        Ok(events)
     }
 
     fn cancel_combo_order(
