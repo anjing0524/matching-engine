@@ -69,6 +69,9 @@ impl MiddlewareSequencer {
             .get(connection_id)
             .filter(|session| session.active)
             .ok_or(CommandTransportError::Unauthorized)?;
+        if command.member_id != 0 && command.member_id != session.member_id {
+            return Err(CommandTransportError::Unauthorized);
+        }
         command.session_id = connection_id;
         command.member_id = session.member_id;
         self.submit(command)
