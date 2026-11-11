@@ -187,6 +187,21 @@ The multi-gateway identity collision is fixed (unique member offsets). Serial
 scales to ~110k aggregate, but the pipelined client path still collapses. The
 pipeline generator remains the suspect, not the gateway process count.
 
+### direct middleware listener (no gateway proxy)
+
+To isolate the proxy, clients can connect directly to the middleware gateway
+listener while middleware/core are separate processes.
+
+```text
+1 member, in-flight=1:  rate=90762/s p50=3671ns p99=11639ns
+2 members, in-flight=1: rate=47010/s p50=6.4µs p99=41.5µs
+2 members, in-flight=32:rate=42276/s p50=946µs p99=2.85ms
+```
+
+Two members do not scale linearly even without the gateway proxy. The combined
+middleware gateway listener and middleware loop on one CPU is the leading
+suspect; this is not a hardware-count conclusion yet.
+
 ## Next measurement
 
 Use an independent load-generator host/process and per-process CPU affinity:
