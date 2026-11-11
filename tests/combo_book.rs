@@ -55,11 +55,12 @@ fn combo_order(
     command
 }
 
-fn cancel_order(order_id: u64) -> Command {
+fn cancel_order(order_id: u64, user_id: u32) -> Command {
     let mut command = Command::zeroed();
     command.command_type = CommandType::Cancel;
     command.combo_id = 10;
     command.cancel_order_id = order_id;
+    command.user_id = user_id;
     command
 }
 
@@ -110,7 +111,7 @@ fn same_price_orders_keep_time_priority() {
     assert_eq!(book.best_order(Side::Buy).unwrap().order_id, first.order_id);
 
     registry
-        .execute_combo(cancel_order(first.order_id))
+        .execute_combo(cancel_order(first.order_id, 1))
         .unwrap();
     let book = registry.combo_book(10).unwrap();
     assert_eq!(
@@ -170,7 +171,7 @@ fn cancel_removes_the_order_and_preserves_remaining_quantity() {
     );
 
     let canceled = registry
-        .execute_combo(cancel_order(rested.order_id))
+        .execute_combo(cancel_order(rested.order_id, 7))
         .unwrap();
     let canceled = match canceled.as_slice() {
         [ComboEvent::Canceled { order }] => *order,
@@ -195,13 +196,13 @@ fn cancel_removes_only_the_targeted_price_level() {
             .unwrap();
     }
 
-    registry.execute_combo(cancel_order(1)).unwrap();
+    registry.execute_combo(cancel_order(1, 1)).unwrap();
     let book = registry.combo_book(10).unwrap();
     assert_eq!(book.len(), 1);
     assert_eq!(book.best_bid(), Some(110));
     assert_eq!(book.best_order(Side::Buy).unwrap().order_id, 2);
 
-    registry.execute_combo(cancel_order(2)).unwrap();
+    registry.execute_combo(cancel_order(2, 1)).unwrap();
     assert!(registry.combo_book(10).unwrap().is_empty());
 }
 
@@ -216,8 +217,10 @@ fn duplicate_cancel_is_rejected_without_mutating_the_book() {
         other => panic!("expected one rested order, got {other:?}"),
     };
 
-    registry.execute_combo(cancel_order(order_id)).unwrap();
-    let error = registry.execute_combo(cancel_order(order_id)).unwrap_err();
+    registry.execute_combo(cancel_order(order_id, 7)).unwrap();
+    let error = registry
+        .execute_combo(cancel_order(order_id, 7))
+        .unwrap_err();
     assert_eq!(
         error,
         ComboCommandError::Book(ComboBookError::UnknownOrder { order_id })
@@ -342,11 +345,11 @@ fn malformed_and_unknown_cancels_are_rejected() {
     let mut registry = registry_with_pair();
 
     assert_eq!(
-        registry.execute_combo(cancel_order(0)).unwrap_err(),
+        registry.execute_combo(cancel_order(0, 1)).unwrap_err(),
         ComboCommandError::MissingCancelOrderId
     );
     assert_eq!(
-        registry.execute_combo(cancel_order(999)).unwrap_err(),
+        registry.execute_combo(cancel_order(999, 1)).unwrap_err(),
         ComboCommandError::Book(ComboBookError::UnknownOrder { order_id: 999 })
     );
 
@@ -379,11 +382,31 @@ fn each_combo_pair_owns_an_independent_book() {
     assert_eq!(registry.combo_book(10).unwrap().best_bid(), Some(25));
     assert_eq!(registry.combo_book(20).unwrap().best_ask(), Some(30));
 
-    let mut wrong_pair_cancel = cancel_order(1);
+    let mut wrong_pair_cancel = cancel_order(1, 1);
     wrong_pair_cancel.combo_id = 20;
     assert_eq!(
         registry.execute_combo(wrong_pair_cancel).unwrap_err(),
         ComboCommandError::Book(ComboBookError::UnknownOrder { order_id: 1 })
     );
     assert_eq!(registry.combo_book(20).unwrap().len(), 1);
+}
+
+#[test]
+fn cancel_by_another_owner_is_rejected_without_mutating_book() {
+    let mut registry = registry_with_pair();
+    let order = registry
+        .execute_combo(combo_order(950, 1, 11, Side::Buy, 10, 5))
+        .unwrap();
+    let order_id = match order.as_slice() {
+        [ComboEvent::Rested { order }] => order.order_id,
+        other => panic!("expected rested order, got {other:?}"),
+    };
+    let error = registry
+        .execute_combo(cancel_order(order_id, 2))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ComboCommandError::Book(ComboBookError::NotOrderOwner { .. })
+    ));
+    assert!(registry.combo_book(10).unwrap().order(order_id).is_some());
 }

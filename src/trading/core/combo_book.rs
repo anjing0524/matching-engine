@@ -126,6 +126,13 @@ pub enum ComboBookError {
         /// Exchange order id that was not found.
         order_id: u64,
     },
+    /// Cancel was attempted by a user that does not own the order.
+    NotOrderOwner {
+        /// Exchange order id being cancelled.
+        order_id: u64,
+        /// User id that attempted the cancel.
+        user_id: u64,
+    },
 }
 
 impl Display for ComboBookError {
@@ -154,6 +161,12 @@ impl Display for ComboBookError {
             ),
             Self::UnknownOrder { order_id } => {
                 write!(formatter, "combo order {order_id} is not resting")
+            }
+            Self::NotOrderOwner { order_id, user_id } => {
+                write!(
+                    formatter,
+                    "user {user_id} does not own combo order {order_id}"
+                )
             }
         }
     }
@@ -235,12 +248,27 @@ impl ComboBook {
         Ok(order)
     }
 
-    /// Removes and returns a resting order by exchange id.
+    /// Removes and returns a resting order owned by `user_id`.
     ///
     /// # Errors
-    /// Returns [`ComboBookError::UnknownOrder`] when the order is not resting.
-    /// A repeated cancel of the same id therefore fails explicitly.
-    pub fn cancel(&mut self, order_id: u64) -> Result<ComboOrder, ComboBookError> {
+    /// Returns [`ComboBookError::UnknownOrder`] when the order is not resting,
+    /// or [`ComboBookError::NotOrderOwner`] when another user owns it.
+    pub fn cancel_for(
+        &mut self,
+        user_id: u64,
+        order_id: u64,
+    ) -> Result<ComboOrder, ComboBookError> {
+        let owner = self
+            .order(order_id)
+            .map(|order| order.owner.user_id)
+            .ok_or(ComboBookError::UnknownOrder { order_id })?;
+        if owner != user_id {
+            return Err(ComboBookError::NotOrderOwner { order_id, user_id });
+        }
+        self.remove_order(order_id)
+    }
+
+    fn remove_order(&mut self, order_id: u64) -> Result<ComboOrder, ComboBookError> {
         let (side, spread_price) = self
             .locations
             .get(&order_id)

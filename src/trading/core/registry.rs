@@ -239,7 +239,7 @@ impl InstrumentRegistry {
             .combo_books
             .get_mut(&u64::from(pair_id))
             .ok_or(ComboCommandError::UnknownPair { pair_id })?;
-        let order = book.cancel(command.cancel_order_id)?;
+        let order = book.cancel_for(u64::from(command.user_id), command.cancel_order_id)?;
         Ok(vec![ComboEvent::Canceled { order }])
     }
 
