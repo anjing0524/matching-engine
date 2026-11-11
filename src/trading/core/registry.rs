@@ -16,6 +16,9 @@ use crate::trading::core::combo_book::{
 };
 use crate::trading::core::combo_pair::{ComboLeg, ComboPair, ComboPairError};
 use crate::trading::core::kernel::{CoreEvent, TradingCore};
+use crate::trading::core::leg_liquidity::{
+    ComboLegError, ComboLegExecution, LegExecutionContext, LegLiquidityPlan,
+};
 use crate::trading::core::plugins::{NoPlugins, PreTradePlugin};
 use crate::trading::core::protocol::{Command, CommandType};
 use std::error::Error;
@@ -173,6 +176,108 @@ impl InstrumentRegistry {
     /// restore.
     pub fn combo_book_mut(&mut self, pair_id: u32) -> Option<&mut ComboBook> {
         self.combo_books.get_mut(&u64::from(pair_id))
+    }
+
+    /// Atomically consumes matching resting liquidity from two leg books.
+    ///
+    /// This is the core-owned seam a combo matcher uses instead of touching an
+    /// ordinary Contract book. `leg1_plan` and `leg2_plan` must come from
+    /// [`TradingCore::plan_leg_liquidity`] on the named instruments. Both plans
+    /// are validated before either book mutates, so a short, stale, mismatched,
+    /// or same-sided plan leaves both books, positions, and event buffers
+    /// unchanged. A successful call consumes the same quantity from both legs,
+    /// updates both resting owners' positions and exposure, and emits one
+    /// ordinary public leg trade per resting order.
+    ///
+    /// A Combo Pair need not be registered: the seam only coordinates two
+    /// ordinary Contract books.
+    ///
+    /// # Errors
+    /// Returns [`ComboLegError`] when an instrument is unknown, both legs name
+    /// the same instrument, the plans select different quantities or taker
+    /// sides, or either plan is stale or unusable. Nothing mutates on error.
+    pub fn consume_combo_legs(
+        &mut self,
+        leg1_instrument_id: u32,
+        leg2_instrument_id: u32,
+        taker_order_id: u64,
+        leg1_plan: &LegLiquidityPlan,
+        leg2_plan: &LegLiquidityPlan,
+    ) -> Result<ComboLegExecution, ComboLegError> {
+        let leg1_key = u64::from(leg1_instrument_id);
+        let leg2_key = u64::from(leg2_instrument_id);
+        if leg1_key == leg2_key {
+            return Err(ComboLegError::SameInstrument {
+                instrument_id: leg1_instrument_id,
+            });
+        }
+        if leg1_plan.quantity != leg2_plan.quantity {
+            return Err(ComboLegError::QuantityMismatch {
+                leg1_quantity: leg1_plan.quantity,
+                leg2_quantity: leg2_plan.quantity,
+            });
+        }
+        if leg1_plan.taker_side == leg2_plan.taker_side {
+            return Err(ComboLegError::TakerSidesNotOpposite {
+                leg1_side: leg1_plan.taker_side,
+                leg2_side: leg2_plan.taker_side,
+            });
+        }
+        if !self.instruments.contains_key(&leg1_key) {
+            return Err(ComboLegError::UnknownInstrument {
+                leg: ComboLeg::First,
+                instrument_id: leg1_instrument_id,
+            });
+        }
+        if !self.instruments.contains_key(&leg2_key) {
+            return Err(ComboLegError::UnknownInstrument {
+                leg: ComboLeg::Second,
+                instrument_id: leg2_instrument_id,
+            });
+        }
+
+        // Validate both books before mutating either one. Validation is
+        // read-only, so this is the all-or-none barrier.
+        self.instruments
+            .get(&leg1_key)
+            .expect("first combo leg instrument was checked")
+            .validate_leg_liquidity(leg1_plan)
+            .map_err(|error| ComboLegError::Plan {
+                leg: ComboLeg::First,
+                error,
+            })?;
+        self.instruments
+            .get(&leg2_key)
+            .expect("second combo leg instrument was checked")
+            .validate_leg_liquidity(leg2_plan)
+            .map_err(|error| ComboLegError::Plan {
+                leg: ComboLeg::Second,
+                error,
+            })?;
+
+        // Validation guarantees that both commits are infallible.
+        let leg1 = self
+            .instruments
+            .get_mut(&leg1_key)
+            .expect("first combo leg instrument was checked")
+            .commit_leg_liquidity(
+                leg1_plan,
+                LegExecutionContext::new(leg1_instrument_id, taker_order_id),
+            );
+        let leg2 = self
+            .instruments
+            .get_mut(&leg2_key)
+            .expect("second combo leg instrument was checked")
+            .commit_leg_liquidity(
+                leg2_plan,
+                LegExecutionContext::new(leg2_instrument_id, taker_order_id),
+            );
+        Ok(ComboLegExecution {
+            quantity: leg1_plan.quantity,
+            taker_order_id,
+            leg1,
+            leg2,
+        })
     }
 
     /// Executes one Combo Order command against its pair book.
