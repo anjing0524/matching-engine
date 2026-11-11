@@ -277,9 +277,18 @@ Read time dominates: each read blocks waiting for the next member frame, so the
 gateway is not CPU-busy on decode. Write time is about 14µs/frame in this run.
 
 There is also a counter gap to investigate: private=~300k but writes=~200k.
-Possible causes are private events without a live session at dispatch time, or
-timing of the final sample. This is a correctness-adjacent finding, not a
-throughput conclusion.
+`unrouted` and `send_errors` counters were added to split the gap:
+
+- one run observed `unrouted=36558`, `send_errors=13440`
+- after switching the load client to drain all private events, the client
+  stalled around 11k commands with `unrouted=0`, `send_errors=0`
+
+A core test now asserts that each of 1000 sequential new orders gets a private
+event with its `client_order_id`; it passes. The mismatch is therefore in the
+gateway/client correlation path or in a rarer core path, not yet fully localized.
+
+Do not use these runs as throughput conclusions until the private-event
+correlation is fixed.
 
 ## Next measurement
 
