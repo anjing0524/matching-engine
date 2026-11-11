@@ -338,7 +338,8 @@ mod tests {
             ComboMarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap())
                 .unwrap();
         let mut runtime = ComboRuntime::new(engine).with_publisher(publisher);
-        assert_eq!(runtime.tick(), 1);
+        let effects = runtime.tick_effects();
+        assert_eq!(effects.public_sent, 1);
         assert_eq!(runtime.public_sent(), 1);
         let fill = subscriber.recv().unwrap();
         assert_eq!(fill.quantity, 5);
