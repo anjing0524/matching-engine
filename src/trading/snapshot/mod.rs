@@ -8,4 +8,4 @@ pub mod snapshot_file;
 pub const CORE_SNAPSHOT_VERSION: u32 = 7;
 
 /// On-disk registry-backed combo snapshot schema version.
-pub const REGISTRY_SNAPSHOT_VERSION: u32 = 1;
+pub const REGISTRY_SNAPSHOT_VERSION: u32 = 2;

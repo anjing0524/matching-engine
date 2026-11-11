@@ -244,8 +244,9 @@ The single-process production binary drives one `InstrumentRegistry` through
 M1:
 
 - public leg trades update leg price/volume/open-interest
-- combo trades update combo price statistics
-- no implied orders in public book
+- every combo trade publishes one `ComboTrade` price statistic carrying the
+  pair id, realized spread, quantity, and both leg reference prices
+- no implied orders in public book or public events
 - no combo order-book depth publication
 - no combo position
 
@@ -259,6 +260,7 @@ M1 tests must cover:
 - atomic all-or-none failure when one leg is short
 - leg fills to both leg owners and combo fill to combo owner
 - base-order priority over implied at the same price
+- a resting combo order triggered by later ordinary leg liquidity
 - margin freeze/release/actual and single-side largest
 - snapshot/reconnect replay
 - unsupported FOK/FAK/market orders rejected

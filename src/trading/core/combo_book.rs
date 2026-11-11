@@ -460,7 +460,8 @@ impl ComboBook {
             let quantity = order.remaining.min(resting.remaining);
             let spread_price =
                 self.execution_price(order.side, order.spread_price, resting.spread_price);
-            self.consume_resting(resting.order_id, quantity)
+            let _consumed = self
+                .consume_resting(resting.order_id, quantity)
                 .expect("resting combo order selected from the book must consume");
             order.remaining -= quantity;
             self.last_trade_price = Some(spread_price);
@@ -481,6 +482,41 @@ impl ComboBook {
             });
         }
         events
+    }
+
+    /// Applies the quantity an implied-in execution consumed from a resting
+    /// order, returning the reduced order or `None` when it is fully consumed.
+    ///
+    /// The registry uses this after the shared leg books have accepted an
+    /// atomic implied-in fill for an already-resting Combo Order, so a resting
+    /// order can act as a taker when leg liquidity appears later.
+    ///
+    /// # Errors
+    /// Returns [`ComboBookError::UnknownOrder`] when `order_id` is not resting.
+    pub fn apply_implied_fill(
+        &mut self,
+        order_id: u64,
+        quantity: u64,
+    ) -> Result<Option<ComboOrder>, ComboBookError> {
+        self.consume_resting(order_id, quantity)
+    }
+
+    /// Returns resting base orders in combined execution priority order.
+    ///
+    /// Bids come first, highest spread first, then asks, lowest spread first;
+    /// orders at the same spread keep arrival order. A resting Combo Order
+    /// re-evaluated against leg liquidity walks this list, so the same
+    /// price-time rule applies to both direct and implied-in execution.
+    #[must_use]
+    pub fn orders_by_priority(&self) -> Vec<ComboOrder> {
+        let mut orders = Vec::with_capacity(self.locations.len());
+        for queue in self.bids.values().rev() {
+            orders.extend(queue.iter().copied());
+        }
+        for queue in self.asks.values() {
+            orders.extend(queue.iter().copied());
+        }
+        orders
     }
 
     /// Records the realized spread of an implied-in Combo Fill.
@@ -625,11 +661,17 @@ impl ComboBook {
     }
 
     /// Reduces a resting order by `quantity`, removing it when exhausted.
-    fn consume_resting(&mut self, order_id: u64, quantity: u64) -> Result<(), ComboBookError> {
+    ///
+    /// Returns the reduced order, or `None` when the order left the book.
+    fn consume_resting(
+        &mut self,
+        order_id: u64,
+        quantity: u64,
+    ) -> Result<Option<ComboOrder>, ComboBookError> {
         let Some(&(side, spread_price)) = self.locations.get(&order_id) else {
             return Err(ComboBookError::UnknownOrder { order_id });
         };
-        let (order_exhausted, level_is_empty) = {
+        let (remaining, level_is_empty) = {
             let levels = self.levels_mut(side);
             let Some(queue) = levels.get_mut(&spread_price) else {
                 return Err(ComboBookError::UnknownOrder { order_id });
@@ -644,18 +686,18 @@ impl ComboBook {
             resting.remaining -= quantity;
             if resting.remaining == 0 {
                 queue.remove(index);
-                (true, queue.is_empty())
+                (None, queue.is_empty())
             } else {
-                (false, false)
+                (Some(*resting), false)
             }
         };
         if level_is_empty {
             self.levels_mut(side).remove(&spread_price);
         }
-        if order_exhausted {
+        if remaining.is_none() {
             self.locations.remove(&order_id);
         }
-        Ok(())
+        Ok(remaining)
     }
 
     /// Returns the direct trade price for a crossed pair of Combo Orders.

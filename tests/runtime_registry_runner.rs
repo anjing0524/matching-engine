@@ -253,3 +253,50 @@ fn runner_fails_closed_when_a_combo_account_has_no_balance() {
     drop(producer);
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn resting_combo_fill_from_a_leg_command_returns_combo_private_and_public_stats() {
+    let path = temp_path("resting-combo-trigger");
+    let _ = std::fs::remove_file(&path);
+    let (producer, consumer) = create(&path, 8).unwrap();
+    let mut runner = RegistryRunner::new(registry_with_pair(), consumer, NoPlugins);
+
+    producer
+        .send(&combo_order(1, 1, Side::Buy, 10_000))
+        .unwrap();
+    let accepted = runner.poll_events();
+    assert!(accepted.private.iter().any(|event| {
+        event.status == PrivateStatus::Accepted && event.account_id == 1 && event.order_id == 1
+    }));
+    assert!(accepted.combo_private.is_empty());
+
+    // The first leg order only rests. The second completes the implied combo
+    // and fills the resting Combo Order through the same runner poll.
+    producer.send(&leg_order(2, 2, Side::Sell, 50_000)).unwrap();
+    let first_leg = runner.poll_events();
+    assert!(first_leg.combo_private.is_empty());
+    let mut second_leg = leg_order(3, 3, Side::Buy, 40_000);
+    second_leg.instrument_id = 2;
+    producer.send(&second_leg).unwrap();
+    let filled = runner.poll_events();
+
+    assert_eq!(filled.combo_private.len(), 1, "{:?}", filled.combo_private);
+    let fill = filled.combo_private[0];
+    assert_eq!(fill.pair_id, 10);
+    assert_eq!(fill.user_id, 1);
+    assert_eq!(fill.quantity, 1);
+    assert_eq!(fill.spread_price, 10_000);
+    let public = filled
+        .public
+        .iter()
+        .find(|event| {
+            event.event_type
+                == trading_system_engine::trading::core::public_events::PublicEventType::ComboTrade
+        })
+        .expect("combo price statistic");
+    assert_eq!(public.pair_id, 10);
+    assert_eq!(public.spread_price, 10_000);
+    assert_eq!(public.quantity, 1);
+    drop(producer);
+    let _ = std::fs::remove_file(&path);
+}

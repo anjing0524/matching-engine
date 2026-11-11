@@ -27,7 +27,7 @@ use crate::trading::core::leg_liquidity::{
 use crate::trading::core::plugins::{NoPlugins, PreTradePlugin};
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::core::protocol::{Command, CommandType, Side};
-use crate::trading::core::public_events::PublicEvent;
+use crate::trading::core::public_events::{PublicEvent, PublicEventType};
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
@@ -174,6 +174,11 @@ pub enum RegistrySnapshotError {
         /// Highest buffered Combo Private sequence.
         max_buffered_seq: u64,
     },
+    /// The next public Combo trade statistic sequence is not usable.
+    InvalidNextComboTradeId {
+        /// Stored next public Combo trade sequence.
+        next_combo_trade_id: u64,
+    },
     /// The leg margin ledger rejected its own snapshot.
     Margin(ComboMarginSnapshotError),
     /// A leg margin entry named an instrument the snapshot does not contain.
@@ -273,6 +278,12 @@ impl Display for RegistrySnapshotError {
                 formatter,
                 "snapshot next combo private sequence {next_combo_private_seq} does not advance past {max_buffered_seq}"
             ),
+            Self::InvalidNextComboTradeId {
+                next_combo_trade_id,
+            } => write!(
+                formatter,
+                "snapshot next combo trade statistic sequence {next_combo_trade_id} is not usable"
+            ),
             Self::Margin(error) => Display::fmt(error, formatter),
             Self::UnknownLegMarginInstrument {
                 account_id,
@@ -332,6 +343,8 @@ pub struct RegistrySnapshot {
     pub combo_private_events: Vec<ComboPrivateFill>,
     /// Exchange id the next accepted Combo Order will receive.
     pub next_combo_order_id: u64,
+    /// Sequence the next public Combo trade price statistic will receive.
+    pub next_combo_trade_id: u64,
     /// Registry-owned sequence the next Combo Private Fill will receive.
     pub next_combo_private_seq: u64,
 }
@@ -351,8 +364,10 @@ pub struct InstrumentRegistry {
     require_explicit_margin: bool,
     margin: ComboMarginLedger,
     combo_private_events: Vec<ComboPrivateFill>,
+    combo_public_events: Vec<PublicEvent>,
     next_combo_order_id: u64,
     next_combo_private_seq: u64,
+    next_combo_trade_id: u64,
 }
 
 impl InstrumentRegistry {
@@ -368,8 +383,10 @@ impl InstrumentRegistry {
             require_explicit_margin: false,
             margin: ComboMarginLedger::default(),
             combo_private_events: Vec::new(),
+            combo_public_events: Vec::new(),
             next_combo_order_id: 1,
             next_combo_private_seq: 1,
+            next_combo_trade_id: 1,
         }
     }
 
@@ -585,10 +602,12 @@ impl InstrumentRegistry {
         events
     }
 
-    /// Drains ordinary public events from every Contract core.
+    /// Drains ordinary public events from every Contract core, then any Combo
+    /// trade price statistics produced since the last drain.
     ///
     /// Cores are visited in ascending instrument id order for deterministic
-    /// fan-out.
+    /// fan-out. Combo trade statistics follow the leg trades of the matching
+    /// command, so a consumer sees both leg executions before the combo price.
     pub fn drain_public_events(&mut self) -> Vec<PublicEvent> {
         let mut events = Vec::new();
         for instrument_id in self.sorted_instrument_ids() {
@@ -596,7 +615,14 @@ impl InstrumentRegistry {
                 events.extend(core.drain_public_events());
             }
         }
+        events.append(&mut self.combo_public_events);
         events
+    }
+
+    /// Returns the sequence the next public Combo trade statistic will receive.
+    #[must_use]
+    pub fn next_combo_trade_id(&self) -> u64 {
+        self.next_combo_trade_id
     }
 
     fn sorted_instrument_ids(&self) -> Vec<u32> {
@@ -659,6 +685,7 @@ impl InstrumentRegistry {
             combo_private_events: self.combo_private_events.clone(),
             next_combo_order_id: self.next_combo_order_id,
             next_combo_private_seq: self.next_combo_private_seq,
+            next_combo_trade_id: self.next_combo_trade_id,
         }
     }
 
@@ -685,6 +712,7 @@ impl InstrumentRegistry {
             combo_private_events,
             next_combo_order_id,
             next_combo_private_seq,
+            next_combo_trade_id,
         } = snapshot;
 
         let mut instruments: U64MixMap<TradingCore> = U64MixMap::default();
@@ -803,6 +831,11 @@ impl InstrumentRegistry {
                 max_buffered_seq: previous_seq,
             });
         }
+        if next_combo_trade_id == 0 {
+            return Err(RegistrySnapshotError::InvalidNextComboTradeId {
+                next_combo_trade_id,
+            });
+        }
 
         for margin in &margin_snapshot.leg_margins {
             if !instruments.contains_key(&u64::from(margin.instrument_id)) {
@@ -849,8 +882,10 @@ impl InstrumentRegistry {
         self.prior_settlements = prior_settlements;
         self.margin = margin;
         self.combo_private_events = combo_private_events;
+        self.combo_public_events.clear();
         self.next_combo_order_id = next_combo_order_id;
         self.next_combo_private_seq = next_combo_private_seq;
+        self.next_combo_trade_id = next_combo_trade_id;
         Ok(())
     }
 
@@ -1014,9 +1049,9 @@ impl InstrumentRegistry {
             .get_mut(&u64::from(pair_id))
             .ok_or(ComboCommandError::UnknownPair { pair_id })?
             .match_taker(&mut order)?;
-        self.settle_direct_fills(&pair, &events, direct_leg_prices);
+        self.settle_direct_fills(&pair, &events, direct_leg_prices, command.trading_ts_ns);
         if order.remaining > 0 {
-            events.extend(self.match_implied_in(&pair, &mut order));
+            events.extend(self.match_implied_in(&pair, &mut order, command.trading_ts_ns));
         }
         if order.remaining > 0 {
             let rested = self
@@ -1038,7 +1073,12 @@ impl InstrumentRegistry {
     /// limit. Each round builds both leg plans before either book mutates, so a
     /// shortfall on either leg stops implied-in with no mutation. Implied
     /// candidates are never stored in the combo book.
-    fn match_implied_in(&mut self, pair: &ComboPair, order: &mut ComboOrder) -> Vec<ComboEvent> {
+    fn match_implied_in(
+        &mut self,
+        pair: &ComboPair,
+        order: &mut ComboOrder,
+        trading_ts_ns: u64,
+    ) -> Vec<ComboEvent> {
         let mut events = Vec::new();
         while order.remaining > 0 {
             let (leg1_side, leg2_side) = match order.side {
@@ -1117,6 +1157,17 @@ impl InstrumentRegistry {
                 fill.quantity,
                 (fill.leg1_price_ticks, fill.leg2_price_ticks),
             );
+            let terms = ComboTradeTerms {
+                pair_id: fill.pair_id,
+                order_id: fill.order_id,
+                side: Some(fill.side),
+                buy_order_id: 0,
+                sell_order_id: 0,
+                quantity: fill.quantity,
+                spread_price: fill.spread_price,
+                leg1_price_ticks: fill.leg1_price_ticks,
+                leg2_price_ticks: fill.leg2_price_ticks,
+            };
             self.push_combo_private_fill(
                 fill.order_id,
                 fill.owner,
@@ -1129,9 +1180,72 @@ impl InstrumentRegistry {
                     leg2_price_ticks: fill.leg2_price_ticks,
                 },
             );
+            self.push_combo_public_trade(terms, trading_ts_ns);
             events.push(ComboEvent::ImpliedFilled { fill });
         }
         events
+    }
+
+    /// Re-evaluates every Combo Order resting on a pair that names one of the
+    /// command's legs as a taker against the current leg books.
+    ///
+    /// Ordinary leg matching has already run, so a base leg order keeps
+    /// priority over an implied execution at the same price: only liquidity
+    /// still available after the leg book settled can back an implied fill.
+    /// Resting orders are visited in combined price-time priority, and each
+    /// fill is applied to its book exactly once.
+    fn revalue_resting_combos(&mut self, instrument_id: u32, trading_ts_ns: u64) {
+        let mut pair_ids: Vec<u32> = self
+            .pairs
+            .values()
+            .filter(|pair| {
+                pair.leg1_instrument_id == instrument_id || pair.leg2_instrument_id == instrument_id
+            })
+            .map(|pair| pair.pair_id)
+            .collect();
+        pair_ids.sort_unstable();
+        for pair_id in pair_ids {
+            let Some(pair) = self.pairs.get(&u64::from(pair_id)).copied() else {
+                continue;
+            };
+            self.match_resting_combos(&pair, trading_ts_ns);
+        }
+    }
+
+    /// Executes one pair's resting Combo Orders against standing leg liquidity.
+    ///
+    /// Candidates are read before matching so the book is not borrowed while
+    /// the shared leg books mutate. Each candidate is re-read from the book
+    /// immediately before matching, so an order already consumed by an earlier
+    /// candidate cannot fill twice.
+    fn match_resting_combos(&mut self, pair: &ComboPair, trading_ts_ns: u64) {
+        let key = u64::from(pair.pair_id);
+        let Some(book) = self.combo_books.get(&key) else {
+            return;
+        };
+        let candidates = book.orders_by_priority();
+        for candidate in candidates {
+            let Some(current) = self
+                .combo_books
+                .get(&key)
+                .and_then(|book| book.order(candidate.order_id))
+                .copied()
+            else {
+                continue;
+            };
+            let before = current.remaining;
+            let mut order = current;
+            self.match_implied_in(pair, &mut order, trading_ts_ns);
+            let filled = before - order.remaining;
+            if filled == 0 {
+                continue;
+            }
+            if let Some(book) = self.combo_books.get_mut(&key) {
+                let _filled_order = book
+                    .apply_implied_fill(order.order_id, filled)
+                    .expect("a matched resting combo order must still be resting");
+            }
+        }
     }
 
     /// Applies both leg sides of one Combo Fill to the owner's leg positions
@@ -1220,16 +1334,23 @@ impl InstrumentRegistry {
         pair: &ComboPair,
         events: &[ComboEvent],
         leg_prices: (u64, u64),
+        trading_ts_ns: u64,
     ) {
         for event in events {
             let ComboEvent::Filled { fill } = event else {
                 continue;
             };
-            self.settle_direct_fill(pair, fill, leg_prices);
+            self.settle_direct_fill(pair, fill, leg_prices, trading_ts_ns);
         }
     }
 
-    fn settle_direct_fill(&mut self, pair: &ComboPair, fill: &ComboFill, leg_prices: (u64, u64)) {
+    fn settle_direct_fill(
+        &mut self,
+        pair: &ComboPair,
+        fill: &ComboFill,
+        leg_prices: (u64, u64),
+        trading_ts_ns: u64,
+    ) {
         self.margin
             .release_on_fill(fill.buy_order_id, fill.quantity);
         self.margin
@@ -1257,6 +1378,18 @@ impl InstrumentRegistry {
         };
         self.push_combo_private_fill(fill.buy_order_id, fill.buy_owner, Side::Buy, terms);
         self.push_combo_private_fill(fill.sell_order_id, fill.sell_owner, Side::Sell, terms);
+        let trade = ComboTradeTerms {
+            pair_id: fill.pair_id,
+            order_id: 0,
+            side: None,
+            buy_order_id: fill.buy_order_id,
+            sell_order_id: fill.sell_order_id,
+            quantity: fill.quantity,
+            spread_price: fill.spread_price,
+            leg1_price_ticks: leg_prices.0,
+            leg2_price_ticks: leg_prices.1,
+        };
+        self.push_combo_public_trade(trade, trading_ts_ns);
     }
 
     /// Returns the leg prices a direct Combo Fill reports.
@@ -1296,6 +1429,35 @@ impl InstrumentRegistry {
             session_id: owner.session_id,
             side,
             quantity: terms.quantity,
+            spread_price: terms.spread_price,
+            leg1_price_ticks: terms.leg1_price_ticks,
+            leg2_price_ticks: terms.leg2_price_ticks,
+        });
+    }
+
+    /// Publishes one public Combo trade price statistic.
+    ///
+    /// The event is the only public record of a combo execution. Implied
+    /// orders themselves never receive a public identity, and a Combo Pair has
+    /// no order book depth event.
+    fn push_combo_public_trade(&mut self, terms: ComboTradeTerms, trading_ts_ns: u64) {
+        let trade_id = self.next_combo_trade_id;
+        self.next_combo_trade_id = self.next_combo_trade_id.saturating_add(1);
+        self.combo_public_events.push(PublicEvent {
+            seq: trade_id,
+            event_type: PublicEventType::ComboTrade,
+            trading_ts_ns,
+            phase: 0,
+            instrument_id: 0,
+            pair_id: terms.pair_id,
+            order_id: terms.order_id,
+            trade_id,
+            buy_order_id: terms.buy_order_id,
+            sell_order_id: terms.sell_order_id,
+            side: terms.side,
+            price_ticks: 0,
+            quantity: terms.quantity,
+            volume: 0,
             spread_price: terms.spread_price,
             leg1_price_ticks: terms.leg1_price_ticks,
             leg2_price_ticks: terms.leg2_price_ticks,
@@ -1461,6 +1623,14 @@ impl InstrumentRegistry {
                         instrument_id: command.instrument_id,
                     })?;
                 core.execute_with_plugins_into(command, plugin, out);
+                if command.command_type == CommandType::NewOrder {
+                    // A new leg order can create the second leg side a resting
+                    // Combo Order needs. Ordinary matching has already run, so
+                    // base leg orders keep priority over implied execution.
+                    // A cancel can only remove liquidity, so it cannot make a
+                    // resting combo executable.
+                    self.revalue_resting_combos(command.instrument_id, command.trading_ts_ns);
+                }
             }
             CommandType::TimeTick | CommandType::Control => {
                 for core in self.instruments.values_mut() {
@@ -1470,6 +1640,20 @@ impl InstrumentRegistry {
         }
         Ok(())
     }
+}
+
+/// Price, quantity, and leg-price terms of one public Combo trade statistic.
+#[derive(Clone, Copy)]
+struct ComboTradeTerms {
+    pair_id: u32,
+    order_id: u64,
+    side: Option<Side>,
+    buy_order_id: u64,
+    sell_order_id: u64,
+    quantity: u64,
+    spread_price: i64,
+    leg1_price_ticks: u64,
+    leg2_price_ticks: u64,
 }
 
 /// Price, quantity, and leg-price terms shared by the private fills of one

@@ -419,6 +419,10 @@ impl TradingCore {
             price_ticks,
             quantity: 0,
             volume,
+            pair_id: 0,
+            spread_price: 0,
+            leg1_price_ticks: 0,
+            leg2_price_ticks: 0,
         });
     }
 
@@ -487,6 +491,10 @@ impl TradingCore {
             price_ticks: 0,
             quantity: 0,
             volume: 0,
+            pair_id: 0,
+            spread_price: 0,
+            leg1_price_ticks: 0,
+            leg2_price_ticks: 0,
         });
     }
 
@@ -708,6 +716,10 @@ impl TradingCore {
                             price_ticks,
                             quantity: canceled_quantity,
                             volume: 0,
+                            pair_id: 0,
+                            spread_price: 0,
+                            leg1_price_ticks: 0,
+                            leg2_price_ticks: 0,
                         });
                     }
                     self.orders.insert(command.order_id, meta);
@@ -958,6 +970,10 @@ impl TradingCore {
                 price_ticks: command.price_ticks as u64,
                 quantity: accepted.remaining,
                 volume: 0,
+                pair_id: 0,
+                spread_price: 0,
+                leg1_price_ticks: 0,
+                leg2_price_ticks: 0,
             });
             if let Some(meta) = self.orders.get_mut(&accepted.order_id) {
                 meta.public = true;
@@ -987,6 +1003,10 @@ impl TradingCore {
                     price_ticks: *price_ticks,
                     quantity: *quantity,
                     volume: 0,
+                    pair_id: 0,
+                    spread_price: 0,
+                    leg1_price_ticks: 0,
+                    leg2_price_ticks: 0,
                 });
             }
         }
@@ -1109,6 +1129,10 @@ impl TradingCore {
                     price_ticks: 0,
                     quantity: 0,
                     volume: 0,
+                    pair_id: 0,
+                    spread_price: 0,
+                    leg1_price_ticks: 0,
+                    leg2_price_ticks: 0,
                 });
                 Vec::new()
             }
@@ -1281,6 +1305,10 @@ impl TradingCore {
                 price_ticks: resting.price,
                 quantity: resting.quantity,
                 volume: 0,
+                pair_id: 0,
+                spread_price: 0,
+                leg1_price_ticks: 0,
+                leg2_price_ticks: 0,
             });
             fills.push(LegFill {
                 order_id: resting.order_id,
