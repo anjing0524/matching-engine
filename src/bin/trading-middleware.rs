@@ -177,8 +177,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut ticks = 0u64;
+    let mut gateway_events = 0u64;
+    let mut private_events = 0u64;
+    let mut public_events = 0u64;
+    let mut stats_start = std::time::Instant::now();
     loop {
-        gateway.poll();
+        gateway_events += gateway.poll() as u64;
         for (connection_id, replay) in gateway.take_replay_batches() {
             for event in replay {
                 if let trading_system_engine::trading::gateway::private_replay::ReplayEvent::Core(
@@ -192,6 +196,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let private: Vec<_> = std::iter::from_fn(|| private_consumer.recv())
             .filter_map(Result::ok)
             .collect();
+        private_events += private.len() as u64;
         if let Some(log) = &mut private_log {
             for event in &private {
                 log.append(event)?;
@@ -205,6 +210,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let _ = gateway.dispatch_private(&server, private);
         while let Some(Ok(event)) = public_consumer.recv() {
+            public_events += 1;
             if let Some(log) = &mut public_log {
                 log.append(&event)?;
             }
@@ -224,6 +230,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         ticks += 1;
+        if args.stats_interval_ms > 0
+            && stats_start.elapsed() >= Duration::from_millis(args.stats_interval_ms)
+        {
+            eprintln!(
+                "middleware_stats ticks={ticks} gateway_events={gateway_events} private={private_events} public={public_events}"
+            );
+            stats_start = std::time::Instant::now();
+        }
         if args.iterations > 0 && ticks >= args.iterations {
             break;
         }

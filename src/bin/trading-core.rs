@@ -27,6 +27,9 @@ struct Args {
     snapshot: Option<String>,
     #[arg(long, default_value_t = 0)]
     iterations: u64,
+    /// Print loop counters to stderr every N milliseconds; 0 disables.
+    #[arg(long, default_value_t = 0)]
+    stats_interval_ms: u64,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -51,9 +54,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         CoreRunner::new(core, consumer, NoPlugins).with_event_transports(public, private);
 
     let mut ticks = 0u64;
+    let mut commands = 0u64;
+    let mut stats_start = std::time::Instant::now();
     loop {
-        runner.poll();
+        commands += runner.poll() as u64;
         ticks += 1;
+        if args.stats_interval_ms > 0
+            && stats_start.elapsed() >= std::time::Duration::from_millis(args.stats_interval_ms)
+        {
+            eprintln!("core_stats ticks={ticks} commands={commands}");
+            stats_start = std::time::Instant::now();
+        }
         if args.iterations > 0 && ticks >= args.iterations {
             break;
         }
