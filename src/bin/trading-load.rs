@@ -71,6 +71,85 @@ fn login(addr: &str, member: usize) -> TcpStream {
     stream
 }
 
+fn run_buy_only(
+    addr: String,
+    member: usize,
+    orders: usize,
+    in_flight: usize,
+    start: Instant,
+    member_offset: usize,
+) -> Vec<u64> {
+    let identity = member_offset + member;
+    let mut stream = login(&addr, identity);
+    stream.set_nonblocking(true).unwrap();
+    let user_id = identity as u32 + 1;
+    let base = identity.saturating_mul(orders);
+    let priority = 50_000 + identity as i64;
+    let mut sent_times = vec![u64::MAX; orders];
+    let mut acked_flags = vec![false; orders];
+    let mut sent = 0usize;
+    let mut acked = 0usize;
+    let mut pending = Vec::with_capacity(264 * in_flight.max(1));
+    let mut pending_offset = 0usize;
+    let mut read_buffer = Vec::with_capacity(264 * 4);
+    let mut samples = Vec::with_capacity(orders);
+    while acked < orders {
+        while sent < orders && sent.saturating_sub(acked) < in_flight {
+            let id = base as u64 + sent as u64 + 1;
+            let price = priority + (sent % 1000) as i64;
+            sent_times[sent] = start.elapsed().as_nanos() as u64;
+            pending.extend_from_slice(
+                &GatewayFrame::Command(command(id, user_id, Side::Buy, price)).encode(),
+            );
+            sent += 1;
+        }
+        loop {
+            if pending_offset >= pending.len() {
+                pending.clear();
+                pending_offset = 0;
+                break;
+            }
+            match stream.write(&pending[pending_offset..]) {
+                Ok(0) => panic!("gateway closed during write"),
+                Ok(count) => pending_offset += count,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("write failed: {error}"),
+            }
+        }
+        loop {
+            let mut chunk = [0u8; 1024];
+            match stream.read(&mut chunk) {
+                Ok(0) => panic!("gateway closed during read"),
+                Ok(count) => read_buffer.extend_from_slice(&chunk[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("read failed: {error}"),
+            }
+        }
+        while read_buffer.len() >= 264 {
+            let mut bytes = [0u8; 264];
+            bytes.copy_from_slice(&read_buffer[..264]);
+            read_buffer.drain(..264);
+            if let Ok(GatewayFrame::PrivateEvent(event)) = GatewayFrame::decode(&bytes) {
+                let Some(index) = (event.client_order_id as usize)
+                    .checked_sub(base + 1)
+                    .filter(|index| *index < orders)
+                else {
+                    continue;
+                };
+                if index < sent && !acked_flags[index] && sent_times[index] != u64::MAX {
+                    acked_flags[index] = true;
+                    acked += 1;
+                    samples.push(
+                        (start.elapsed().as_nanos() as u64).saturating_sub(sent_times[index]),
+                    );
+                }
+            }
+        }
+        std::hint::spin_loop();
+    }
+    samples
+}
+
 fn run_member(
     addr: String,
     member: usize,
