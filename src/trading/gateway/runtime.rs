@@ -439,7 +439,7 @@ mod tests {
     };
     use crate::trading::gateway::server::start;
     use crate::trading::transport::create;
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::net::TcpStream;
 
     fn command() -> Command {
