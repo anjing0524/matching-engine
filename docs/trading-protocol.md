@@ -127,6 +127,7 @@ trade_id  = (epoch << 48) | trade_seq
 | 84 | 44 | `reserved` | 对齐到 128B |
 
 - combo 成交发两条普通 leg event：leg1 order/trade，leg2 order/trade；带 `combo_id` 和 leg。
+- combo 成交同时发布一条 `ComboTrade` 价格统计事件：`pair_id`、成交价差、数量、两腿参考价；隐含单不发布订单事件。
 - TimeTick / SessionSwitch 用同一 slot，`instrument_id=0`。
 - 不发订单簿快照；下游自行构建。
 
