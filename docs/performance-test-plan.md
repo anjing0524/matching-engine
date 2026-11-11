@@ -19,6 +19,9 @@ CPU3: gateway-1
 CPU4-7: clients only when no better host is available (SMT siblings)
 ```
 
+CPU affinity is mandatory. Every performance process and every cargo profile
+category is pinned with `taskset`; an unpinned run is considered invalid.
+
 A valid aggregate number requires all of:
 
 1. no stale trading processes
