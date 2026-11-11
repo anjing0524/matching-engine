@@ -323,9 +323,10 @@ mod tests {
         tick.command_type = CommandType::TimeTick;
         tick.trading_ts_ns = 99;
         producer.send(&tick).unwrap();
-        assert_eq!(runner.poll(), 1);
+        let events = runner.poll_events();
+        assert_eq!(events.commands, 1);
         assert_eq!(runner.core().last_trading_ts_ns(), 99);
-        assert_eq!(runner.poll_events().public.len(), 1);
+        assert_eq!(events.public.len(), 1);
         drop(producer);
         let _ = std::fs::remove_file(&path);
     }

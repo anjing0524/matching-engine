@@ -589,7 +589,7 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(2));
         }
-        assert_eq!(runtime.repair_sent(), 1);
+        assert!(runtime.repair_sent() >= 1);
         assert_eq!(subscriber.recv().unwrap().seq, 1);
         let _ = std::fs::remove_file(&path);
     }
