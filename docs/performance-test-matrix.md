@@ -102,6 +102,35 @@ with the runtime; do not use it as a production latency figure.
 - busy-poll processes must be assigned separate CPU budgets; pinning all of
   gateway/middleware/core/client onto two CPUs starves them
 
+### split aggregate (gateway -> middleware -> core)
+
+Script:
+
+```bash
+scripts/run-split-aggregate.sh 4 250000 32
+```
+
+Fedora 4C/8T, processes pinned (middleware CPU0, core CPU1, gateway CPU2,
+client CPU4-7).
+
+Serial calibration, one member, one in-flight:
+
+```text
+n=50000 rate=110819/s p50=143ns p99=20925ns
+```
+
+Two members, 500k commands, 32 in flight:
+
+```text
+n=500000 elapsed=12.585s rate=39730/s
+p50=1.606ms p99=2.094ms
+```
+
+The serial split path is in the expected 100k/s range, but the pipelined path
+still collapses to ~40k/s and millisecond p99. That points at the generator or a
+proxy/middleware queueing path, not at the core matching rate. It is not yet
+evidence for or against 1M capacity.
+
 ## Next measurement
 
 Use an independent load-generator host/process and per-process CPU affinity:
