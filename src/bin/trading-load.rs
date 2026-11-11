@@ -29,6 +29,9 @@ struct Args {
     /// Offset added to member/user ids; use distinct offsets per gateway.
     #[arg(long, default_value_t = 0)]
     member_offset: usize,
+    /// Send only resting buy orders; each command then emits exactly one private event.
+    #[arg(long, default_value_t = false)]
+    buy_only: bool,
 }
 
 fn command(id: u64, user_id: u32, side: Side, price: i64) -> Command {
@@ -75,6 +78,7 @@ fn run_member(
     in_flight: usize,
     start: Instant,
     member_offset: usize,
+    buy_only: bool,
 ) -> Vec<u64> {
     let identity = member_offset + member;
     let stream = login(&addr, identity);
@@ -153,10 +157,15 @@ fn run_member(
                 std::hint::spin_loop();
             }
             let id = base as u64 + seq as u64 + 1;
-            let side = if seq.is_multiple_of(2) {
+            let side = if buy_only || seq.is_multiple_of(2) {
                 Side::Buy
             } else {
                 Side::Sell
+            };
+            let price = if buy_only {
+                price + (seq % 1000) as i64
+            } else {
+                price
             };
             sent_times[seq].store(start.elapsed().as_nanos() as u64, Ordering::SeqCst);
             writer_stream
@@ -177,13 +186,22 @@ fn main() {
     let args = Args::parse();
     let start = Instant::now();
     let args_offset = args.member_offset;
+    let buy_only = args.buy_only;
     let mut workers = Vec::with_capacity(args.members);
     for member in 0..args.members {
         let addr = args.addr.clone();
         let in_flight = args.in_flight;
         let orders = args.orders_per_member;
         workers.push(std::thread::spawn(move || {
-            run_member(addr, member, orders, in_flight, start, args_offset)
+            run_member(
+                addr,
+                member,
+                orders,
+                in_flight,
+                start,
+                args_offset,
+                buy_only,
+            )
         }));
     }
     let mut samples = Vec::with_capacity(args.members * args.orders_per_member);
