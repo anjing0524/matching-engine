@@ -28,7 +28,10 @@ if [[ -r /proc/loadavg ]]; then
   echo "test-host: load=$(cat /proc/loadavg)"
 fi
 
-stale=$(pgrep -fa 'target/release/trading-(middleware|core|gateway|load)' || true)
+stale=$(ps -eo pid=,args= | awk '{
+  n = split($2, parts, "/");
+  if (parts[n] ~ /^trading-(middleware|core|gateway|load)$/) print
+}' || true)
 if [[ -n "$stale" ]]; then
   echo "test-host: stale trading processes found:" >&2
   echo "$stale" >&2
