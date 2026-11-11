@@ -298,11 +298,7 @@ impl GatewayRuntime {
                         return;
                     }
                 }
-                command.session_id = connection_id;
-                if let Some(session) = self.middleware.sessions().get(connection_id) {
-                    command.member_id = session.member_id;
-                }
-                if self.middleware.submit_for_session(command).is_err() {
+                if self.middleware.admit(connection_id, command).is_err() {
                     self.errors += 1;
                 }
             }
