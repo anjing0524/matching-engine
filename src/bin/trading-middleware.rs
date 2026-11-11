@@ -34,6 +34,9 @@ struct Args {
     iterations: u64,
     #[arg(long, default_value_t = 30)]
     idle_timeout_secs: u64,
+    /// Print loop counters to stderr every N milliseconds; 0 disables.
+    #[arg(long, default_value_t = 0)]
+    stats_interval_ms: u64,
     /// Persist public events to this result log.
     #[arg(long)]
     public_log: Option<String>,
