@@ -147,58 +147,6 @@ impl GatewayServerHandle {
     ///
     /// # Errors
     /// Returns an I/O error when the connection is unknown or the write fails.
-    /// Sends a batch of frames with one socket write.
-    ///
-    /// # Errors
-    /// Returns an I/O error when the connection is unknown or the write fails.
-    pub fn send_batch(&self, connection_id: u64, frames: &[GatewayFrame]) -> io::Result<()> {
-        if frames.is_empty() {
-            return Ok(());
-        }
-        let stream = {
-            let connections = self
-                .connections
-                .lock()
-                .map_err(|_| io::Error::other("gateway connection lock poisoned"))?;
-            connections
-                .get(&connection_id)
-                .cloned()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "gateway not connected"))?
-        };
-        let mut encoded = Vec::with_capacity(frames.len() * GATEWAY_FRAME_SIZE);
-        for frame in frames {
-            encoded.extend_from_slice(&frame.clone().encode());
-        }
-        let timing = self.stats.timing_enabled();
-        let start = timing.then(std::time::Instant::now);
-        let mut stream = stream
-            .lock()
-            .map_err(|_| io::Error::other("gateway stream lock poisoned"))?;
-        let result = stream.write_all(&encoded);
-        if let Some(start) = start {
-            self.stats
-                .write_ns
-                .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
-        }
-        match result {
-            Ok(()) => {
-                self.stats
-                    .writes
-                    .fetch_add(frames.len() as u64, Ordering::Relaxed);
-                self.stats
-                    .bytes_written
-                    .fetch_add(encoded.len() as u64, Ordering::Relaxed);
-                Ok(())
-            }
-            Err(error) => {
-                self.stats
-                    .write_errors
-                    .fetch_add(frames.len() as u64, Ordering::Relaxed);
-                Err(error)
-            }
-        }
-    }
-
     pub fn send_private(&self, connection_id: u64, event: &PrivateEvent) -> io::Result<()> {
         self.send(connection_id, GatewayFrame::PrivateEvent(event.clone()))
     }
