@@ -9,7 +9,7 @@ use crate::trading::gateway::private_replay::{
     ComboPrivateReplayBuffer, PrivateReplayBuffer, ReplayEvent,
 };
 use crate::trading::gateway::server::GatewayServerHandle;
-use crate::trading::transport::middleware::MiddlewareSequencer;
+use crate::trading::transport::session::SessionRegistry;
 
 enum DownlinkEvent {
     Core(PrivateEvent),
@@ -60,7 +60,7 @@ impl PrivateDownlink {
     /// Routes core private events to the session owning each account.
     pub fn dispatch_private(
         &mut self,
-        sessions: &MiddlewareSequencer,
+        sessions: &SessionRegistry,
         server: &GatewayServerHandle,
         events: impl IntoIterator<Item = PrivateEvent>,
     ) -> usize {
@@ -74,7 +74,7 @@ impl PrivateDownlink {
     /// Routes combo private fills to the session owning each user.
     pub fn dispatch_combo_private(
         &mut self,
-        sessions: &MiddlewareSequencer,
+        sessions: &SessionRegistry,
         server: &GatewayServerHandle,
         fills: impl IntoIterator<Item = ComboPrivateFill>,
     ) -> usize {
@@ -87,7 +87,7 @@ impl PrivateDownlink {
 
     fn dispatch_events(
         &mut self,
-        sessions: &MiddlewareSequencer,
+        sessions: &SessionRegistry,
         server: &GatewayServerHandle,
         events: impl IntoIterator<Item = DownlinkEvent>,
     ) -> usize {
@@ -109,7 +109,7 @@ impl PrivateDownlink {
                 self.unrouted += 1;
                 continue;
             };
-            let Some(session) = sessions.session_by_user(user_id) else {
+            let Some(session) = sessions.find_active_by_user(user_id) else {
                 self.unrouted += 1;
                 continue;
             };

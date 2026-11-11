@@ -833,7 +833,8 @@ mod tests {
             if runtime
                 .gateway_mut()
                 .middleware_mut()
-                .session_by_user(2)
+                .sessions_mut()
+                .find_active_by_user(2)
                 .is_some()
             {
                 break;
@@ -846,7 +847,8 @@ mod tests {
             runtime
                 .gateway_mut()
                 .middleware_mut()
-                .session_by_user(2)
+                .sessions_mut()
+                .find_active_by_user(2)
                 .is_none()
         );
         drop(stream);
@@ -1031,6 +1033,7 @@ mod tests {
         runtime
             .gateway_mut()
             .middleware_mut()
+            .sessions_mut()
             .open_or_takeover(SessionInfo {
                 session_id: 1,
                 gateway_id: 1,

@@ -358,7 +358,7 @@ impl GatewayRuntime {
         fills: impl IntoIterator<Item = ComboPrivateFill>,
     ) -> usize {
         self.downlink
-            .dispatch_combo_private(&self.middleware, server, fills)
+            .dispatch_combo_private(self.middleware.sessions(), server, fills)
     }
 
     #[must_use]
@@ -880,7 +880,8 @@ mod tests {
             runtime.poll();
             if runtime
                 .middleware_mut()
-                .session_by_user(2)
+                .sessions_mut()
+                .find_active_by_user(2)
                 .is_some_and(|session| session.last_private_seq == 7)
             {
                 break;
@@ -890,7 +891,8 @@ mod tests {
         assert_eq!(
             runtime
                 .middleware_mut()
-                .session_by_user(2)
+                .sessions_mut()
+                .find_active_by_user(2)
                 .unwrap()
                 .last_private_seq,
             7
@@ -1343,7 +1345,7 @@ mod tests {
         let (mut server, _server_events) = start("127.0.0.1:0").unwrap();
         let mut runtime = GatewayRuntime::new(middleware, gateway_events);
         for id in 1..=64_000u64 {
-            runtime.middleware_mut().open_session(SessionInfo {
+            runtime.middleware_mut().sessions_mut().open(SessionInfo {
                 session_id: id,
                 gateway_id: 1,
                 member_id: 1,
@@ -1354,14 +1356,15 @@ mod tests {
             });
             runtime.connections.insert(id, ConnectionState::new());
         }
-        runtime.middleware_mut().prune_closed_sessions(0);
+        runtime.middleware_mut().sessions_mut().prune_closed(0);
 
         let start = Instant::now();
         for id in 1..=64_000u64 {
             black_box(
                 runtime
                     .middleware_mut()
-                    .session_by_user(u32::try_from(id).unwrap()),
+                    .sessions_mut()
+                    .find_active_by_user(u32::try_from(id).unwrap()),
             );
         }
         let lookup = start.elapsed();
