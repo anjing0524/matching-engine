@@ -5,7 +5,7 @@
 //! delivery.
 
 use crate::shared::collections::U64MixMap;
-use crate::trading::combo::engine::ComboPrivateFill;
+use crate::trading::core::combo_book::ComboPrivateFill;
 use crate::trading::core::private_events::PrivateEvent;
 
 /// Events that carry a per-user private sequence.

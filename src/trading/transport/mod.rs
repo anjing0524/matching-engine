@@ -10,4 +10,4 @@ pub(crate) mod spsc_ring;
 
 pub use self::middleware::MiddlewareSequencer;
 pub use self::ring::*;
-pub use self::runner::CoreRunner;
+pub use self::runner::{CoreRunner, RegistryRunner};

@@ -219,6 +219,26 @@ runtime.
 - reconnect replays private events after `last_private_seq`; combo effects are
   replayed only when a combo source exists
 
+## Runtime wiring (M1)
+
+The single-process production binary drives one `InstrumentRegistry` through
+`RegistryRunner`:
+
+- all commands enter the same middleware command ring; `combo_id != 0` is routed
+  to `InstrumentRegistry::execute_combo`, everything else to the ordinary
+  Contract core named by `instrument_id`
+- combo commands never create a second command ring or a second set of leg
+  books; the legacy `ComboEngine`/`ComboRuntime` path is not constructed by the
+  single-process binary
+- startup loads static pairs, prior settlements, and explicit account margin
+  balances from `ComboVenueConfig`; a pair config without balances is rejected
+- core private events and Combo Private Fills share one gateway per-user private
+  sequence, so reconnect replay is ordered across both sources
+- `TradingRuntime::snapshot()` stores `RegistrySnapshot`; restore is rejected
+  when the snapshot shape does not match the runtime command path
+- split deployment remains single-core and does not own combo execution
+  (ADR-0001); `CoreRunner` is retained for that path and for tests
+
 ## Market data
 
 M1:

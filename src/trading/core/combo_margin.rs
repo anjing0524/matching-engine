@@ -68,6 +68,14 @@ pub enum ComboMarginError {
         /// Available margin when the leg was considered.
         available: u128,
     },
+    /// The account has no configured margin balance and the venue requires one.
+    ///
+    /// Production combo venues fail closed: an unconfigured account is never
+    /// treated as unlimited.
+    MissingMarginBalance {
+        /// Owning user account without an explicit balance.
+        account_id: u64,
+    },
 }
 
 impl Display for ComboMarginError {
@@ -81,6 +89,10 @@ impl Display for ComboMarginError {
             } => write!(
                 formatter,
                 "account {account_id} has {available} margin available on combo {leg} leg but the entry needs {required}"
+            ),
+            Self::MissingMarginBalance { account_id } => write!(
+                formatter,
+                "account {account_id} has no explicit combo margin balance"
             ),
         }
     }
