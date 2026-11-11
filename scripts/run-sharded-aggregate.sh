@@ -16,6 +16,10 @@ if (( shards < 1 || shards > 2 )); then
   echo "shards must be 1..2 on this 4C/8T host" >&2
   exit 2
 fi
+if [[ "${USE_PROXY:-1}" == "1" && $shards -gt 1 ]]; then
+  echo "2 shards with proxy need more than 8 hardware threads; use USE_PROXY=0" >&2
+  exit 2
+fi
 root=$(pwd)
 dir=$(mktemp -d "${TMPDIR:-/tmp}/trading-shards.XXXXXX")
 pids=()
@@ -62,7 +66,16 @@ for ((i = 0; i < shards; i++)); do
   gateway_port=$(pick_port)
   middleware_ports+=("$middleware_port")
   gateway_ports+=("$gateway_port")
-  taskset -c $((i * 3)) "$root/target/release/trading-middleware" \
+  if [[ "$use_proxy" == "1" ]]; then
+    middleware_cpu=$((i * 3))
+    core_cpu=$((i * 3 + 1))
+    gateway_cpu=$((i * 3 + 2))
+  else
+    middleware_cpu=$((i * 2))
+    core_cpu=$((i * 2 + 1))
+    gateway_cpu=0
+  fi
+  taskset -c "$middleware_cpu" "$root/target/release/trading-middleware" \
     --listen "127.0.0.1:$middleware_port" \
     --command-ring "$command_ring" \
     --public-ring "$public_ring" \
@@ -71,7 +84,7 @@ for ((i = 0; i < shards; i++)); do
     >"$dir/shard-$i-middleware.log" 2>&1 &
   pids+=($!)
   wait_port "$middleware_port"
-  taskset -c $((i * 3 + 1)) "$root/target/release/trading-core" \
+  taskset -c "$core_cpu" "$root/target/release/trading-core" \
     --command-ring "$command_ring" \
     --public-ring "$public_ring" \
     --private-ring "$private_ring" \
@@ -79,7 +92,7 @@ for ((i = 0; i < shards; i++)); do
     >"$dir/shard-$i-core.log" 2>&1 &
   pids+=($!)
   if [[ "$use_proxy" == "1" ]]; then
-    taskset -c $((i * 3 + 2)) "$root/target/release/trading-gateway" \
+    taskset -c "$gateway_cpu" "$root/target/release/trading-gateway" \
       --listen "127.0.0.1:$gateway_port" \
       --middleware "127.0.0.1:$middleware_port" \
       >"$dir/shard-$i-gateway.log" 2>&1 &
@@ -93,7 +106,12 @@ sleep 0.1
 
 client_pids=()
 for ((i = 0; i < shards; i++)); do
-  taskset -c $((6 + i)) "$root/target/release/trading-load" \
+  if [[ "$use_proxy" == "1" ]]; then
+    client_cpus="3,4"
+  else
+    client_cpus="$((4 + i * 2)),$((5 + i * 2))"
+  fi
+  taskset -c "$client_cpus" "$root/target/release/trading-load" \
     --addr "127.0.0.1:${gateway_ports[$i]}" \
     --members 1 \
     --orders-per-member "$orders" \
