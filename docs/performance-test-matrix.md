@@ -225,15 +225,20 @@ Added opt-in `--stats-interval-ms` to `trading-middleware` and `trading-core`.
 Two-member serial run, 200k commands, middleware CPU0, core CPU1:
 
 ```text
-client aggregate: 26377/s
-core_stats:       commands=200000
-middleware_stats: gateway_events≈161k, private≈211k, public≈161k
+client aggregate: 30407/s
+middleware final: gateway_events=200004 submitted=200000 private=299999 public=200000
+core final:       commands≈200000
 ```
 
-The core consumed the full 200k command stream, so matching itself was not the
-throughput limit in this run. Middleware/gateway ingestion and private dispatch
-are the leading suspects. Counter samples are interval snapshots, so totals are
-approximate.
+The middleware received and submitted all 200k commands; the core consumed all
+200k; private dispatch emitted ~300k events. Therefore:
+
+- no commands were dropped upstream
+- core matching was not the throughput limiter
+- the low aggregate rate is in end-to-end pacing/gateway read/write behavior
+- counter samples are interval snapshots; final values are approximate
+
+The next target is the gateway reader/poll loop timing, not the matching core.
 
 ## Next measurement
 
