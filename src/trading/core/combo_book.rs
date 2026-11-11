@@ -16,6 +16,7 @@
 //! session metadata later tickets need for cancel, fills, and private replay.
 
 use crate::shared::collections::U64MixMap;
+use crate::trading::core::combo_margin::ComboMarginError;
 use crate::trading::core::protocol::{
     Command, CommandType, Offset, PriceType, Side, TimeCondition, TriggerType, VolumeCondition,
 };
@@ -909,6 +910,8 @@ pub enum ComboCommandError {
     },
     /// Cancel did not carry an exchange order id.
     MissingCancelOrderId,
+    /// The account cannot back both legs' estimated margin.
+    Margin(ComboMarginError),
     /// The underlying book refused the transition.
     Book(ComboBookError),
 }
@@ -947,6 +950,7 @@ impl Display for ComboCommandError {
                 write!(formatter, "combo pair {pair_id} order has zero quantity")
             }
             Self::MissingCancelOrderId => formatter.write_str("combo cancel has no order id"),
+            Self::Margin(error) => Display::fmt(error, formatter),
             Self::Book(error) => Display::fmt(error, formatter),
         }
     }
@@ -955,6 +959,7 @@ impl Display for ComboCommandError {
 impl Error for ComboCommandError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Margin(error) => Some(error),
             Self::Book(error) => Some(error),
             _ => None,
         }
@@ -964,6 +969,12 @@ impl Error for ComboCommandError {
 impl From<ComboBookError> for ComboCommandError {
     fn from(error: ComboBookError) -> Self {
         Self::Book(error)
+    }
+}
+
+impl From<ComboMarginError> for ComboCommandError {
+    fn from(error: ComboMarginError) -> Self {
+        Self::Margin(error)
     }
 }
 

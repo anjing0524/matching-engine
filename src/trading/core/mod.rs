@@ -19,7 +19,7 @@ pub use self::combo_book::{
     ComboOrder, ComboOrderOwner, ComboPrivateFill, ImpliedComboFill,
 };
 pub use self::combo_margin::{
-    ComboMarginFreeze, ComboMarginSnapshot, ComboMarginSnapshotError, LegMargin,
+    ComboMarginError, ComboMarginFreeze, ComboMarginSnapshot, ComboMarginSnapshotError, LegMargin,
 };
 pub use self::combo_pair::{ComboLeg, ComboPair, ComboPairError, ComboPairMargin};
 pub use self::kernel::{CoreEvent, CoreSnapshot, TradingCore};

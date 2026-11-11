@@ -16,8 +16,8 @@ use crate::trading::core::combo_book::{
     ComboOrderOwner, ComboPrivateFill, ImpliedComboFill, validate_new_combo_order,
 };
 use crate::trading::core::combo_margin::{
-    ComboMarginFreeze, ComboMarginLedger, ComboMarginSnapshot, ComboMarginSnapshotError, LegMargin,
-    LegMarginRate,
+    ComboEntryMargin, ComboMarginError, ComboMarginFreeze, ComboMarginLedger, ComboMarginSnapshot,
+    ComboMarginSnapshotError, LegMargin, LegMarginRate,
 };
 use crate::trading::core::combo_pair::{ComboLeg, ComboPair, ComboPairError};
 use crate::trading::core::kernel::{CoreEvent, TradingCore};
@@ -345,6 +345,7 @@ pub struct InstrumentRegistry {
     pairs: U64MixMap<ComboPair>,
     combo_books: U64MixMap<ComboBook>,
     prior_settlements: U64MixMap<u64>,
+    margin_balances: U64MixMap<u64>,
     margin: ComboMarginLedger,
     combo_private_events: Vec<ComboPrivateFill>,
     next_combo_order_id: u64,
@@ -360,6 +361,7 @@ impl InstrumentRegistry {
             pairs: U64MixMap::default(),
             combo_books: U64MixMap::default(),
             prior_settlements: U64MixMap::default(),
+            margin_balances: U64MixMap::default(),
             margin: ComboMarginLedger::default(),
             combo_private_events: Vec::new(),
             next_combo_order_id: 1,
@@ -439,6 +441,36 @@ impl InstrumentRegistry {
         self.prior_settlements
             .get(&u64::from(instrument_id))
             .copied()
+    }
+
+    /// Configures one account's available margin balance.
+    ///
+    /// The balance is venue configuration, like prior settlement, and is not
+    /// carried by a registry snapshot. It is denominated in the same
+    /// `price * quantity * multiplier * rate` units the leg margin ledger
+    /// reports. An account without a configured balance is not limited, so a
+    /// venue that wants backing enforced must configure every trading account
+    /// before matching starts.
+    pub fn set_margin_balance(&mut self, account_id: u64, balance: u64) {
+        self.margin_balances.insert(account_id, balance);
+    }
+
+    /// Returns the balance configured for `account_id`, if any.
+    #[must_use]
+    pub fn margin_balance(&self, account_id: u64) -> Option<u64> {
+        self.margin_balances.get(&account_id).copied()
+    }
+
+    /// Returns the account's remaining margin after frozen estimates and
+    /// single-side-largest actual margin.
+    ///
+    /// Returns `None` when the account has no configured balance, because no
+    /// limit applies. The result saturates at zero when actual trade-price
+    /// margin has already consumed the balance.
+    #[must_use]
+    pub fn available_margin(&self, account_id: u64) -> Option<u64> {
+        let balance = self.margin_balance(account_id)?;
+        Some(u64::try_from(self.margin.available(account_id, balance)).unwrap_or(0))
     }
 
     /// Returns the margin state for `account_id` on one leg Contract.
@@ -865,7 +897,9 @@ impl InstrumentRegistry {
     /// only M1 base combo semantics: spread limit GFD new orders and cancels.
     /// Market, FOK/FAK, stop-trigger, zero-quantity, unknown-pair, and
     /// duplicate-cancel requests fail explicitly without mutating a book. A new
-    /// order matches opposite Combo Orders in price-time priority, then
+    /// order also fails, before any book mutates, when the account's configured
+    /// balance cannot reserve the prior-settlement estimate on both legs.
+    /// A new order matches opposite Combo Orders in price-time priority, then
     /// consumes standing leg liquidity as implied-in while its spread limit is
     /// satisfied, and finally rests any residual. Implied candidates are never
     /// inserted into the public combo book.
@@ -905,7 +939,7 @@ impl InstrumentRegistry {
             command.price_ticks,
             command.quantity,
         );
-        self.freeze_combo_margin(&pair, &order);
+        self.reserve_combo_margin(&pair, &order)?;
 
         // Direct combo matching always runs first. Only a residual taker may
         // consume leg liquidity through the implied-in path.
@@ -1082,18 +1116,31 @@ impl InstrumentRegistry {
         );
     }
 
-    /// Freezes prior-settlement margin for a newly accepted Combo Order.
-    fn freeze_combo_margin(&mut self, pair: &ComboPair, order: &ComboOrder) {
+    /// Reserves prior-settlement margin for a newly accepted Combo Order.
+    ///
+    /// Both legs must reserve from the account's configured balance before any
+    /// estimate is recorded. This runs before any combo or leg book mutation,
+    /// so a rejected entry consumes no order id and leaves matching state
+    /// untouched.
+    fn reserve_combo_margin(
+        &mut self,
+        pair: &ComboPair,
+        order: &ComboOrder,
+    ) -> Result<(), ComboMarginError> {
         let leg1_prior_settlement = self.prior_settlement(pair.leg1_instrument_id).unwrap_or(0);
         let leg2_prior_settlement = self.prior_settlement(pair.leg2_instrument_id).unwrap_or(0);
-        self.margin.freeze(
+        self.margin.try_freeze(
             pair,
-            order.order_id,
-            order.owner.user_id,
-            order.quantity,
-            leg1_prior_settlement,
-            leg2_prior_settlement,
-        );
+            ComboEntryMargin {
+                order_id: order.order_id,
+                account_id: order.owner.user_id,
+                quantity: order.quantity,
+                leg1_prior_settlement,
+                leg2_prior_settlement,
+                balance: self.margin_balance(order.owner.user_id),
+            },
+        )?;
+        Ok(())
     }
 
     /// Settles the effects of every direct Combo Fill in `events`.
