@@ -18,6 +18,7 @@ core_cpus=${CORE_CPUS:-1}
 gateway_cpus=${GATEWAY_CPUS:-2}
 client_cpus=${CLIENT_CPUS:-4,5,6,7}
 root=$(pwd)
+cargo build --release --bins >/dev/null
 dir=$(mktemp -d "${TMPDIR:-/tmp}/trading-split-aggregate.XXXXXX")
 middleware_pid=
 core_pid=

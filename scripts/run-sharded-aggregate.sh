@@ -21,6 +21,7 @@ if [[ "${USE_PROXY:-1}" == "1" && $shards -gt 1 ]]; then
   exit 2
 fi
 root=$(pwd)
+cargo build --release --bins >/dev/null
 dir=$(mktemp -d "${TMPDIR:-/tmp}/trading-shards.XXXXXX")
 pids=()
 cleanup() {

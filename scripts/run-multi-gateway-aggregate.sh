@@ -19,6 +19,7 @@ if (( gateways < 1 || gateways > 4 )); then
   exit 2
 fi
 root=$(pwd)
+cargo build --release --bins >/dev/null
 dir=$(mktemp -d "${TMPDIR:-/tmp}/trading-multi-gateway.XXXXXX")
 pids=()
 cleanup() {
