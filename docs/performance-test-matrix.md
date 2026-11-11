@@ -170,6 +170,19 @@ splice relay:          235206/s
 
 Only +1.2%, with unsafe Linux-only code and no p50 improvement; reverted.
 
+### rejected: gateway event batching
+
+Combining frames read in one syscall into a single `GatewayEvent::Frames` for
+middleware:
+
+```text
+2 gateways + 4 clients: 226277/s
+64KiB relay baseline:   232335/s
+```
+
+No improvement; extra Vec allocation and larger messages offset fewer channel
+sends. Reverted.
+
 ## Interpretation
 
 ```text
