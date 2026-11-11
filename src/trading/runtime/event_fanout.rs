@@ -118,6 +118,7 @@ impl EventFanout {
         }
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn repair(&self, request: NackRequest) -> Vec<PublicEvent> {
         self.repair_buffer
