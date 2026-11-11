@@ -1,6 +1,6 @@
 //! Per-connection token-bucket rate limiting for gateway frames.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// A simple monotonic token bucket.
 #[derive(Debug)]
@@ -48,6 +48,7 @@ impl TokenBucket {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn bucket_exhausts_and_refills() {
