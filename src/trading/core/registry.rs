@@ -12,15 +12,16 @@ use crate::domain::orderbook::ContractSpec;
 use crate::shared::SymbolId;
 use crate::shared::collections::identity::U64MixMap;
 use crate::trading::core::combo_book::{
-    ComboBook, ComboCommandError, ComboEvent, ComboOrder, ComboOrderOwner, validate_new_combo_order,
+    ComboBook, ComboCommandError, ComboEvent, ComboOrder, ComboOrderOwner, ImpliedComboFill,
+    validate_new_combo_order,
 };
 use crate::trading::core::combo_pair::{ComboLeg, ComboPair, ComboPairError};
 use crate::trading::core::kernel::{CoreEvent, TradingCore};
 use crate::trading::core::leg_liquidity::{
-    ComboLegError, ComboLegExecution, LegExecutionContext, LegLiquidityPlan,
+    ComboLegError, ComboLegExecution, LegExecutionContext, LegLiquidityError, LegLiquidityPlan,
 };
 use crate::trading::core::plugins::{NoPlugins, PreTradePlugin};
-use crate::trading::core::protocol::{Command, CommandType};
+use crate::trading::core::protocol::{Command, CommandType, Side};
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
@@ -286,8 +287,10 @@ impl InstrumentRegistry {
     /// only M1 base combo semantics: spread limit GFD new orders and cancels.
     /// Market, FOK/FAK, stop-trigger, zero-quantity, unknown-pair, and
     /// duplicate-cancel requests fail explicitly without mutating a book. A new
-    /// order matches opposite Combo Orders in price-time priority before its
-    /// residual rests. Implied-order insertion is intentionally absent.
+    /// order matches opposite Combo Orders in price-time priority, then
+    /// consumes standing leg liquidity as implied-in while its spread limit is
+    /// satisfied, and finally rests any residual. Implied candidates are never
+    /// inserted into the public combo book.
     ///
     /// # Errors
     /// Returns [`ComboCommandError`] when the command names an unknown pair,
@@ -305,9 +308,9 @@ impl InstrumentRegistry {
 
     fn rest_combo_order(&mut self, command: Command) -> Result<Vec<ComboEvent>, ComboCommandError> {
         let pair_id = command.combo_id;
-        if !self.combo_books.contains_key(&u64::from(pair_id)) {
+        let Some(pair) = self.pairs.get(&u64::from(pair_id)).copied() else {
             return Err(ComboCommandError::UnknownPair { pair_id });
-        }
+        };
         validate_new_combo_order(&command)?;
 
         let order_id = self.next_combo_order_id;
@@ -316,7 +319,7 @@ impl InstrumentRegistry {
             command.session_id,
             command.client_order_id,
         );
-        let order = ComboOrder::new(
+        let mut order = ComboOrder::new(
             order_id,
             pair_id,
             owner,
@@ -324,13 +327,153 @@ impl InstrumentRegistry {
             command.price_ticks,
             command.quantity,
         );
-        let book = self
+
+        // Direct combo matching always runs first. Only a residual taker may
+        // consume leg liquidity through the implied-in path.
+        let mut events = self
             .combo_books
             .get_mut(&u64::from(pair_id))
-            .ok_or(ComboCommandError::UnknownPair { pair_id })?;
-        let events = book.submit(order)?;
+            .ok_or(ComboCommandError::UnknownPair { pair_id })?
+            .match_taker(&mut order)?;
+        if order.remaining > 0 {
+            events.extend(self.match_implied_in(&pair, &mut order));
+        }
+        if order.remaining > 0 {
+            let rested = self
+                .combo_books
+                .get_mut(&u64::from(pair_id))
+                .ok_or(ComboCommandError::UnknownPair { pair_id })?
+                .rest(order)?;
+            events.push(ComboEvent::Rested { order: rested });
+        }
         self.next_combo_order_id = self.next_combo_order_id.saturating_add(1);
         Ok(events)
+    }
+
+    /// Fills the residual of one Combo Order against standing leg liquidity.
+    ///
+    /// The M1 planner repeatedly inspects the best crossing price on each leg
+    /// and consumes the smaller of the combo residual and both best-level
+    /// available quantities while the realized spread satisfies the combo
+    /// limit. Each round builds both leg plans before either book mutates, so a
+    /// shortfall on either leg stops implied-in with no mutation. Implied
+    /// candidates are never stored in the combo book.
+    fn match_implied_in(&mut self, pair: &ComboPair, order: &mut ComboOrder) -> Vec<ComboEvent> {
+        let mut events = Vec::new();
+        while order.remaining > 0 {
+            let (leg1_side, leg2_side) = match order.side {
+                Side::Buy => (Side::Buy, Side::Sell),
+                Side::Sell => (Side::Sell, Side::Buy),
+            };
+            let Some(leg1_price) = self.best_leg_price(pair.leg1_instrument_id, leg1_side) else {
+                break;
+            };
+            let Some(leg2_price) = self.best_leg_price(pair.leg2_instrument_id, leg2_side) else {
+                break;
+            };
+            let spread_price = leg_spread_price(leg1_price, leg2_price);
+            if !spread_within_limit(order.side, order.spread_price, spread_price) {
+                break;
+            }
+            let leg1_available = self.leg_available_at(
+                pair.leg1_instrument_id,
+                leg1_side,
+                leg1_price,
+                order.remaining,
+            );
+            let leg2_available = self.leg_available_at(
+                pair.leg2_instrument_id,
+                leg2_side,
+                leg2_price,
+                order.remaining,
+            );
+            let quantity = order.remaining.min(leg1_available).min(leg2_available);
+            if quantity == 0 {
+                break;
+            }
+            let Some(leg1_plan) =
+                self.plan_leg_at(pair.leg1_instrument_id, leg1_side, leg1_price, quantity)
+            else {
+                break;
+            };
+            let Some(leg2_plan) =
+                self.plan_leg_at(pair.leg2_instrument_id, leg2_side, leg2_price, quantity)
+            else {
+                break;
+            };
+            if self
+                .consume_combo_legs(
+                    pair.leg1_instrument_id,
+                    pair.leg2_instrument_id,
+                    order.order_id,
+                    &leg1_plan,
+                    &leg2_plan,
+                )
+                .is_err()
+            {
+                // The seam validated both plans before mutating either book.
+                break;
+            }
+
+            order.remaining -= quantity;
+            if let Some(book) = self.combo_books.get_mut(&u64::from(pair.pair_id)) {
+                book.record_trade_price(spread_price);
+            }
+            events.push(ComboEvent::ImpliedFilled {
+                fill: ImpliedComboFill {
+                    pair_id: pair.pair_id,
+                    order_id: order.order_id,
+                    owner: order.owner,
+                    side: order.side,
+                    spread_price,
+                    quantity,
+                    leg1_price_ticks: leg1_price,
+                    leg2_price_ticks: leg2_price,
+                },
+            });
+        }
+        events
+    }
+
+    /// Returns the best price a combo taker would pay or receive on one leg.
+    fn best_leg_price(&self, instrument_id: u32, taker_side: Side) -> Option<u64> {
+        let core = self.instruments.get(&u64::from(instrument_id))?;
+        match taker_side {
+            Side::Buy => core.best_ask(),
+            Side::Sell => core.best_bid(),
+        }
+    }
+
+    /// Returns crossing quantity available at one leg price, capped by `wanted`.
+    fn leg_available_at(
+        &self,
+        instrument_id: u32,
+        taker_side: Side,
+        price_ticks: u64,
+        wanted: u64,
+    ) -> u64 {
+        let Some(core) = self.instruments.get(&u64::from(instrument_id)) else {
+            return 0;
+        };
+        match core.plan_leg_liquidity(taker_side, price_ticks, wanted) {
+            Ok(plan) => plan.quantity,
+            Err(LegLiquidityError::InsufficientLiquidity { available, .. }) => available,
+            Err(_) => 0,
+        }
+    }
+
+    /// Builds one leg plan at an exact best price, if the book still covers it.
+    fn plan_leg_at(
+        &self,
+        instrument_id: u32,
+        taker_side: Side,
+        price_ticks: u64,
+        quantity: u64,
+    ) -> Option<LegLiquidityPlan> {
+        self.instruments
+            .get(&u64::from(instrument_id))?
+            .plan_leg_liquidity(taker_side, price_ticks, quantity)
+            .ok()
     }
 
     fn cancel_combo_order(
@@ -443,6 +586,21 @@ impl InstrumentRegistry {
 }
 
 const MAX_MARGIN_RATE_BPS: u64 = 10_000;
+
+/// Returns `leg1 - leg2` as a signed spread price, saturating at the `i64` ends.
+fn leg_spread_price(leg1_price: u64, leg2_price: u64) -> i64 {
+    let leg1 = i64::try_from(leg1_price).unwrap_or(i64::MAX);
+    let leg2 = i64::try_from(leg2_price).unwrap_or(i64::MIN);
+    leg1.saturating_sub(leg2)
+}
+
+/// Returns true when a realized spread satisfies a combo taker's limit.
+fn spread_within_limit(taker_side: Side, limit: i64, realized: i64) -> bool {
+    match taker_side {
+        Side::Buy => realized <= limit,
+        Side::Sell => realized >= limit,
+    }
+}
 
 impl Default for InstrumentRegistry {
     fn default() -> Self {

@@ -8,8 +8,9 @@
 //! A submitted Combo Order acts as a taker against the opposite side in
 //! price-time priority. Each execution is atomic: one equal quantity leaves the
 //! buy and the sell Combo Order together, and neither side can fill alone. A
-//! residual taker quantity rests. The book also tracks the last direct Combo
-//! trade price that the SHFE-style execution-price rule consumes.
+//! residual taker quantity rests. The book also tracks the last Combo trade
+//! price, whether direct or implied-in, that the SHFE-style execution-price
+//! rule consumes.
 //!
 //! The book has no public market-data projection. It stores the owner and
 //! session metadata later tickets need for cancel, fills, and private replay.
@@ -68,6 +69,33 @@ pub struct ComboFill {
     pub buy_owner: ComboOrderOwner,
     /// Owner of the sell-side Combo Order.
     pub sell_owner: ComboOrderOwner,
+}
+
+/// One atomic Combo Fill produced by implied-in matching.
+///
+/// An implied-in execution has only one base Combo Order: the taker that
+/// consumes two resting leg orders. The realized spread is the first-leg price
+/// minus the second-leg price, and both leg prices are the resting prices that
+/// the taker consumed. No implied order is stored or published.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ImpliedComboFill {
+    /// Combo Pair this execution belongs to.
+    pub pair_id: u32,
+    /// Exchange id of the implied-in taker Combo Order.
+    pub order_id: u64,
+    /// Owner of the taker Combo Order.
+    pub owner: ComboOrderOwner,
+    /// Direction of the taker Combo Order.
+    pub side: Side,
+    /// Realized spread: first-leg price minus second-leg price.
+    pub spread_price: i64,
+    /// Equal quantity consumed from both leg books.
+    pub quantity: u64,
+    /// Resting first-leg price consumed by the taker.
+    pub leg1_price_ticks: u64,
+    /// Resting second-leg price consumed by the taker.
+    pub leg2_price_ticks: u64,
 }
 
 /// One resting base Combo Order.
@@ -261,6 +289,35 @@ impl ComboBook {
     /// in that case.
     pub fn submit(&mut self, mut order: ComboOrder) -> Result<Vec<ComboEvent>, ComboBookError> {
         self.validate_order(&order)?;
+        let mut events = self.match_taker_unchecked(&mut order);
+        if order.remaining > 0 {
+            events.push(ComboEvent::Rested {
+                order: self.insert(order),
+            });
+        }
+        Ok(events)
+    }
+
+    /// Matches `order` as a taker against the opposite side without resting it.
+    ///
+    /// The order's `remaining` is reduced by every atomic direct fill. The
+    /// caller decides whether the residual rests. This split lets the registry
+    /// run implied-in matching between direct matching and resting, while the
+    /// public combo book still holds only base Combo Orders.
+    ///
+    /// # Errors
+    /// Returns [`ComboBookError`] for a duplicate id, zero quantity, an invalid
+    /// remaining quantity, or an order built for another pair. No book mutates
+    /// in that case.
+    pub fn match_taker(
+        &mut self,
+        order: &mut ComboOrder,
+    ) -> Result<Vec<ComboEvent>, ComboBookError> {
+        self.validate_order(order)?;
+        Ok(self.match_taker_unchecked(order))
+    }
+
+    fn match_taker_unchecked(&mut self, order: &mut ComboOrder) -> Vec<ComboEvent> {
         let mut events = Vec::new();
         let resting_side = order.side.opposite();
         while order.remaining > 0 {
@@ -273,7 +330,8 @@ impl ComboBook {
             let quantity = order.remaining.min(resting.remaining);
             let spread_price =
                 self.execution_price(order.side, order.spread_price, resting.spread_price);
-            self.consume_resting(resting.order_id, quantity)?;
+            self.consume_resting(resting.order_id, quantity)
+                .expect("resting combo order selected from the book must consume");
             order.remaining -= quantity;
             self.last_trade_price = Some(spread_price);
             let (buy_order_id, buy_owner, sell_order_id, sell_owner) = match order.side {
@@ -292,15 +350,15 @@ impl ComboBook {
                 },
             });
         }
-        if order.remaining > 0 {
-            events.push(ComboEvent::Rested {
-                order: self.insert(order),
-            });
-        }
-        Ok(events)
+        events
     }
 
-    /// Returns the spread price of the last direct Combo Fill on this pair.
+    /// Records the realized spread of an implied-in Combo Fill.
+    pub(crate) fn record_trade_price(&mut self, spread_price: i64) {
+        self.last_trade_price = Some(spread_price);
+    }
+
+    /// Returns the spread price of the last Combo Fill on this pair.
     #[must_use]
     pub fn last_trade_price(&self) -> Option<i64> {
         self.last_trade_price
@@ -527,6 +585,11 @@ pub enum ComboEvent {
     Filled {
         /// The atomic Combo Fill.
         fill: ComboFill,
+    },
+    /// An implied-in taker consumed two resting leg orders atomically.
+    ImpliedFilled {
+        /// The atomic implied-in Combo Fill.
+        fill: ImpliedComboFill,
     },
     /// A resting base order was removed by cancel.
     Canceled {
