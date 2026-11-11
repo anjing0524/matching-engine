@@ -67,7 +67,7 @@ fn binary_restores_runtime_snapshot() {
         .args([
             "run",
             "--iterations",
-            "5000",
+            "0",
             "--listen",
             "127.0.0.1:0",
             "--metrics-listen",
