@@ -65,6 +65,13 @@ aggregate: 148989/s
 Two shards scale to ~1.6x on this host. Each shard owns its middleware/core;
 clients are pinned to SMT siblings, so this is a conservative 4C/8T number.
 
+Repeatability, three runs each:
+
+```text
+1 shard: 88827, 93209, 92566 /s   (median 92566)
+2 shards:149236, 148107, 156361 /s (median 149236)
+```
+
 ### core latency
 
 ```text
