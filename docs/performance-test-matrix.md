@@ -202,6 +202,22 @@ Two members do not scale linearly even without the gateway proxy. The combined
 middleware gateway listener and middleware loop on one CPU is the leading
 suspect; this is not a hardware-count conclusion yet.
 
+### process observation
+
+Under a two-member serial run with middleware pinned to CPU0 and core to CPU1:
+
+```text
+trading-middleware: 3-4 threads, 78-98% CPU
+trading-core:       1 thread, ~99% CPU
+```
+
+The core process is also a busy-poll loop, so 99% CPU does not by itself mean it
+is saturated by matching work. Perf counters show the core executing billions of
+instructions in the sample, confirming that the poll loop is hot.
+
+The next step is command/event instrumentation in the middleware and core loops;
+CPU percentage alone cannot distinguish "busy polling" from "work saturated".
+
 ## Next measurement
 
 Use an independent load-generator host/process and per-process CPU affinity:
