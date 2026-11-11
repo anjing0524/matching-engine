@@ -188,3 +188,21 @@ fn pair_kind_defaults_cross_term_and_sorts_before_cross_product() {
     assert_eq!(cross_term.kind, ComboPairKind::CrossProduct);
     assert!(ComboPairKind::CrossTerm.priority() < ComboPairKind::CrossProduct.priority());
 }
+
+#[test]
+fn pair_with_incompatible_leg_ticks_is_rejected() {
+    let mut registry = InstrumentRegistry::new();
+    registry.register(1, spec("IF2501")).unwrap();
+    registry
+        .register(2, ContractSpec::new("IF2502", 2, 40_000, 70_000))
+        .unwrap();
+    let error = registry.register_pair(pair(10, 1, 2, 1)).unwrap_err();
+    assert_eq!(
+        error,
+        ComboPairError::TickMismatch {
+            pair_id: 10,
+            leg1_tick: 1,
+            leg2_tick: 2,
+        }
+    );
+}

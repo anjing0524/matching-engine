@@ -1739,6 +1739,21 @@ fn validate_pair(
             });
         }
     }
+    let leg1_tick = instruments
+        .get(&u64::from(pair.leg1_instrument_id))
+        .map(|core| core.spec().tick_size);
+    let leg2_tick = instruments
+        .get(&u64::from(pair.leg2_instrument_id))
+        .map(|core| core.spec().tick_size);
+    if let (Some(leg1_tick), Some(leg2_tick)) = (leg1_tick, leg2_tick)
+        && leg1_tick != leg2_tick
+    {
+        return Err(ComboPairError::TickMismatch {
+            pair_id: pair.pair_id,
+            leg1_tick,
+            leg2_tick,
+        });
+    }
     if pair.spread_tick == 0 {
         return Err(ComboPairError::InvalidSpreadTick {
             pair_id: pair.pair_id,

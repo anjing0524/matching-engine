@@ -157,6 +157,15 @@ pub enum ComboPairError {
         /// Instrument id used for both legs.
         instrument_id: u32,
     },
+    /// The two leg Contracts do not share a compatible tick size.
+    TickMismatch {
+        /// Pair being registered.
+        pair_id: u32,
+        /// First leg tick.
+        leg1_tick: u64,
+        /// Second leg tick.
+        leg2_tick: u64,
+    },
     /// The spread tick cannot define a valid spread price increment.
     InvalidSpreadTick {
         /// Pair being registered.
@@ -196,6 +205,14 @@ impl Display for ComboPairError {
             } => write!(
                 formatter,
                 "combo pair {pair_id} names instrument {instrument_id} as both legs"
+            ),
+            Self::TickMismatch {
+                pair_id,
+                leg1_tick,
+                leg2_tick,
+            } => write!(
+                formatter,
+                "combo pair {pair_id} has incompatible leg ticks {leg1_tick} and {leg2_tick}"
             ),
             Self::InvalidSpreadTick {
                 pair_id,
