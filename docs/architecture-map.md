@@ -13,6 +13,7 @@ src/
 └── trading/
     ├── core/               # kernel, auction, positions, plugins, events, protocol
     ├── gateway/            # frame, runtime, server, proxy, directory, auth, replay
+    │                       # private_downlink: seq/replay/routing
     ├── transport/          # SPSC ring, middleware, runner, session, command/result logs
     ├── market_data/        # publisher, tracker, repair, metrics
     ├── combo/              # queue, engine, exec, runtime, market_data, margin
@@ -49,9 +50,11 @@ Key ownership rules:
   kernel has no sockets or file I/O.
 - `CoreRunner` drains commands and calls the kernel. It does not retain
   diagnostic `CoreEvent`s.
-- `GatewayRuntime` owns per-connection state (`ConnectionState`) and assigns
-  the single per-user private sequence used by both core and combo effects.
-  `poll_effects()` returns redirects, replays, and session counts together.
+- `GatewayRuntime` owns per-connection state (`ConnectionState`) and session
+  lifecycle. `PrivateDownlink` owns the single per-user private sequence,
+  replay retention, session routing, and batched delivery for core and combo
+  private effects. `poll_effects()` returns redirects, replays, and session
+  counts together.
 - `EventFanout` owns public/private result logs, repair, market-data publishing,
   and their counters.
 - Snapshots use `snapshot_file`: version, CRC32, payload bytes, atomic replace.
