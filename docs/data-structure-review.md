@@ -429,6 +429,32 @@ not yet a valid aggregate-capacity instrument.
 
 Do not use these numbers to conclude anything about 1M/s capacity yet.
 
+### 24. Calibrated external load generator
+
+Added a serial path to `trading-load` so in-flight=1 can be compared with the
+one-outstanding remote test.
+
+Single member, external `trading-engine` process, serial/in-flight=1:
+
+```text
+n=50000 rate=142673/s p50=805ns p99=12868ns p999=31226ns max=2632460ns
+```
+
+Four members, 1M commands, in-flight=32:
+
+```text
+n=1000000 elapsed=12.629s rate=79182/s
+p50=1.404ms p99=2.220ms p999=2.899ms
+```
+
+Interpretation:
+
+- the serial calibration now agrees with the expected order of magnitude
+- a single `trading-engine` process does not reach 1M/s under this pipeline
+- 4-member pipelining is slower than serial in this consolidated process
+- this is **one process**; the production split topology (separate gateway,
+  middleware, core) has not yet been measured for aggregate throughput
+
 ## Remaining data-structure candidates## Remaining data-structure candidates## Remaining data-structure candidates
 
 1. **Event vectors**
