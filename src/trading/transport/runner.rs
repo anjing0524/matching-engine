@@ -15,13 +15,13 @@ use crate::trading::transport::{
 use std::collections::VecDeque;
 
 fn flush_queue<T>(
-    producer: &crate::trading::transport::CommandProducer,
+    mut send: impl FnMut(&T) -> Result<(), CommandTransportError>,
     pending: &mut std::collections::VecDeque<T>,
     events: Vec<T>,
 ) {
     pending.extend(events);
     while let Some(event) = pending.front() {
-        match producer.send(event) {
+        match send(event) {
             Ok(()) => {
                 pending.pop_front();
             }
@@ -99,7 +99,11 @@ impl<P: PreTradePlugin> CoreRunner<P> {
             return;
         };
         let events = self.core.drain_public_events();
-        flush_queue(producer, &mut self.pending_public, events);
+        flush_queue(
+            |event| producer.send(event),
+            &mut self.pending_public,
+            events,
+        );
     }
 
     fn flush_private(&mut self) {
@@ -107,7 +111,11 @@ impl<P: PreTradePlugin> CoreRunner<P> {
             return;
         };
         let events = self.core.drain_private_events();
-        flush_queue(producer, &mut self.pending_private, events);
+        flush_queue(
+            |event| producer.send(event),
+            &mut self.pending_private,
+            events,
+        );
     }
 
     #[cfg(test)]
