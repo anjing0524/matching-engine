@@ -1,7 +1,7 @@
 //! Standalone gateway relay: member TCP connections are forwarded frame-for-frame
 //! to the middleware gateway listener.
 
-use std::io;
+use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
