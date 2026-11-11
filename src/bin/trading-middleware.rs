@@ -241,8 +241,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             let submitted = gateway.middleware_mut().submitted();
             let gateway_stats = server.stats();
+            let unrouted = gateway.private_unrouted();
+            let send_errors = gateway.private_send_errors();
             eprintln!(
-                "middleware_stats ticks={ticks} gateway_events={gateway_events} submitted={submitted} private={private_events} public={public_events} accepted={} frames_read={} writes={} bytes={} write_errors={}",
+                "middleware_stats ticks={ticks} gateway_events={gateway_events} submitted={submitted} private={private_events} public={public_events} accepted={} frames_read={} writes={} bytes={} write_errors={} unrouted={unrouted} send_errors={send_errors}",
                 gateway_stats.accepted,
                 gateway_stats.frames_read,
                 gateway_stats.writes,

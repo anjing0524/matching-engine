@@ -64,6 +64,8 @@ pub struct GatewayRuntime {
     credentials: Option<GatewayCredentials>,
     redirect_target: Option<String>,
     errors: u64,
+    private_unrouted: u64,
+    private_send_errors: u64,
 }
 
 impl GatewayRuntime {
@@ -92,6 +94,8 @@ impl GatewayRuntime {
             credentials: None,
             redirect_target: None,
             errors: 0,
+            private_unrouted: 0,
+            private_send_errors: 0,
         }
     }
 
@@ -375,10 +379,13 @@ impl GatewayRuntime {
             fill.seq = self.assign_private_seq(fill.user_id);
             self.combo_replay.push(fill.user_id, fill);
             let user_id = u32::try_from(fill.user_id).unwrap_or(u32::MAX);
-            if let Some(session) = self.middleware.session_by_user(user_id)
-                && server.send_combo_private(session.session_id, &fill).is_ok()
-            {
-                sent += 1;
+            if let Some(session) = self.middleware.session_by_user(user_id) {
+                match server.send_combo_private(session.session_id, &fill) {
+                    Ok(()) => sent += 1,
+                    Err(_) => self.private_send_errors += 1,
+                }
+            } else {
+                self.private_unrouted += 1;
             }
         }
         sent
@@ -397,10 +404,13 @@ impl GatewayRuntime {
             event.seq = self.assign_private_seq(event.account_id);
             let user_id = u32::try_from(event.account_id).unwrap_or(u32::MAX);
             self.private_replay.push(event.account_id, event.clone());
-            if let Some(session) = self.middleware.session_by_user(user_id)
-                && server.send_private(session.session_id, &event).is_ok()
-            {
-                sent += 1;
+            if let Some(session) = self.middleware.session_by_user(user_id) {
+                match server.send_private(session.session_id, &event) {
+                    Ok(()) => sent += 1,
+                    Err(_) => self.private_send_errors += 1,
+                }
+            } else {
+                self.private_unrouted += 1;
             }
         }
         sent
@@ -409,6 +419,16 @@ impl GatewayRuntime {
     #[must_use]
     pub fn errors(&self) -> u64 {
         self.errors
+    }
+
+    #[must_use]
+    pub fn private_unrouted(&self) -> u64 {
+        self.private_unrouted
+    }
+
+    #[must_use]
+    pub fn private_send_errors(&self) -> u64 {
+        self.private_send_errors
     }
 
     pub fn middleware_mut(&mut self) -> &mut MiddlewareSequencer {
