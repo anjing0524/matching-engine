@@ -51,13 +51,13 @@ fn ten_thousand_combo_commands_fill() {
     }
     assert_eq!(runtime.poll_commands() as u64, orders);
     loop {
-        match runtime.engine_mut().try_execute_best(Side::Buy) {
+        match runtime.try_execute_best(Side::Buy) {
             None => break,
             Some(Ok(_)) => {}
             Some(Err(error)) => panic!("combo execution failed: {error:?}"),
         }
     }
-    assert_eq!(runtime.engine().queue_len(), 0);
+    assert_eq!(runtime.queue_len(), 0);
     assert_eq!(runtime.engine().open_qty(1), 0);
     let _ = std::fs::remove_file(&path);
 }
