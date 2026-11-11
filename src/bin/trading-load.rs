@@ -111,8 +111,8 @@ fn run_member(
             if index >= orders {
                 continue;
             }
-            let sent = reader_sent[index].load(Ordering::Relaxed);
-            if sent == u64::MAX || reader_flags[index].swap(true, Ordering::Relaxed) {
+            let sent = reader_sent[index].load(Ordering::SeqCst);
+            if sent == u64::MAX || reader_flags[index].swap(true, Ordering::SeqCst) {
                 continue;
             }
             let now = start.elapsed().as_nanos() as u64;
@@ -133,7 +133,7 @@ fn run_member(
             } else {
                 Side::Sell
             };
-            sent_times[seq].store(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            sent_times[seq].store(start.elapsed().as_nanos() as u64, Ordering::SeqCst);
             writer_stream
                 .write_all(&GatewayFrame::Command(command(id, user_id, side, price)).encode())
                 .unwrap();
