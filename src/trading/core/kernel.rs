@@ -449,6 +449,12 @@ impl TradingCore {
         self.last_trading_ts_ns
     }
 
+    /// Returns the contract specification this core was built with.
+    #[must_use]
+    pub fn spec(&self) -> &ContractSpec {
+        self.book.spec()
+    }
+
     /// Switches the trading phase and emits a public SessionSwitch event.
     pub fn set_phase(&mut self, phase: TradingPhase, trading_day: u32) {
         self.phase = phase;
