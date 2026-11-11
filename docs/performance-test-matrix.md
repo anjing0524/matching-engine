@@ -290,6 +290,29 @@ gateway/client correlation path or in a rarer core path, not yet fully localized
 Do not use these runs as throughput conclusions until the private-event
 correlation is fixed.
 
+### clean-environment results
+
+Earlier runs were contaminated by stale busy-poll `trading-*` processes left
+behind by timed-out tests. All were killed; the following are clean reruns with
+the unified reader (draining all private events) and the middleware/core process
+separated.
+
+One member, in-flight=1:
+
+```text
+n=50000 rate=8262/s p50=32.99µs p99=1005.74µs
+```
+
+One member, in-flight=32:
+
+```text
+n=100000 rate=24680/s p50=391.88µs p99=3928.92µs
+```
+
+These are latency/queueing results for a single member, not aggregate capacity.
+They show that one member cannot approach 1M/s with this request/response
+pattern; aggregate scaling needs many members/gateways.
+
 ## Next measurement
 
 Use an independent load-generator host/process and per-process CPU affinity:
