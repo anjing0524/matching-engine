@@ -174,10 +174,10 @@ pub enum RegistrySnapshotError {
         /// Highest buffered Combo Private sequence.
         max_buffered_seq: u64,
     },
-    /// The next public Combo trade statistic sequence is not usable.
-    InvalidNextComboTradeId {
-        /// Stored next public Combo trade sequence.
-        next_combo_trade_id: u64,
+    /// The next venue public sequence is not usable.
+    InvalidNextPublicSeq {
+        /// Stored next venue public sequence.
+        next_public_seq: u64,
     },
     /// The leg margin ledger rejected its own snapshot.
     Margin(ComboMarginSnapshotError),
@@ -278,11 +278,9 @@ impl Display for RegistrySnapshotError {
                 formatter,
                 "snapshot next combo private sequence {next_combo_private_seq} does not advance past {max_buffered_seq}"
             ),
-            Self::InvalidNextComboTradeId {
-                next_combo_trade_id,
-            } => write!(
+            Self::InvalidNextPublicSeq { next_public_seq } => write!(
                 formatter,
-                "snapshot next combo trade statistic sequence {next_combo_trade_id} is not usable"
+                "snapshot next venue public sequence {next_public_seq} is not usable"
             ),
             Self::Margin(error) => Display::fmt(error, formatter),
             Self::UnknownLegMarginInstrument {
@@ -323,9 +321,10 @@ impl Error for RegistrySnapshotError {
 ///
 /// Captures the static Combo Pairs, every ordinary Contract core (shared leg
 /// books and positions), each pair's base Combo Book (resting orders, arrival
-/// sequence, last Combo trade price), the leg margin ledger reservations, and
-/// the registry-owned combo private buffer and sequence. A restored registry
-/// matches deterministically from the same command stream.
+/// sequence, last Combo trade price), the leg margin ledger reservations, the
+/// registry-owned combo private buffer and sequence, and the one venue public
+/// sequence. A restored registry matches deterministically from the same
+/// command stream and continues publishing without repeating a sequence.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct RegistrySnapshot {
@@ -343,10 +342,13 @@ pub struct RegistrySnapshot {
     pub combo_private_events: Vec<ComboPrivateFill>,
     /// Exchange id the next accepted Combo Order will receive.
     pub next_combo_order_id: u64,
-    /// Sequence the next public Combo trade price statistic will receive.
-    pub next_combo_trade_id: u64,
     /// Registry-owned sequence the next Combo Private Fill will receive.
     pub next_combo_private_seq: u64,
+    /// Venue sequence the next public event will receive.
+    ///
+    /// Ordinary Contract events and Combo trades share this one monotonic
+    /// domain; it advances when the registry drains public events.
+    pub next_public_seq: u64,
 }
 
 /// Owns one ordinary Contract core per instrument id, the static Combo Pairs,
@@ -367,7 +369,7 @@ pub struct InstrumentRegistry {
     combo_public_events: Vec<PublicEvent>,
     next_combo_order_id: u64,
     next_combo_private_seq: u64,
-    next_combo_trade_id: u64,
+    next_public_seq: u64,
 }
 
 impl InstrumentRegistry {
@@ -386,7 +388,7 @@ impl InstrumentRegistry {
             combo_public_events: Vec::new(),
             next_combo_order_id: 1,
             next_combo_private_seq: 1,
-            next_combo_trade_id: 1,
+            next_public_seq: 1,
         }
     }
 
@@ -599,6 +601,9 @@ impl InstrumentRegistry {
     /// Cores are visited in ascending instrument id order for deterministic
     /// fan-out. Combo trade statistics follow the leg trades of the matching
     /// command, so a consumer sees both leg executions before the combo price.
+    /// Every returned event is stamped with the registry's one venue public
+    /// sequence, so a market-data publisher and tracker never see duplicate or
+    /// regressing sequence numbers across cores and Combo trades.
     #[must_use]
     pub fn drain_public_events(&mut self) -> Vec<PublicEvent> {
         let mut events = Vec::new();
@@ -608,13 +613,20 @@ impl InstrumentRegistry {
             }
         }
         events.append(&mut self.combo_public_events);
+        for event in &mut events {
+            event.seq = self.next_public_seq;
+            if event.event_type == PublicEventType::ComboTrade {
+                event.trade_id = event.seq;
+            }
+            self.next_public_seq = self.next_public_seq.saturating_add(1);
+        }
         events
     }
 
-    /// Returns the sequence the next public Combo trade statistic will receive.
+    /// Returns the venue sequence the next public event will receive.
     #[must_use]
-    pub fn next_combo_trade_id(&self) -> u64 {
-        self.next_combo_trade_id
+    pub fn next_public_seq(&self) -> u64 {
+        self.next_public_seq
     }
 
     fn sorted_instrument_ids(&self) -> Vec<u32> {
@@ -677,7 +689,7 @@ impl InstrumentRegistry {
             combo_private_events: self.combo_private_events.clone(),
             next_combo_order_id: self.next_combo_order_id,
             next_combo_private_seq: self.next_combo_private_seq,
-            next_combo_trade_id: self.next_combo_trade_id,
+            next_public_seq: self.next_public_seq,
         }
     }
 
@@ -704,7 +716,7 @@ impl InstrumentRegistry {
             combo_private_events,
             next_combo_order_id,
             next_combo_private_seq,
-            next_combo_trade_id,
+            next_public_seq,
         } = snapshot;
 
         let mut instruments: U64MixMap<TradingCore> = U64MixMap::default();
@@ -823,10 +835,8 @@ impl InstrumentRegistry {
                 max_buffered_seq: previous_seq,
             });
         }
-        if next_combo_trade_id == 0 {
-            return Err(RegistrySnapshotError::InvalidNextComboTradeId {
-                next_combo_trade_id,
-            });
+        if next_public_seq == 0 {
+            return Err(RegistrySnapshotError::InvalidNextPublicSeq { next_public_seq });
         }
 
         for margin in &margin_snapshot.leg_margins {
@@ -877,7 +887,7 @@ impl InstrumentRegistry {
         self.combo_public_events.clear();
         self.next_combo_order_id = next_combo_order_id;
         self.next_combo_private_seq = next_combo_private_seq;
-        self.next_combo_trade_id = next_combo_trade_id;
+        self.next_public_seq = next_public_seq;
         Ok(())
     }
 
@@ -1445,19 +1455,19 @@ impl InstrumentRegistry {
     ///
     /// The event is the only public record of a combo execution. Implied
     /// orders themselves never receive a public identity, and a Combo Pair has
-    /// no order book depth event.
+    /// no order book depth event. The registry stamps the one venue public
+    /// sequence when the event is drained, together with every ordinary
+    /// Contract event.
     fn push_combo_public_trade(&mut self, terms: ComboTradeTerms, trading_ts_ns: u64) {
-        let trade_id = self.next_combo_trade_id;
-        self.next_combo_trade_id = self.next_combo_trade_id.saturating_add(1);
         self.combo_public_events.push(PublicEvent {
-            seq: trade_id,
+            seq: 0,
             event_type: PublicEventType::ComboTrade,
             trading_ts_ns,
             phase: 0,
             instrument_id: 0,
             pair_id: terms.pair_id,
             order_id: terms.order_id,
-            trade_id,
+            trade_id: 0,
             buy_order_id: terms.buy_order_id,
             sell_order_id: terms.sell_order_id,
             side: terms.side,

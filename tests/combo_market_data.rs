@@ -15,6 +15,8 @@ use trading_system_engine::trading::core::public_events::{PublicEvent, PublicEve
 use trading_system_engine::trading::core::{
     ComboPair, ComboPairMargin, CoreEvent, InstrumentRegistry,
 };
+use trading_system_engine::trading::market_data::repair::{NackRequest, RepairBuffer};
+use trading_system_engine::trading::market_data::tracker::MarketDataTracker;
 
 fn spec(symbol: &str) -> ContractSpec {
     ContractSpec::new(symbol, 1, 30_000, 70_000)
@@ -184,4 +186,116 @@ fn direct_combo_trade_publishes_combo_price_statistics_with_reference_leg_prices
             .all(|event| event.pair_id == 0 || event.event_type == PublicEventType::ComboTrade),
         "no implied order may be published: {public:?}"
     );
+}
+
+/// Builds one public stream that mixes ordinary events from both leg cores with
+/// a direct Combo trade and an ordinary leg trade.
+fn mixed_public_stream() -> Vec<PublicEvent> {
+    let mut registry = registry_with_pair();
+    let mut stream = Vec::new();
+
+    rest_leg(&mut registry, leg_order(1, 1, 1, Side::Sell, 50_000, 5));
+    stream.extend(registry.drain_public_events());
+    rest_leg(&mut registry, leg_order(2, 2, 2, Side::Buy, 40_000, 5));
+    stream.extend(registry.drain_public_events());
+    registry
+        .execute_combo(combo_order(100, 3, Side::Sell, 100, 2))
+        .unwrap();
+    registry
+        .execute_combo(combo_order(101, 4, Side::Buy, 100, 2))
+        .unwrap();
+    stream.extend(registry.drain_public_events());
+    registry
+        .execute(leg_order(3, 1, 5, Side::Buy, 50_000, 5))
+        .unwrap();
+    stream.extend(registry.drain_public_events());
+    stream
+}
+
+#[test]
+fn mixed_core_and_combo_public_stream_shares_one_monotonic_sequence() {
+    let stream = mixed_public_stream();
+
+    assert_eq!(
+        stream
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>(),
+        vec![
+            PublicEventType::OrderRested,
+            PublicEventType::OrderRested,
+            PublicEventType::ComboTrade,
+            PublicEventType::Trade,
+        ],
+        "stream must mix both leg cores with a Combo trade: {stream:?}"
+    );
+    assert_eq!(
+        stream.iter().map(|event| event.seq).collect::<Vec<_>>(),
+        vec![1, 2, 3, 4],
+        "one venue sequence covers every public event: {stream:?}"
+    );
+
+    let mut tracker = MarketDataTracker::new();
+    for event in &stream {
+        assert_eq!(
+            tracker.observe(event),
+            None,
+            "a monotonic venue sequence must not produce a NACK: {event:?}"
+        );
+    }
+    assert_eq!(tracker.next_seq(), 5);
+    for event in &stream {
+        assert_eq!(
+            tracker.observe(event),
+            None,
+            "a duplicate replay must be ignored, not regress the tracker: {event:?}"
+        );
+    }
+    assert_eq!(tracker.next_seq(), 5);
+}
+
+#[test]
+fn nack_repair_covers_mixed_core_and_combo_events() {
+    let stream = mixed_public_stream();
+    let mut repair = RepairBuffer::new(8);
+    for event in &stream {
+        repair.push(*event);
+    }
+
+    // Drop an ordinary event from the second leg core.
+    let mut tracker = MarketDataTracker::new();
+    assert_eq!(tracker.observe(&stream[0]), None);
+    assert_eq!(
+        tracker.observe(&stream[2]),
+        Some(NackRequest {
+            from_seq: 2,
+            to_seq: 2,
+        })
+    );
+    let repaired = repair.repair(NackRequest {
+        from_seq: 2,
+        to_seq: 2,
+    });
+    assert_eq!(repaired, vec![stream[1]]);
+    assert_eq!(repaired[0].event_type, PublicEventType::OrderRested);
+    assert_eq!(repaired[0].instrument_id, 2);
+
+    // Drop the Combo trade event instead.
+    let mut tracker = MarketDataTracker::new();
+    assert_eq!(tracker.observe(&stream[0]), None);
+    assert_eq!(tracker.observe(&stream[1]), None);
+    assert_eq!(
+        tracker.observe(&stream[3]),
+        Some(NackRequest {
+            from_seq: 3,
+            to_seq: 3,
+        })
+    );
+    let repaired = repair.repair(NackRequest {
+        from_seq: 3,
+        to_seq: 3,
+    });
+    assert_eq!(repaired, vec![stream[2]]);
+    assert_eq!(repaired[0].event_type, PublicEventType::ComboTrade);
+    assert_eq!(repaired[0].pair_id, 10);
 }
