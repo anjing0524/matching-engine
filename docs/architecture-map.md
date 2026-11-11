@@ -48,6 +48,9 @@ Key ownership rules:
 - `TradingCore` owns the book, active order metadata, positions, frozen
   close, and auction staging. Combo queue/leg books live in `ComboEngine`. The
   kernel has no sockets or file I/O.
+- `InstrumentRegistry` owns one ordinary Contract core per instrument and one
+  base Combo Book per static Combo Pair. The legacy `ComboEngine` remains a
+  separate runtime path until M1 matching moves onto the registry-backed core.
 - `CoreRunner` drains commands and calls the kernel. `poll_events()` is the one
   event projection; transport flushing is internal.
 - `GatewayRuntime` owns per-connection state (`ConnectionState`). `PrivateDownlink`
