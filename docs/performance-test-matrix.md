@@ -93,6 +93,40 @@ core only, 5M commands: p50=258ns p99=1549ns p999=3524ns
 - Mixed buy/sell per-command private accounting: not usable for completion
   tracking without a protocol-aware client.
 
+## Client concurrency vs server capacity
+
+A single load client caps the observed rate near 100k/s; this is a client limit,
+not a server limit. Multiple independent client processes against one
+middleware/core shard:
+
+```text
+4 clients: 100837 + 76842 + 75549 + 83513 = 336741/s
+6 clients: 55832 + 60284 + 65609 + 75520 + 63374 + 76818 = 397437/s
+
+2 gateway proxies + 6 clients:
+47958 + 45670 + 50889 + 49995 + 66443 + 50453 = 311408/s
+```
+
+So one middleware/core pair on CPU0-1 is not capped at ~95k/s. The measured
+server-side aggregate is ~337-397k/s with clients on the SMT threads of the same
+4C/8T host. This still is not a client-independent capacity number.
+
+Gateway batch read was added (one `read` for up to 64 frames):
+
+```text
+before: ~92566/s, p99 562.86µs
+after:   95675/s, p99 486.66µs
+```
+
+Batch private writes were retested with the corrected client:
+
+```text
+batch write:  47658/s
+serial write: 95675/s
+```
+
+Still a regression; reverted.
+
 ## Interpretation
 
 ```text
