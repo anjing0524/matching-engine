@@ -5,8 +5,6 @@
 //! layered above this event stream; this slice only owns the accept/read loop.
 
 use crate::shared::collections::U64MixMap;
-use crate::trading::combo::engine::ComboPrivateFill;
-use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::gateway::{GATEWAY_FRAME_SIZE, GatewayFrame};
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -137,7 +135,12 @@ impl GatewayServerHandle {
     ///
     /// # Errors
     /// Returns an I/O error when the connection is unknown or the write fails.
-    pub fn send_encoded(&self, connection_id: u64, bytes: &[u8], frames: usize) -> io::Result<()> {
+    pub(crate) fn send_encoded(
+        &self,
+        connection_id: u64,
+        bytes: &[u8],
+        frames: usize,
+    ) -> io::Result<()> {
         if frames == 0 {
             return Ok(());
         }
@@ -191,14 +194,6 @@ impl GatewayServerHandle {
         self.stats.snapshot()
     }
 
-    /// Sends one private order event to a gateway connection.
-    ///
-    /// # Errors
-    /// Returns an I/O error when the connection is unknown or the write fails.
-    pub fn send_private(&self, connection_id: u64, event: &PrivateEvent) -> io::Result<()> {
-        self.send(connection_id, GatewayFrame::PrivateEvent(event.clone()))
-    }
-
     /// Closes one gateway connection and removes it from the write map.
     pub fn close(&self, connection_id: u64) {
         let stream = self
@@ -211,31 +206,6 @@ impl GatewayServerHandle {
         {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
-    }
-
-    /// Sends one combination private fill to a gateway connection.
-    ///
-    /// # Errors
-    /// Returns an I/O error when the connection is unknown or the write fails.
-    pub fn send_combo_private(
-        &self,
-        connection_id: u64,
-        fill: &ComboPrivateFill,
-    ) -> io::Result<()> {
-        self.send(connection_id, GatewayFrame::ComboPrivate(*fill))
-    }
-
-    /// Sends a redirect frame to a gateway connection.
-    ///
-    /// # Errors
-    /// Returns an I/O error when the connection is unknown or the write fails.
-    pub fn send_redirect(&self, connection_id: u64, address: &str) -> io::Result<()> {
-        self.send(
-            connection_id,
-            GatewayFrame::Redirect {
-                address: address.to_string(),
-            },
-        )
     }
 
     pub fn stop(&mut self) {

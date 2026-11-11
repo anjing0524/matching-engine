@@ -149,17 +149,28 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         self.metrics.active_sessions = effects.active_sessions as u64;
         self.metrics.closed_sessions = effects.closed_sessions as u64;
         for (connection_id, address) in effects.redirects {
-            let _ = self.server.send_redirect(connection_id, &address);
+            let _ = self.server.send(
+                connection_id,
+                crate::trading::gateway::GatewayFrame::Redirect {
+                    address: address.clone(),
+                },
+            );
             self.server.close(connection_id);
         }
         for (connection_id, replay) in effects.replays {
             for event in replay {
                 let sent = match &event {
                     crate::trading::gateway::private_replay::ReplayEvent::Core(event) => {
-                        self.server.send_private(connection_id, event)
+                        self.server.send(
+                            connection_id,
+                            crate::trading::gateway::GatewayFrame::PrivateEvent(event.clone()),
+                        )
                     }
                     crate::trading::gateway::private_replay::ReplayEvent::Combo(event) => {
-                        self.server.send_combo_private(connection_id, event)
+                        self.server.send(
+                            connection_id,
+                            crate::trading::gateway::GatewayFrame::ComboPrivate(*event),
+                        )
                     }
                 };
                 if sent.is_ok() {

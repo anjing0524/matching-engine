@@ -195,7 +195,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     event,
                 ) = event
                 {
-                    let _ = server.send_private(connection_id, &event);
+                    let _ = server.send(connection_id, GatewayFrame::PrivateEvent(event.clone()));
                 }
             }
         }
