@@ -412,6 +412,25 @@ middleware loop only enqueues frames:
 That is worse than inline writes (48740/s, p50=264.41µs). The extra thread hop
 and channel allocation outweighed removing the blocking write. Reverted.
 
+### sharded middleware/core
+
+Added `scripts/run-sharded-aggregate.sh`; each shard has its own middleware/core
+and optionally a gateway proxy.
+
+Two shards, buy-only, in-flight=32:
+
+```text
+with gateway proxy: 2 x 12342/s = 24684/s
+without proxy:      2 x 12342/s = 24684/s
+```
+
+The per-shard client is pinned to a single logical CPU while it runs writer and
+reader threads, so this sharded number is not a valid scaling measurement yet.
+Direct one-middleware tests with the client on two CPUs reached 48740/s.
+
+The gateway proxy alone reduced a shard from the direct ~48.7k/s path to
+~12.3k/s; that needs its own investigation.
+
 ## Next measurement
 
 Use an independent load-generator host/process and per-process CPU affinity:
