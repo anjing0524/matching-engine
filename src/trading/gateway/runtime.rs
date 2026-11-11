@@ -10,9 +10,8 @@ use crate::trading::combo::engine::ComboPrivateFill;
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::gateway::GatewayFrame;
 use crate::trading::gateway::auth::GatewayCredentials;
-use crate::trading::gateway::private_replay::{
-    ComboPrivateReplayBuffer, PrivateReplayBuffer, ReplayEvent,
-};
+use crate::trading::gateway::private_downlink::PrivateDownlink;
+use crate::trading::gateway::private_replay::ReplayEvent;
 use crate::trading::gateway::rate_limit::TokenBucket;
 use crate::trading::gateway::server::{GatewayEvent, GatewayServerHandle};
 use crate::trading::transport::middleware::MiddlewareSequencer;
@@ -54,9 +53,7 @@ pub struct GatewayRuntime {
     middleware: MiddlewareSequencer,
     events: Receiver<GatewayEvent>,
     connections: U64MixMap<ConnectionState>,
-    private_replay: PrivateReplayBuffer,
-    combo_replay: ComboPrivateReplayBuffer,
-    next_private_seq: U64MixMap<u64>,
+    downlink: PrivateDownlink,
     replay_pending: U64MixSet,
     redirect_pending: U64MixSet,
     rate_limit: Option<(f64, f64)>,
@@ -64,8 +61,6 @@ pub struct GatewayRuntime {
     credentials: Option<GatewayCredentials>,
     redirect_target: Option<String>,
     errors: u64,
-    private_unrouted: u64,
-    private_send_errors: u64,
 }
 
 impl GatewayRuntime {
@@ -84,9 +79,7 @@ impl GatewayRuntime {
             middleware,
             events,
             connections: U64MixMap::default(),
-            private_replay: PrivateReplayBuffer::new(replay_capacity),
-            combo_replay: ComboPrivateReplayBuffer::new(replay_capacity),
-            next_private_seq: U64MixMap::default(),
+            downlink: PrivateDownlink::new(replay_capacity),
             replay_pending: U64MixSet::default(),
             redirect_pending: U64MixSet::default(),
             rate_limit: None,
@@ -94,8 +87,6 @@ impl GatewayRuntime {
             credentials: None,
             redirect_target: None,
             errors: 0,
-            private_unrouted: 0,
-            private_send_errors: 0,
         }
     }
 
@@ -224,19 +215,7 @@ impl GatewayRuntime {
                     .connections
                     .entry(connection_id)
                     .or_insert_with(ConnectionState::new);
-                let mut replay: Vec<ReplayEvent> = self
-                    .private_replay
-                    .replay(user_id, last_private_seq)
-                    .into_iter()
-                    .map(ReplayEvent::Core)
-                    .collect();
-                replay.extend(
-                    self.combo_replay
-                        .replay(user_id, last_private_seq)
-                        .into_iter()
-                        .map(ReplayEvent::Combo),
-                );
-                replay.sort_by_key(ReplayEvent::seq);
+                let replay = self.downlink.replay_for(user_id, last_private_seq);
                 if !replay.is_empty() {
                     self.replay_pending.insert(connection_id);
                 }
@@ -359,71 +338,24 @@ impl GatewayRuntime {
         batches
     }
 
-    fn assign_private_seq(&mut self, user_id: u64) -> u64 {
-        let next = self.next_private_seq.entry(user_id).or_insert(1);
-        let seq = *next;
-        *next += 1;
-        seq
-    }
-
-    /// Routes combo private fills to the session whose user matches the fill.
-    ///
-    /// Returns how many fills were handed to a gateway downlink.
-    pub fn dispatch_combo_private(
-        &mut self,
-        server: &GatewayServerHandle,
-        fills: impl IntoIterator<Item = ComboPrivateFill>,
-    ) -> usize {
-        let mut sent = 0;
-        for mut fill in fills {
-            fill.seq = self.assign_private_seq(fill.user_id);
-            self.combo_replay.push(fill.user_id, fill);
-            let user_id = u32::try_from(fill.user_id).unwrap_or(u32::MAX);
-            if let Some(session) = self.middleware.session_by_user(user_id) {
-                match server.send_combo_private(session.session_id, &fill) {
-                    Ok(()) => sent += 1,
-                    Err(_) => self.private_send_errors += 1,
-                }
-            } else {
-                self.private_unrouted += 1;
-            }
-        }
-        sent
-    }
-
-    /// Routes private events to the session whose user matches the account.
-    ///
-    /// Returns how many events were handed to a gateway downlink.
+    /// Routes core private events through the private downlink.
     pub fn dispatch_private(
         &mut self,
         server: &GatewayServerHandle,
         events: impl IntoIterator<Item = crate::trading::core::private_events::PrivateEvent>,
     ) -> usize {
-        let mut batches: U64MixMap<Vec<u8>> = U64MixMap::default();
-        let mut counts: U64MixMap<usize> = U64MixMap::default();
-        for mut event in events {
-            event.seq = self.assign_private_seq(event.account_id);
-            let user_id = u32::try_from(event.account_id).unwrap_or(u32::MAX);
-            self.private_replay.push(event.account_id, event.clone());
-            if let Some(session) = self.middleware.session_by_user(user_id) {
-                batches
-                    .entry(session.session_id)
-                    .or_default()
-                    .extend_from_slice(&GatewayFrame::PrivateEvent(event).encode());
-                *counts.entry(session.session_id).or_insert(0) += 1;
-            } else {
-                self.private_unrouted += 1;
-            }
-        }
-        let mut sent = 0;
-        for (session_id, bytes) in batches {
-            let frames = counts.get(&session_id).copied().unwrap_or(0);
-            match server.send_encoded(session_id, &bytes, frames) {
-                Ok(()) => sent += frames,
-                Err(_) => self.private_send_errors += frames as u64,
-            }
-        }
-        sent
+        self.downlink
+            .dispatch_private(&self.middleware, server, events)
+    }
+
+    /// Routes combo private fills through the private downlink.
+    pub fn dispatch_combo_private(
+        &mut self,
+        server: &GatewayServerHandle,
+        fills: impl IntoIterator<Item = ComboPrivateFill>,
+    ) -> usize {
+        self.downlink
+            .dispatch_combo_private(&self.middleware, server, fills)
     }
 
     #[must_use]
@@ -433,12 +365,12 @@ impl GatewayRuntime {
 
     #[must_use]
     pub fn private_unrouted(&self) -> u64 {
-        self.private_unrouted
+        self.downlink.unrouted()
     }
 
     #[must_use]
     pub fn private_send_errors(&self) -> u64 {
-        self.private_send_errors
+        self.downlink.send_errors()
     }
 
     pub fn middleware_mut(&mut self) -> &mut MiddlewareSequencer {

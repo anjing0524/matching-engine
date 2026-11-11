@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod directory;
 pub mod frame;
+pub(crate) mod private_downlink;
 pub mod private_replay;
 pub mod proxy;
 pub mod rate_limit;
