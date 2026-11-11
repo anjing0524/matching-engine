@@ -388,6 +388,18 @@ The reader waits about 10.9µs per frame and the writer spends about 9.4µs per
 frame; both are serialized through the single middleware/gateway process. This is
 the current cap, not a core matching limit.
 
+### rejected: batching private frames
+
+Tried grouping private frames per session and writing them in one `write_all`:
+
+```text
+1 member, in-flight=32, buy-only: 24681/s p50=961.49µs
+```
+
+That is worse than the unbatched 48740/s / p50=264.41µs. The batch path encoded
+into a fresh Vec and cloned each frame; with mostly one-frame batches it added
+allocation without reducing writes. Reverted.
+
 ## Next measurement
 
 Use an independent load-generator host/process and per-process CPU affinity:
