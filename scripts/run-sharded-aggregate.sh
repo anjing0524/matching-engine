@@ -11,6 +11,7 @@ cd "$(dirname "$0")/.."
 shards=${1:-2}
 orders=${2:-50000}
 in_flight=${3:-32}
+use_proxy=${USE_PROXY:-1}
 if (( shards < 1 || shards > 2 )); then
   echo "shards must be 1..2 on this 4C/8T host" >&2
   exit 2
@@ -77,12 +78,16 @@ for ((i = 0; i < shards; i++)); do
     --iterations 0 \
     >"$dir/shard-$i-core.log" 2>&1 &
   pids+=($!)
-  taskset -c $((i * 3 + 2)) "$root/target/release/trading-gateway" \
-    --listen "127.0.0.1:$gateway_port" \
-    --middleware "127.0.0.1:$middleware_port" \
-    >"$dir/shard-$i-gateway.log" 2>&1 &
-  pids+=($!)
-  wait_port "$gateway_port"
+  if [[ "$use_proxy" == "1" ]]; then
+    taskset -c $((i * 3 + 2)) "$root/target/release/trading-gateway" \
+      --listen "127.0.0.1:$gateway_port" \
+      --middleware "127.0.0.1:$middleware_port" \
+      >"$dir/shard-$i-gateway.log" 2>&1 &
+    pids+=($!)
+    wait_port "$gateway_port"
+  else
+    gateway_ports[$i]="$middleware_port"
+  fi
 done
 sleep 0.1
 
