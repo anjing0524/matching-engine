@@ -660,13 +660,15 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        let redirects = runtime.take_redirects();
+        let effects = runtime.apply_effects(&server, None);
+        assert_eq!(effects.redirects, 1);
+        let mut frame = [0u8; crate::trading::gateway::GATEWAY_FRAME_SIZE];
+        first.read_exact(&mut frame).unwrap();
         assert_eq!(
-            redirects
-                .iter()
-                .find(|(id, _)| *id == 1)
-                .map(|(_, target)| target.as_str()),
-            Some("127.0.0.1:9000")
+            GatewayFrame::decode(&frame).unwrap(),
+            GatewayFrame::Redirect {
+                address: "127.0.0.1:9000".to_string()
+            }
         );
         server.stop();
         let _ = std::fs::remove_file(&path);
