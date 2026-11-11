@@ -5,6 +5,7 @@ use clap::Parser;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use trading_system_engine::trading::gateway::GatewayFrame;
 use trading_system_engine::trading::gateway::runtime::GatewayRuntime;
 use trading_system_engine::trading::gateway::server::start as start_gateway;
 use trading_system_engine::trading::market_data::MarketDataPublisher;
