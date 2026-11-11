@@ -13,10 +13,11 @@ use crate::trading::transport::{
     CommandConsumer, CommandTransportError, PrivateEventProducer, PublicEventProducer,
 };
 use std::collections::VecDeque;
+use std::fmt::{Display, Formatter, Result as FmtResult};
 
 fn flush_queue<T>(
     mut send: impl FnMut(&T) -> Result<(), CommandTransportError>,
-    pending: &mut std::collections::VecDeque<T>,
+    pending: &mut VecDeque<T>,
     events: Vec<T>,
 ) {
     pending.extend(events);
@@ -37,8 +38,8 @@ fn flush_queue<T>(
 #[derive(Debug)]
 pub struct CoreRestoreError(String);
 
-impl std::fmt::Display for CoreRestoreError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for CoreRestoreError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
         formatter.write_str(&self.0)
     }
 }
@@ -46,6 +47,7 @@ impl std::fmt::Display for CoreRestoreError {
 impl std::error::Error for CoreRestoreError {}
 
 /// One poll's core commands and projected events.
+#[non_exhaustive]
 pub struct CoreEvents {
     /// Number of commands executed during this poll.
     pub commands: usize,

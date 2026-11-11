@@ -55,6 +55,7 @@ pub struct GatewayEffects {
 }
 
 /// Counts returned after one gateway effect application.
+#[non_exhaustive]
 pub struct AppliedGatewayEffects {
     /// Number of frame/closed events processed.
     pub events: usize,
@@ -70,7 +71,7 @@ pub struct AppliedGatewayEffects {
     pub closed_sessions: usize,
 }
 
-const CLOSED_SESSION_RETAIN: usize = 4096;
+const MAX_CLOSED_SESSIONS: usize = 4096;
 
 /// Drains gateway events and applies them to middleware.
 pub struct GatewayRuntime {
@@ -182,8 +183,8 @@ impl GatewayRuntime {
 
     /// Applies lifecycle effects to the server in one fixed order.
     ///
-    /// Redirects are sent before replay, ended connections are closed, idle
-    /// sessions are expired, and closed session records are pruned. Both
+    /// Redirects and replay are sent, idle sessions are expired, redirected
+    /// connections are closed, and closed session records are pruned. Both
     /// drivers use this operation instead of composing the drain accessors.
     pub fn apply_effects(
         &mut self,
@@ -198,12 +199,7 @@ impl GatewayRuntime {
             .map(|(connection_id, _)| *connection_id)
             .collect();
         for (connection_id, address) in effects.redirects {
-            let _ = server.send(
-                connection_id,
-                GatewayFrame::Redirect {
-                    address: address.clone(),
-                },
-            );
+            let _ = server.send(connection_id, GatewayFrame::Redirect { address });
         }
         let mut replays = 0;
         for (connection_id, events) in effects.replays {
@@ -227,7 +223,7 @@ impl GatewayRuntime {
         for connection_id in redirected {
             server.close(connection_id);
         }
-        self.prune_closed_sessions(CLOSED_SESSION_RETAIN);
+        self.prune_closed_sessions(MAX_CLOSED_SESSIONS);
         AppliedGatewayEffects {
             events: effects.events,
             redirects,
