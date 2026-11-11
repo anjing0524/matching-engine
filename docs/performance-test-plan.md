@@ -40,10 +40,14 @@ A valid aggregate number requires all of:
 
 ```text
 core only:            ~2.1M cmd/s, p99 ~1.5µs
+direct middleware:    432k/s with 8 independent clients
 direct middleware:    400k/s with 6 independent clients
 2 gateways:           232k/s with 4 clients
 2 gateways + splice:  235k/s (rejected: +1.2%, unsafe)
 ```
+
+The 8-client run is the current observed server ceiling on this host:
+432065/s. More clients only oversubscribe the remaining SMT threads.
 
 The direct path and gateway path use the same middleware/core; the difference is
 the two gateway relay processes.
