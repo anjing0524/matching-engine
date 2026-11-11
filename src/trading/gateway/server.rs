@@ -30,11 +30,44 @@ pub enum GatewayEvent {
 
 type SharedStream = Arc<Mutex<TcpStream>>;
 
+/// Cumulative gateway socket counters.
+#[derive(Debug, Default)]
+pub struct GatewayStats {
+    accepted: AtomicU64,
+    frames_read: AtomicU64,
+    writes: AtomicU64,
+    bytes_written: AtomicU64,
+    write_errors: AtomicU64,
+}
+
+/// Snapshot of [`GatewayStats`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GatewayStatsSnapshot {
+    pub accepted: u64,
+    pub frames_read: u64,
+    pub writes: u64,
+    pub bytes_written: u64,
+    pub write_errors: u64,
+}
+
+impl GatewayStats {
+    fn snapshot(&self) -> GatewayStatsSnapshot {
+        GatewayStatsSnapshot {
+            accepted: self.accepted.load(Ordering::Relaxed),
+            frames_read: self.frames_read.load(Ordering::Relaxed),
+            writes: self.writes.load(Ordering::Relaxed),
+            bytes_written: self.bytes_written.load(Ordering::Relaxed),
+            write_errors: self.write_errors.load(Ordering::Relaxed),
+        }
+    }
+}
+
 /// Handle used to address and stop a running listener.
 pub struct GatewayServerHandle {
     addr: std::net::SocketAddr,
     shutdown: Arc<AtomicBool>,
     connections: Arc<Mutex<U64MixMap<SharedStream>>>,
+    stats: Arc<GatewayStats>,
     join: Option<thread::JoinHandle<()>>,
 }
 
@@ -59,10 +92,28 @@ impl GatewayServerHandle {
                 .cloned()
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "gateway not connected"))?
         };
+        let encoded = frame.encode();
         let mut stream = stream
             .lock()
             .map_err(|_| io::Error::other("gateway stream lock poisoned"))?;
-        stream.write_all(&frame.encode())
+        match stream.write_all(&encoded) {
+            Ok(()) => {
+                self.stats.writes.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .bytes_written
+                    .fetch_add(encoded.len() as u64, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(error) => {
+                self.stats.write_errors.fetch_add(1, Ordering::Relaxed);
+                Err(error)
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn stats(&self) -> GatewayStatsSnapshot {
+        self.stats.snapshot()
     }
 
     /// Sends one private order event to a gateway connection.
@@ -141,7 +192,9 @@ pub fn start(
     let (tx, rx) = channel();
     let next_connection = Arc::new(AtomicU64::new(1));
     let connections = Arc::new(Mutex::new(U64MixMap::default()));
+    let stats = Arc::new(GatewayStats::default());
     let accept_connections = Arc::clone(&connections);
+    let accept_stats = Arc::clone(&stats);
     let join = thread::Builder::new()
         .name("gateway-tcp-listener".to_string())
         .spawn(move || {
@@ -149,6 +202,7 @@ pub fn start(
                 match listener.accept() {
                     Ok((stream, _)) => {
                         let id = next_connection.fetch_add(1, Ordering::Relaxed);
+                        accept_stats.accepted.fetch_add(1, Ordering::Relaxed);
                         let event_tx = tx.clone();
                         let write_stream = match stream.try_clone() {
                             Ok(stream) => Arc::new(Mutex::new(stream)),
@@ -158,10 +212,11 @@ pub fn start(
                             map.insert(id, write_stream);
                         }
                         let remove_connections = Arc::clone(&accept_connections);
+                        let stats = Arc::clone(&accept_stats);
                         let _ = thread::Builder::new()
                             .name(format!("gateway-tcp-{id}"))
                             .spawn(move || {
-                                serve_connection(id, stream, event_tx);
+                                serve_connection(id, stream, event_tx, stats);
                                 if let Ok(mut map) = remove_connections.lock() {
                                     map.remove(&id);
                                 }
@@ -185,7 +240,12 @@ pub fn start(
     ))
 }
 
-fn serve_connection(id: u64, mut stream: TcpStream, tx: Sender<GatewayEvent>) {
+fn serve_connection(
+    id: u64,
+    mut stream: TcpStream,
+    tx: Sender<GatewayEvent>,
+    stats: Arc<GatewayStats>,
+) {
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_nodelay(true);
     let mut frame = [0u8; GATEWAY_FRAME_SIZE];
@@ -195,6 +255,7 @@ fn serve_connection(id: u64, mut stream: TcpStream, tx: Sender<GatewayEvent>) {
         }
         match GatewayFrame::decode(&frame) {
             Ok(frame) => {
+                stats.frames_read.fetch_add(1, Ordering::Relaxed);
                 if tx
                     .send(GatewayEvent::Frame {
                         connection_id: id,

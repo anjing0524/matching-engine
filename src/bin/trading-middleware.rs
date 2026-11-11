@@ -237,8 +237,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             && stats_start.elapsed() >= Duration::from_millis(args.stats_interval_ms)
         {
             let submitted = gateway.middleware_mut().submitted();
+            let gateway_stats = server.stats();
             eprintln!(
-                "middleware_stats ticks={ticks} gateway_events={gateway_events} submitted={submitted} private={private_events} public={public_events}"
+                "middleware_stats ticks={ticks} gateway_events={gateway_events} submitted={submitted} private={private_events} public={public_events} accepted={} frames_read={} writes={} bytes={} write_errors={}",
+                gateway_stats.accepted,
+                gateway_stats.frames_read,
+                gateway_stats.writes,
+                gateway_stats.bytes_written,
+                gateway_stats.write_errors
             );
             stats_start = std::time::Instant::now();
         }
