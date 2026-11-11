@@ -19,8 +19,20 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: Commit messages
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          git fetch origin "${{ github.event.pull_request.base.ref }}" --depth=1
+          scripts/check-commit-messages.sh "origin/${{ github.event.pull_request.base.ref }}..HEAD"
+
+      - name: Docs consistency
+        run: scripts/check-docs.sh
+
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy

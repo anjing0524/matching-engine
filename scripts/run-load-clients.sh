@@ -7,6 +7,7 @@
 #   scripts/run-load-clients.sh 4 25000 32
 set -euo pipefail
 cd "$(dirname "$0")/.."
+scripts/check-test-host.sh --strict
 if ! command -v taskset >/dev/null 2>&1; then
   echo "taskset is required: all processes must be CPU-pinned" >&2
   exit 2

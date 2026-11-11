@@ -10,6 +10,7 @@
 #   scripts/run-multi-gateway-aggregate.sh 2 250000 32
 set -euo pipefail
 cd "$(dirname "$0")/.."
+scripts/check-test-host.sh --strict
 
 gateways=${1:-2}
 orders=${2:-250000}
