@@ -118,6 +118,13 @@ impl EventFanout {
         }
     }
 
+    #[must_use]
+    pub fn repair(&self, request: NackRequest) -> Vec<PublicEvent> {
+        self.repair_buffer
+            .as_ref()
+            .map_or_else(Vec::new, |buffer| buffer.repair(request))
+    }
+
     pub fn poll_repair(&mut self) -> u64 {
         let Some(server) = &mut self.repair_server else {
             return 0;
