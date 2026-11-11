@@ -400,6 +400,18 @@ That is worse than the unbatched 48740/s / p50=264.41µs. The batch path encoded
 into a fresh Vec and cloned each frame; with mostly one-frame batches it added
 allocation without reducing writes. Reverted.
 
+### rejected: per-connection writer threads
+
+Tried moving socket writes to a dedicated writer thread per connection so the
+middleware loop only enqueues frames:
+
+```text
+1 member, in-flight=32, buy-only: 24681/s p50=798.81µs
+```
+
+That is worse than inline writes (48740/s, p50=264.41µs). The extra thread hop
+and channel allocation outweighed removing the blocking write. Reverted.
+
 ## Next measurement
 
 Use an independent load-generator host/process and per-process CPU affinity:
