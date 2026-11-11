@@ -158,6 +158,18 @@ p50 ~277-296µs, p99 ~1.2-1.3ms
 
 Gateway proxy overhead is now the main gap versus the direct 330-400k path.
 
+### splice rejected
+
+Linux `splice` relay (zero-copy socket-to-pipe-to-socket) was tested on the same
+2-gateway + 4-client setup:
+
+```text
+userspace 64KiB relay: 232335/s
+splice relay:          235206/s
+```
+
+Only +1.2%, with unsafe Linux-only code and no p50 improvement; reverted.
+
 ## Interpretation
 
 ```text
