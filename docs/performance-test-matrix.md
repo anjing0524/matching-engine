@@ -313,6 +313,29 @@ These are latency/queueing results for a single member, not aggregate capacity.
 They show that one member cannot approach 1M/s with this request/response
 pattern; aggregate scaling needs many members/gateways.
 
+### contamination and current status
+
+Two contamination sources invalidated earlier runs:
+
+1. timed-out test scripts left `trading-middleware/core/gateway/load`
+   busy-poll processes running
+2. an unrelated `/app/apps/gateway` release build saturated the host for minutes
+
+After killing the stale processes and waiting for the external build to finish,
+clean reruns gave:
+
+```text
+one gateway, 2 members, in-flight=32: 48569/s
+2 gateways, serial:                   1110/s aggregate (client stall)
+2 gateways, in-flight=32:             24684/s aggregate
+```
+
+The serial multi-gateway run does not agree with the single-member tests, so the
+load client's private-event completion accounting is still not trustworthy for
+aggregate measurements. The core private-id test (100k orders) passes.
+
+No reliable 1M aggregate conclusion is available yet.
+
 ## Next measurement
 
 Use an independent load-generator host/process and per-process CPU affinity:
