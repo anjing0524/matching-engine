@@ -54,6 +54,29 @@ impl ComboPairMargin {
     }
 }
 
+/// Exchange classification of a Combo Pair.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ComboPairKind {
+    /// Same product, different months.
+    #[default]
+    CrossTerm,
+    /// Different products, same month.
+    CrossProduct,
+}
+
+impl ComboPairKind {
+    /// Lower value sorts first when implied priorities tie on price.
+    #[must_use]
+    pub const fn priority(self) -> u8 {
+        match self {
+            Self::CrossTerm => 0,
+            Self::CrossProduct => 1,
+        }
+    }
+}
+
 /// One static exchange-defined two-leg spread contract.
 ///
 /// M1 pairs have a fixed 1:1 quantity ratio. The spread price is quoted in
@@ -71,6 +94,9 @@ pub struct ComboPair {
     pub spread_tick: u64,
     /// Leg-level margin parameters.
     pub margin: ComboPairMargin,
+    /// Cross-term or cross-product classification.
+    #[serde(default)]
+    pub kind: ComboPairKind,
 }
 
 impl ComboPair {
@@ -89,7 +115,15 @@ impl ComboPair {
             leg2_instrument_id,
             spread_tick,
             margin,
+            kind: ComboPairKind::CrossTerm,
         }
+    }
+
+    /// Sets the pair classification used for same-price implied priority.
+    #[must_use]
+    pub const fn with_kind(mut self, kind: ComboPairKind) -> Self {
+        self.kind = kind;
+        self
     }
 }
 

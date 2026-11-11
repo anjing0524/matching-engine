@@ -21,7 +21,7 @@ pub use self::combo_book::{
 pub use self::combo_margin::{
     ComboMarginError, ComboMarginFreeze, ComboMarginSnapshot, ComboMarginSnapshotError, LegMargin,
 };
-pub use self::combo_pair::{ComboLeg, ComboPair, ComboPairError, ComboPairMargin};
+pub use self::combo_pair::{ComboLeg, ComboPair, ComboPairError, ComboPairKind, ComboPairMargin};
 pub use self::kernel::{CoreEvent, CoreSnapshot, TradingCore};
 pub use self::leg_liquidity::{
     ComboLegError, ComboLegExecution, LegExecutionContext, LegFill, LegLiquidityError,

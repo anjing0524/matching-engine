@@ -3,7 +3,7 @@
 use trading_system_engine::domain::orderbook::ContractSpec;
 use trading_system_engine::trading::core::protocol::{Command, CommandType};
 use trading_system_engine::trading::core::{
-    ComboLeg, ComboPair, ComboPairError, ComboPairMargin, InstrumentRegistry,
+    ComboLeg, ComboPair, ComboPairError, ComboPairKind, ComboPairMargin, InstrumentRegistry,
 };
 
 fn spec(symbol: &str) -> ContractSpec {
@@ -181,4 +181,13 @@ fn pair_id_zero_is_rejected_as_non_combo_sentinel() {
     let error = registry.register_pair(pair(0, 1, 2, 1)).unwrap_err();
     assert_eq!(error, ComboPairError::InvalidPairId { pair_id: 0 });
     assert_eq!(registry.pair_count(), 0);
+}
+
+#[test]
+fn pair_kind_defaults_cross_term_and_sorts_before_cross_product() {
+    let mut cross_term = pair(10, 1, 2, 1);
+    assert_eq!(cross_term.kind, ComboPairKind::CrossTerm);
+    cross_term = cross_term.with_kind(ComboPairKind::CrossProduct);
+    assert_eq!(cross_term.kind, ComboPairKind::CrossProduct);
+    assert!(ComboPairKind::CrossTerm.priority() < ComboPairKind::CrossProduct.priority());
 }

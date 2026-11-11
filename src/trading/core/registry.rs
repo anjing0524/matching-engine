@@ -1195,19 +1195,16 @@ impl InstrumentRegistry {
     /// Resting orders are visited in combined price-time priority, and each
     /// fill is applied to its book exactly once.
     fn revalue_resting_combos(&mut self, instrument_id: u32, trading_ts_ns: u64) {
-        let mut pair_ids: Vec<u32> = self
+        let mut pairs: Vec<ComboPair> = self
             .pairs
             .values()
             .filter(|pair| {
                 pair.leg1_instrument_id == instrument_id || pair.leg2_instrument_id == instrument_id
             })
-            .map(|pair| pair.pair_id)
+            .copied()
             .collect();
-        pair_ids.sort_unstable();
-        for pair_id in pair_ids {
-            let Some(pair) = self.pairs.get(&u64::from(pair_id)).copied() else {
-                continue;
-            };
+        pairs.sort_by_key(|pair| (pair.kind.priority(), pair.pair_id));
+        for pair in pairs {
             self.match_resting_combos(&pair, trading_ts_ns);
         }
     }
