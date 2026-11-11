@@ -164,10 +164,6 @@ impl<P: PreTradePlugin> CoreRunner<P> {
         }
     }
 
-    pub fn poll(&mut self) -> usize {
-        self.poll_events().commands
-    }
-
     /// Restores a durable core snapshot without exposing the kernel.
     ///
     /// # Errors
@@ -264,7 +260,7 @@ mod tests {
             .with_event_transports(public_producer, private_producer);
 
         producer.send(&command(1, Side::Buy, 50_000, 5)).unwrap();
-        assert_eq!(runner.poll(), 1);
+        assert_eq!(runner.poll_events().commands, 1);
         let public = public_consumer.recv().unwrap().unwrap();
         assert_eq!(
             public.event_type,
@@ -301,7 +297,7 @@ mod tests {
 
         producer.send(&command(1, Side::Buy, 50_000, 5)).unwrap();
         producer.send(&command(2, Side::Buy, 50_100, 5)).unwrap();
-        assert_eq!(runner.poll(), 2);
+        assert_eq!(runner.poll_events().commands, 2);
         assert_eq!(runner.pending_event_count(), 1);
         let first = public_consumer.recv().unwrap().unwrap();
         assert_eq!(first.quantity, 5);
@@ -326,7 +322,7 @@ mod tests {
 
         producer.send(&command(1, Side::Buy, 50_000, 5)).unwrap();
         producer.send(&command(2, Side::Sell, 50_000, 5)).unwrap();
-        assert_eq!(runner.poll(), 2);
+        assert_eq!(runner.poll_events().commands, 2);
         assert!(runner.core().best_bid().is_none());
         assert!(!runner.core().positions().snapshot().is_empty());
         drop(producer);

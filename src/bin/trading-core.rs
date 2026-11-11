@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut commands = 0u64;
     let mut stats_start = std::time::Instant::now();
     loop {
-        commands += runner.poll() as u64;
+        commands += runner.poll_events().commands as u64;
         ticks += 1;
         if args.stats_interval_ms > 0
             && stats_start.elapsed() >= std::time::Duration::from_millis(args.stats_interval_ms)

@@ -301,7 +301,7 @@ mod tests {
         let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
         let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
         let mut runner = CoreRunner::new(core, consumer, NoPlugins);
-        assert_eq!(runner.poll(), 3);
+        assert_eq!(runner.poll_events().commands, 3);
         assert_eq!(runner.core().phase(), TradingPhase::Continuous);
         assert_eq!(runner.core().trading_day(), 7);
         let _ = std::fs::remove_file(&path);
@@ -380,7 +380,7 @@ mod tests {
                 .unwrap(),
             2
         );
-        assert_eq!(runner.poll(), 2);
+        assert_eq!(runner.poll_events().commands, 2);
         assert!(!runner.core().positions().snapshot().is_empty());
         assert_eq!(middleware.next_global_seq(), 3);
         let _ = std::fs::remove_file(&path);

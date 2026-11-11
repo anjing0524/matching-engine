@@ -73,7 +73,7 @@ fn main() {
     println!("middleware submit: {orders} commands in {elapsed:?} ({per_sec:.0} cmd/s)");
 
     let start = Instant::now();
-    let executed = runner.poll();
+    let executed = runner.poll_events().commands;
     let elapsed = start.elapsed();
     black_box(runner.core());
     assert_eq!(executed as u64, orders);
