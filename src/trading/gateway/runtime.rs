@@ -48,10 +48,6 @@ pub(crate) struct GatewayEffects {
     pub redirects: Vec<(u64, String)>,
     /// Replay batches keyed by connection id.
     pub replays: Vec<(u64, Vec<ReplayEvent>)>,
-    /// Active session count after the poll.
-    pub active_sessions: usize,
-    /// Closed session count after the poll.
-    pub closed_sessions: usize,
 }
 
 /// Counts returned after one gateway effect application.
@@ -171,13 +167,10 @@ impl GatewayRuntime {
         let events = self.poll();
         let redirects = self.take_redirects();
         let replays = self.take_replay_batches();
-        let (active_sessions, closed_sessions) = self.session_counts();
         GatewayEffects {
             events,
             redirects,
             replays,
-            active_sessions,
-            closed_sessions,
         }
     }
 
@@ -329,7 +322,7 @@ impl GatewayRuntime {
     }
 
     /// Prunes old closed session records after connection churn.
-    pub(crate) fn prune_closed_sessions(&mut self, keep_closed: usize) -> usize {
+    pub fn prune_closed_sessions(&mut self, keep_closed: usize) -> usize {
         self.middleware.sessions_mut().prune_closed(keep_closed)
     }
 
