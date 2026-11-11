@@ -34,6 +34,83 @@ impl Drop for GatewayProxyHandle {
     }
 }
 
+struct Relay {
+    member: TcpStream,
+    upstream: TcpStream,
+    to_upstream: Vec<u8>,
+    upstream_offset: usize,
+    to_member: Vec<u8>,
+    member_offset: usize,
+}
+
+impl Relay {
+    fn new(member: TcpStream, upstream: TcpStream) -> io::Result<Self> {
+        member.set_nonblocking(true)?;
+        upstream.set_nonblocking(true)?;
+        member.set_nodelay(true)?;
+        upstream.set_nodelay(true)?;
+        Ok(Self {
+            member,
+            upstream,
+            to_upstream: Vec::with_capacity(64 * 1024),
+            upstream_offset: 0,
+            to_member: Vec::with_capacity(64 * 1024),
+            member_offset: 0,
+        })
+    }
+
+    fn pump(&mut self) -> bool {
+        // The two directions are independent: a blocked member read does not
+        // prevent an upstream response from being drained.
+        if !relay_direction(
+            &mut self.member,
+            &mut self.upstream,
+            &mut self.to_upstream,
+            &mut self.upstream_offset,
+        ) {
+            return false;
+        }
+        relay_direction(
+            &mut self.upstream,
+            &mut self.member,
+            &mut self.to_member,
+            &mut self.member_offset,
+        )
+    }
+}
+
+fn relay_direction(
+    reader: &mut TcpStream,
+    writer: &mut TcpStream,
+    buffer: &mut Vec<u8>,
+    offset: &mut usize,
+) -> bool {
+    if *offset == buffer.len() {
+        buffer.clear();
+        *offset = 0;
+    }
+    if buffer.is_empty() {
+        let mut chunk = [0u8; 64 * 1024];
+        match reader.read(&mut chunk) {
+            Ok(0) => return false,
+            Ok(count) => buffer.extend_from_slice(&chunk[..count]),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return true,
+            Err(_) => return false,
+        }
+    }
+    while *offset < buffer.len() {
+        match writer.write(&buffer[*offset..]) {
+            Ok(0) => return false,
+            Ok(count) => *offset += count,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return true,
+            Err(_) => return false,
+        }
+    }
+    buffer.clear();
+    *offset = 0;
+    true
+}
+
 /// Starts a TCP relay from members to one middleware listener.
 ///
 /// # Errors
@@ -47,19 +124,36 @@ pub fn start(listen: &str, upstream: String) -> io::Result<GatewayProxyHandle> {
     let join = thread::Builder::new()
         .name("trading-gateway-proxy".to_string())
         .spawn(move || {
+            let mut relays = Vec::new();
             while !accept_shutdown.load(Ordering::Acquire) {
-                match listener.accept() {
-                    Ok((member, _)) => {
-                        let upstream = upstream.clone();
-                        let _ = thread::Builder::new()
-                            .name("trading-gateway-proxy-conn".to_string())
-                            .spawn(move || relay(member, upstream));
+                loop {
+                    match listener.accept() {
+                        Ok((member, _)) => {
+                            let Ok(upstream) = TcpStream::connect(&upstream) else {
+                                continue;
+                            };
+                            let Ok(relay) = Relay::new(member, upstream) else {
+                                continue;
+                            };
+                            relays.push(relay);
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            break;
+                        }
+                        Err(_) => return,
                     }
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(_) => break,
                 }
+                let mut index = 0;
+                while index < relays.len() {
+                    if relays[index].pump() {
+                        index += 1;
+                    } else {
+                        let mut relay = relays.swap_remove(index);
+                        let _ = relay.member.shutdown(Shutdown::Both);
+                        let _ = relay.upstream.shutdown(Shutdown::Both);
+                    }
+                }
+                std::hint::spin_loop();
             }
         })?;
     Ok(GatewayProxyHandle {
@@ -69,50 +163,9 @@ pub fn start(listen: &str, upstream: String) -> io::Result<GatewayProxyHandle> {
     })
 }
 
-fn relay(member: TcpStream, upstream_addr: String) {
-    let Ok(upstream) = TcpStream::connect(upstream_addr) else {
-        return;
-    };
-    let _ = member.set_nonblocking(false);
-    let _ = upstream.set_nonblocking(false);
-    let _ = member.set_nodelay(true);
-    let _ = upstream.set_nodelay(true);
-    let Ok(member_read) = member.try_clone() else {
-        return;
-    };
-    let Ok(upstream_read) = upstream.try_clone() else {
-        return;
-    };
-    let member_write = member;
-    let upstream_write = upstream;
-    let upstream_thread = thread::spawn(move || {
-        let mut reader = upstream_read;
-        let mut writer = member_write;
-        let _ = pump(&mut reader, &mut writer);
-        let _ = writer.shutdown(Shutdown::Both);
-    });
-    let mut reader = member_read;
-    let mut writer = upstream_write;
-    let _ = pump(&mut reader, &mut writer);
-    let _ = writer.shutdown(Shutdown::Both);
-    let _ = upstream_thread.join();
-}
-
-fn pump(reader: &mut TcpStream, writer: &mut TcpStream) -> io::Result<()> {
-    let mut buffer = vec![0u8; 64 * 1024];
-    loop {
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            return Ok(());
-        }
-        writer.write_all(&buffer[..read])?;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read, Write};
 
     #[test]
     fn relays_bytes_to_upstream() {
