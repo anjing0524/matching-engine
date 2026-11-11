@@ -175,6 +175,7 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         self.core
             .core_mut()
             .drain_private_events_into(&mut self.private_events);
+        self.fanout.emit(&self.private_events, &[]);
         let sent = self
             .gateway
             .dispatch_private(&self.server, self.private_events.drain(..));
@@ -182,7 +183,7 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         self.core
             .core_mut()
             .drain_public_events_into(&mut self.public_events);
-        let public_sent = self.fanout.emit(&self.private_events, &self.public_events);
+        let public_sent = self.fanout.emit(&[], &self.public_events);
         self.metrics.public_events_sent += public_sent;
         if let Some(combo) = &mut self.combo {
             combo.poll_commands();
