@@ -1,7 +1,9 @@
 //! Standalone gateway relay: member TCP connections are forwarded frame-for-frame
 //! to the middleware gateway listener.
 
-use std::io::{self, Read, Write};
+use std::io;
+#[cfg(not(target_os = "linux"))]
+use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 #[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
