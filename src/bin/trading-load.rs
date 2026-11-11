@@ -272,15 +272,19 @@ fn main() {
         let in_flight = args.in_flight;
         let orders = args.orders_per_member;
         workers.push(std::thread::spawn(move || {
-            run_member(
-                addr,
-                member,
-                orders,
-                in_flight,
-                start,
-                args_offset,
-                buy_only,
-            )
+            if buy_only {
+                run_buy_only(addr, member, orders, in_flight, start, args_offset)
+            } else {
+                run_member(
+                    addr,
+                    member,
+                    orders,
+                    in_flight,
+                    start,
+                    args_offset,
+                    buy_only,
+                )
+            }
         }));
     }
     let mut samples = Vec::with_capacity(args.members * args.orders_per_member);
