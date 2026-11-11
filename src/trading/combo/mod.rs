@@ -8,5 +8,6 @@ pub mod queue;
 pub mod runtime;
 
 pub use self::engine::ComboEngine;
+pub use self::exec::{ComboExecError, ComboFill};
 pub use self::queue::{ComboOrder, ComboQueue};
 pub use self::runtime::ComboRuntime;

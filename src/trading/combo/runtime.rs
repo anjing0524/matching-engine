@@ -3,10 +3,10 @@
 //! Runs the combination queue/executor and forwards successful fill events to
 //! the combo UDP publisher.
 
-use crate::trading::combo::engine::{ComboEngine, ComboEngineSnapshot, ComboExecError, ComboFill};
+use crate::trading::combo::engine::{ComboEngine, ComboEngineSnapshot};
 use crate::trading::combo::market_data::ComboMarketDataPublisher;
+use crate::trading::combo::{ComboExecError, ComboFill};
 use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
-use crate::trading::core::protocol::{Command, CommandType};
 use crate::trading::core::protocol::{Command, CommandType, Side};
 use crate::trading::transport::CommandConsumer;
 
@@ -390,8 +390,8 @@ mod tests {
             ComboMarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap())
                 .unwrap();
         let mut runtime = ComboRuntime::new(engine);
-        assert_eq!(runtime.tick(), 0);
+        assert_eq!(runtime.tick_effects().public_sent, 0);
         runtime = runtime.with_publisher(publisher);
-        assert_eq!(runtime.tick(), 0);
+        assert_eq!(runtime.tick_effects().public_sent, 0);
     }
 }
