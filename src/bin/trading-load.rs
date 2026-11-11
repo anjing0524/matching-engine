@@ -167,9 +167,10 @@ fn run_member(
     });
 
     writer.join().unwrap();
-    reader.join().unwrap();
+    let samples = reader.join().unwrap();
     done.store(true, Ordering::Relaxed);
-    monitor.join().unwrap()
+    monitor.join().unwrap();
+    samples
 }
 
 fn main() {
