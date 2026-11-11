@@ -119,12 +119,26 @@ Serial calibration, one member, one in-flight:
 n=50000 rate=110819/s p50=143ns p99=20925ns
 ```
 
-Two members, 500k commands, 32 in flight:
+Two members, 500k commands, 32 in flight, gateway pinned to one CPU:
 
 ```text
 n=500000 elapsed=12.585s rate=39730/s
 p50=1.606ms p99=2.094ms
 ```
+
+Reallocated: middleware CPU0-1, core CPU2, gateway CPU3, client CPU4-7:
+
+```text
+1 member in-flight=32:
+n=100000 rate=90480/s p50=322.8µs p99=573.3µs
+
+2 members in-flight=32:
+n=500000 rate=54752/s p50=1.215ms p99=1.666ms
+```
+
+Allocating two CPUs to middleware improved the 2-member case, but the gateway
+proxy still has one CPU and a thread pair per member. This is a single gateway
+process with a proxy relay, not yet the intended multiple-gateway deployment.
 
 The serial split path is in the expected 100k/s range, but the pipelined path
 still collapses to ~40k/s and millisecond p99. That points at the generator or a
