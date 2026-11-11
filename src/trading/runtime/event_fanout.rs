@@ -6,8 +6,6 @@
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::core::public_events::PublicEvent;
 use crate::trading::market_data::MarketDataPublisher;
-#[cfg(test)]
-use crate::trading::market_data::repair::NackRequest;
 use crate::trading::market_data::repair::RepairServer;
 use crate::trading::transport::result_log::{PrivateResultLog, PublicResultLog};
 
@@ -126,30 +124,6 @@ impl EventFanout {
                 self.sink_errors += 1;
                 0
             }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::trading::core::public_events::{PublicEvent, PublicEventType};
-
-    fn event(seq: u64) -> PublicEvent {
-        PublicEvent {
-            seq,
-            event_type: PublicEventType::TimeTick,
-            trading_ts_ns: 0,
-            phase: 0,
-            instrument_id: 0,
-            order_id: 0,
-            trade_id: 0,
-            buy_order_id: 0,
-            sell_order_id: 0,
-            side: None,
-            price_ticks: 0,
-            quantity: 0,
-            volume: 0,
         }
     }
 }
