@@ -37,6 +37,9 @@ struct Args {
     /// Print loop counters to stderr every N milliseconds; 0 disables.
     #[arg(long, default_value_t = 0)]
     stats_interval_ms: u64,
+    /// Disable private replay recording (throughput diagnostics only).
+    #[arg(long, default_value_t = false)]
+    no_private_replay: bool,
     /// Persist public events to this result log.
     #[arg(long)]
     public_log: Option<String>,
@@ -145,6 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         server.enable_timing();
     }
     let mut gateway = GatewayRuntime::with_replay_capacity(middleware, events, 4096);
+    gateway.set_replay_enabled(!args.no_private_replay);
     if let Some(token) = args.auth_token {
         gateway = gateway.with_auth_token(token);
     }
