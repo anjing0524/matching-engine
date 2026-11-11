@@ -38,51 +38,21 @@ impl MiddlewareSequencer {
         }
     }
 
-    pub fn open_session(&mut self, info: SessionInfo) -> bool {
-        self.sessions.open(info)
+    /// Session directory owned by middleware.
+    #[must_use]
+    pub fn sessions(&self) -> &SessionRegistry {
+        &self.sessions
     }
 
-    pub fn close_session(&mut self, session_id: u64) -> bool {
-        self.sessions.close(session_id)
-    }
-
-    pub fn open_or_takeover(
-        &mut self,
-        info: SessionInfo,
-    ) -> Result<Option<u64>, crate::trading::transport::session::SessionOpenError> {
-        self.sessions.open_or_takeover(info)
-    }
-
-    pub fn drain_gateway(&mut self, gateway_id: u32) -> Vec<u64> {
-        self.sessions.drain_gateway(gateway_id)
-    }
-
-    pub fn prune_closed_sessions(&mut self, keep_closed: usize) -> usize {
-        self.sessions.prune_closed(keep_closed)
+    /// Mutable session directory owned by middleware.
+    pub fn sessions_mut(&mut self) -> &mut SessionRegistry {
+        &mut self.sessions
     }
 
     /// Number of commands successfully submitted to the core ring.
     #[must_use]
     pub fn submitted(&self) -> u64 {
         self.submitted
-    }
-
-    pub fn session_counts(&self) -> (usize, usize) {
-        (self.sessions.active_count(), self.sessions.closed_count())
-    }
-
-    #[must_use]
-    pub fn session(&self, session_id: u64) -> Option<SessionInfo> {
-        self.sessions.get(session_id)
-    }
-
-    #[must_use]
-    pub fn session_by_user(&self, user_id: u32) -> Option<SessionInfo> {
-        self.sessions.find_active_by_user(user_id)
-    }
-
-    pub fn acknowledge_private(&mut self, session_id: u64, private_seq: u64) -> bool {
-        self.sessions.acknowledge_private(session_id, private_seq)
     }
 
     /// Submits only when the command's session is open and active.
@@ -265,7 +235,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let (producer, _consumer) = create(&path, 8).unwrap();
         let mut middleware = MiddlewareSequencer::new(producer);
-        assert!(middleware.open_session(SessionInfo {
+        assert!(middleware.sessions_mut().open(SessionInfo {
             session_id: 1,
             gateway_id: 1,
             member_id: 10,
@@ -287,7 +257,7 @@ mod tests {
             Err(CommandTransportError::Unauthorized)
         ));
 
-        middleware.close_session(1);
+        middleware.sessions_mut().close(1);
         let mut after_close = command(3, Side::Buy, 50_000, 1);
         after_close.session_id = 1;
         after_close.member_id = 10;

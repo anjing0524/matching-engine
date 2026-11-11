@@ -140,7 +140,7 @@ impl GatewayRuntime {
                     self.connections.remove(&connection_id);
                     self.replay_pending.remove(&connection_id);
                     self.redirect_pending.remove(&connection_id);
-                    self.middleware.close_session(connection_id);
+                    self.middleware.sessions_mut().close(connection_id);
                 }
             }
         }
@@ -194,7 +194,7 @@ impl GatewayRuntime {
                     last_private_seq,
                     active: true,
                 };
-                let replaced = match self.middleware.open_or_takeover(info) {
+                let replaced = match self.middleware.sessions_mut().open_or_takeover(info) {
                     Ok(replaced) => replaced,
                     Err(_) => {
                         self.errors += 1;
@@ -236,7 +236,7 @@ impl GatewayRuntime {
                     }
                 }
                 command.session_id = connection_id;
-                if let Some(session) = self.middleware.session(connection_id) {
+                if let Some(session) = self.middleware.sessions().get(connection_id) {
                     command.member_id = session.member_id;
                 }
                 if self.middleware.submit_for_session(command).is_err() {
@@ -261,12 +261,15 @@ impl GatewayRuntime {
     /// Takes queued redirects for displaced connections.
     #[must_use]
     pub fn session_counts(&self) -> (usize, usize) {
-        self.middleware.session_counts()
+        (
+            self.middleware.sessions().active_count(),
+            self.middleware.sessions().closed_count(),
+        )
     }
 
     /// Prunes old closed session records after connection churn.
     pub fn prune_closed_sessions(&mut self, keep_closed: usize) -> usize {
-        self.middleware.prune_closed_sessions(keep_closed)
+        self.middleware.sessions_mut().prune_closed(keep_closed)
     }
 
     pub fn take_redirects(&mut self) -> Vec<(u64, String)> {
@@ -289,7 +292,7 @@ impl GatewayRuntime {
     /// connections. Retained private replay lets clients reconnect with
     /// `last_private_seq`.
     pub fn drain_gateway(&mut self, gateway_id: u32) -> Vec<u64> {
-        let drained = self.middleware.drain_gateway(gateway_id);
+        let drained = self.middleware.sessions_mut().drain_gateway(gateway_id);
         for connection_id in &drained {
             let redirect = self.redirect_target.clone();
             let mut state = ConnectionState::new();
@@ -314,7 +317,7 @@ impl GatewayRuntime {
             .collect();
         for id in &expired {
             self.connections.remove(id);
-            self.middleware.close_session(*id);
+            self.middleware.sessions_mut().close(*id);
         }
         expired
     }
@@ -456,7 +459,12 @@ mod tests {
             .unwrap();
         for _ in 0..50 {
             runtime.poll();
-            if runtime.middleware_mut().session_by_user(2).is_some() {
+            if runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_some()
+            {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
@@ -532,7 +540,7 @@ mod tests {
             .unwrap();
         for _ in 0..50 {
             runtime.poll();
-            if runtime.middleware_mut().session(1).is_some() {
+            if runtime.middleware_mut().sessions().get(1).is_some() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
@@ -553,13 +561,13 @@ mod tests {
             .unwrap();
         for _ in 0..50 {
             runtime.poll();
-            if runtime.middleware_mut().session(2).is_some() {
+            if runtime.middleware_mut().sessions().get(2).is_some() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        assert!(!runtime.middleware_mut().session(1).unwrap().active);
-        assert!(runtime.middleware_mut().session(2).unwrap().active);
+        assert!(!runtime.middleware_mut().sessions().get(1).unwrap().active);
+        assert!(runtime.middleware_mut().sessions().get(2).unwrap().active);
         server.stop();
         let _ = std::fs::remove_file(&path);
     }
@@ -589,7 +597,7 @@ mod tests {
         first.write_all(&login.clone().encode()).unwrap();
         for _ in 0..50 {
             runtime.poll();
-            if runtime.middleware_mut().session(1).is_some() {
+            if runtime.middleware_mut().sessions().get(1).is_some() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
@@ -598,7 +606,7 @@ mod tests {
         second.write_all(&login.encode()).unwrap();
         for _ in 0..50 {
             runtime.poll();
-            if runtime.middleware_mut().session(2).is_some() {
+            if runtime.middleware_mut().sessions().get(2).is_some() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
@@ -672,12 +680,23 @@ mod tests {
             .unwrap();
         for _ in 0..50 {
             runtime.poll();
-            if runtime.middleware_mut().session_by_user(2).is_some() {
+            if runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_some()
+            {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        assert!(runtime.middleware_mut().session_by_user(2).is_some());
+        assert!(
+            runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_some()
+        );
         server.stop();
         let _ = std::fs::remove_file(&path);
     }
@@ -717,7 +736,13 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
         assert!(runtime.errors() > 0);
-        assert!(runtime.middleware_mut().session_by_user(2).is_none());
+        assert!(
+            runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_none()
+        );
 
         let mut right = TcpStream::connect(addr).unwrap();
         right
@@ -735,12 +760,23 @@ mod tests {
             .unwrap();
         for _ in 0..50 {
             runtime.poll();
-            if runtime.middleware_mut().session_by_user(2).is_some() {
+            if runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_some()
+            {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        assert!(runtime.middleware_mut().session_by_user(2).is_some());
+        assert!(
+            runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_some()
+        );
         server.stop();
         let _ = std::fs::remove_file(&path);
     }
@@ -827,7 +863,12 @@ mod tests {
             .unwrap();
         for _ in 0..50 {
             runtime.poll();
-            if runtime.middleware_mut().session_by_user(2).is_some() {
+            if runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_some()
+            {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
@@ -889,7 +930,12 @@ mod tests {
             .unwrap();
         for _ in 0..50 {
             runtime.poll();
-            if runtime.middleware_mut().session_by_user(2).is_some() {
+            if runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_some()
+            {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
@@ -908,7 +954,12 @@ mod tests {
         drop(first);
         for _ in 0..50 {
             runtime.poll();
-            if runtime.middleware_mut().session_by_user(2).is_none() {
+            if runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_none()
+            {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
@@ -979,7 +1030,12 @@ mod tests {
         first.write_all(&login.encode()).unwrap();
         for _ in 0..50 {
             runtime.poll();
-            if runtime.middleware_mut().session_by_user(2).is_some() {
+            if runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_some()
+            {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
@@ -1011,7 +1067,12 @@ mod tests {
         drop(first);
         for _ in 0..50 {
             runtime.poll();
-            if runtime.middleware_mut().session_by_user(2).is_none() {
+            if runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_none()
+            {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
@@ -1083,7 +1144,12 @@ mod tests {
             .unwrap();
         for _ in 0..50 {
             runtime.poll();
-            if runtime.middleware_mut().session_by_user(2).is_some() {
+            if runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_some()
+            {
                 break;
             }
             std::thread::sleep(Duration::from_millis(2));
@@ -1114,7 +1180,13 @@ mod tests {
                 .contains(&bucket_id)
         );
         assert!(!runtime.connections.contains_key(&bucket_id));
-        assert!(runtime.middleware_mut().session_by_user(2).is_none());
+        assert!(
+            runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_none()
+        );
         server.stop();
         let _ = std::fs::remove_file(&path);
     }
@@ -1149,7 +1221,12 @@ mod tests {
             .unwrap();
         for _ in 0..50 {
             runtime.poll();
-            if runtime.middleware_mut().session_by_user(2).is_some() {
+            if runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_some()
+            {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
