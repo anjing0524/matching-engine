@@ -145,3 +145,44 @@ impl EventFanout {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::trading::core::public_events::{PublicEvent, PublicEventType};
+
+    fn event(seq: u64) -> PublicEvent {
+        PublicEvent {
+            seq,
+            event_type: PublicEventType::TimeTick,
+            trading_ts_ns: 0,
+            phase: 0,
+            instrument_id: 0,
+            order_id: 0,
+            trade_id: 0,
+            buy_order_id: 0,
+            sell_order_id: 0,
+            side: None,
+            price_ticks: 0,
+            quantity: 0,
+            volume: 0,
+        }
+    }
+
+    #[test]
+    fn emit_feeds_repair_buffer() {
+        let mut fanout = EventFanout::new().with_options(EventFanoutOptions {
+            repair_buffer_capacity: Some(4),
+            ..EventFanoutOptions::default()
+        });
+        let event = event(7);
+        assert_eq!(fanout.emit(&[], &[event]), 0);
+        assert_eq!(
+            fanout.repair(NackRequest {
+                from_seq: 7,
+                to_seq: 7
+            }),
+            vec![event]
+        );
+    }
+}
