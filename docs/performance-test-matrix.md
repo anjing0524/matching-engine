@@ -145,6 +145,36 @@ still collapses to ~40k/s and millisecond p99. That points at the generator or a
 proxy/middleware queueing path, not at the core matching rate. It is not yet
 evidence for or against 1M capacity.
 
+### multi-gateway processes (shared middleware/core)
+
+Script:
+
+```bash
+scripts/run-multi-gateway-aggregate.sh 2 50000 1
+```
+
+Fedora 4C/8T, middleware CPU0, core CPU1, gateways CPU2/3, clients CPU4/5.
+
+Serial, two gateways, one member each:
+
+```text
+gateway-0: 78465/s
+gateway-1: 31590/s
+aggregate: 110055/s
+```
+
+Pipelined, two gateways, in-flight=32:
+
+```text
+gateway-0: 18964/s p99=2.48ms
+gateway-1: 18573/s p99=2.48ms
+aggregate: 37537/s
+```
+
+The multi-gateway identity collision is fixed (unique member offsets). Serial
+scales to ~110k aggregate, but the pipelined client path still collapses. The
+pipeline generator remains the suspect, not the gateway process count.
+
 ## Next measurement
 
 Use an independent load-generator host/process and per-process CPU affinity:
