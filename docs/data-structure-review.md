@@ -406,24 +406,30 @@ per process, or separate hosts.
 
 ### 23. External pipelined load generator (experimental)
 
-Added `src/bin/trading-load.rs` and a category runner. It uses one TCP connection
-per member, multiple commands in flight, and an external `trading-engine`
-process.
+Added `src/bin/trading-load.rs`: one TCP connection per member, multiple commands
+in flight, external `trading-engine` process.
 
-Early runs are **not yet valid capacity numbers**:
+Unpinned, one member, in-flight 1:
 
 ```text
-members=1 in-flight=1:  rate=1009/s p50=988µs
-members=1 in-flight=32: rate=70769/s p50=427µs
-members=4 in-flight=32: rate=40805/s p50=2.97ms
+n=50000 rate=53389/s p50=19.25µs p99=42.47µs
 ```
 
-The in-flight=1 number contradicts the earlier external one-outstanding profile
-(~7µs p50), so the generator/client loop has a correctness or scheduling defect
-that must be fixed before using its aggregate numbers. It is recorded as an
-experimental tool, not evidence for or against 1M capacity.
+Unpinned, one member, larger windows:
 
-## Remaining data-structure candidates## Remaining data-structure candidates
+```text
+in-flight=4:  rate=59447/s p50=50.3µs p99=262.8µs
+in-flight=16: rate=64168/s p50=213.2µs p99=242.0µs
+```
+
+Pinning server to CPUs 0–1 and client to 2–3 produced a contradictory 1ms p50;
+that run is invalid. The same one-outstanding remote-client test earlier measured
+~7µs p50, so the generator/client loop still has an unexplained overhead and is
+not yet a valid aggregate-capacity instrument.
+
+Do not use these numbers to conclude anything about 1M/s capacity yet.
+
+## Remaining data-structure candidates## Remaining data-structure candidates## Remaining data-structure candidates
 
 1. **Event vectors**
    Production already uses `execute_with_plugins_discard`; `CoreEvent` vectors
