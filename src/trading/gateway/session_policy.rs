@@ -4,12 +4,19 @@
 use crate::trading::gateway::auth::GatewayCredentials;
 use std::time::{Duration, Instant};
 
+/// Token-bucket rate limit used by gateway command admission.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RateLimit {
+    pub capacity: f64,
+    pub refill_per_sec: f64,
+}
+
 /// Policy decisions that do not require a socket or connection state.
 #[derive(Default)]
 pub struct SessionPolicy {
     auth_token: Option<u64>,
     credentials: Option<GatewayCredentials>,
-    rate_limit: Option<(f64, f64)>,
+    rate_limit: Option<RateLimit>,
     redirect_target: Option<String>,
 }
 
@@ -28,7 +35,10 @@ impl SessionPolicy {
 
     #[must_use]
     pub fn with_rate_limit(mut self, capacity: f64, refill_per_sec: f64) -> Self {
-        self.rate_limit = Some((capacity, refill_per_sec));
+        self.rate_limit = Some(RateLimit {
+            capacity,
+            refill_per_sec,
+        });
         self
     }
 
@@ -48,7 +58,7 @@ impl SessionPolicy {
     }
 
     #[must_use]
-    pub fn rate_limit(&self) -> Option<(f64, f64)> {
+    pub fn rate_limit(&self) -> Option<RateLimit> {
         self.rate_limit
     }
 
@@ -87,7 +97,13 @@ mod tests {
         let policy = SessionPolicy::default()
             .with_rate_limit(10.0, 5.0)
             .with_redirect_target("127.0.0.1:9000".to_string());
-        assert_eq!(policy.rate_limit(), Some((10.0, 5.0)));
+        assert_eq!(
+            policy.rate_limit(),
+            Some(RateLimit {
+                capacity: 10.0,
+                refill_per_sec: 5.0
+            })
+        );
         assert_eq!(policy.redirect_target(), Some("127.0.0.1:9000"));
     }
 }

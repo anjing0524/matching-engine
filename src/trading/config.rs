@@ -1,7 +1,8 @@
 //! Trading runtime configuration.
 //!
-//! Central defaults for gateway replay, idle expiry, and market-data multicast. Transport-specific objects are still constructed by
-//! the caller; this struct only validates and carries values.
+//! Central defaults for gateway replay, idle expiry, and market-data multicast.
+//! Transport-specific objects are still constructed by the caller; this struct
+//! only validates and carries values.
 
 use crate::trading::market_data::MarketDataPublisher;
 use std::io;

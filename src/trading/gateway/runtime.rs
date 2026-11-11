@@ -42,23 +42,35 @@ impl ConnectionState {
 
 /// One poll's gateway effects, already drained from per-connection state.
 pub struct GatewayEffects {
+    /// Number of frame/closed events processed.
     pub events: usize,
+    /// Connections that must receive a redirect.
     pub redirects: Vec<(u64, String)>,
+    /// Replay batches keyed by connection id.
     pub replays: Vec<(u64, Vec<ReplayEvent>)>,
+    /// Active session count after the poll.
     pub active_sessions: usize,
+    /// Closed session count after the poll.
     pub closed_sessions: usize,
 }
 
 /// Counts returned after one gateway effect application.
 pub struct AppliedGatewayEffects {
+    /// Number of frame/closed events processed.
     pub events: usize,
+    /// Number of redirect frames sent.
     pub redirects: usize,
+    /// Number of replayed private events sent.
     pub replays: usize,
+    /// Number of idle sessions expired.
     pub expired: usize,
-    pub pruned: usize,
+    /// Active session count after application.
     pub active_sessions: usize,
+    /// Closed session count after application.
     pub closed_sessions: usize,
 }
+
+const CLOSED_SESSION_RETAIN: usize = 4096;
 
 /// Drains gateway events and applies them to middleware.
 pub struct GatewayRuntime {
@@ -156,9 +168,6 @@ impl GatewayRuntime {
     /// Polls frames and returns every lifecycle effect in one value.
     pub fn poll_effects(&mut self) -> GatewayEffects {
         let events = self.poll();
-        if events > 0 {
-            self.prune_closed_sessions(4096);
-        }
         let redirects = self.take_redirects();
         let replays = self.take_replay_batches();
         let (active_sessions, closed_sessions) = self.session_counts();
@@ -211,13 +220,12 @@ impl GatewayRuntime {
                 expired += 1;
             }
         }
-        let pruned = self.prune_closed_sessions(4096);
+        self.prune_closed_sessions(CLOSED_SESSION_RETAIN);
         AppliedGatewayEffects {
             events: effects.events,
             redirects,
             replays,
             expired,
-            pruned,
             active_sessions: effects.active_sessions,
             closed_sessions: effects.closed_sessions,
         }
@@ -274,14 +282,14 @@ impl GatewayRuntime {
                 state.replay = replay;
             }
             GatewayFrame::Command(command) => {
-                if let Some((capacity, refill)) = self.policy.rate_limit() {
+                if let Some(limit) = self.policy.rate_limit() {
                     let state = self
                         .connections
                         .entry(connection_id)
                         .or_insert_with(ConnectionState::new);
-                    let bucket = state
-                        .bucket
-                        .get_or_insert_with(|| TokenBucket::new(capacity, refill));
+                    let bucket = state.bucket.get_or_insert_with(|| {
+                        TokenBucket::new(limit.capacity, limit.refill_per_sec)
+                    });
                     if !bucket.try_acquire() {
                         self.errors += 1;
                         return;

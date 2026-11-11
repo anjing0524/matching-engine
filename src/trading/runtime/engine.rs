@@ -203,7 +203,9 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         if self.gateway.session_counts().0 > 0 {
             return Err("cannot restore a snapshot while sessions are active".to_string());
         }
-        self.core.restore_snapshot(snapshot.core)?;
+        self.core
+            .restore_snapshot(snapshot.core)
+            .map_err(|error| error.to_string())?;
         match (self.combo.as_mut(), snapshot.combo) {
             (Some(combo), Some(combo_snapshot)) => combo.restore_snapshot(combo_snapshot),
             (None, None) => Ok(()),

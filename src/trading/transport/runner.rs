@@ -4,6 +4,7 @@
 //! through a static pre-trade plugin chain, and exposes the resulting private
 //! and public events. It is deliberately single-threaded and has no networking.
 
+use crate::trading::core::CoreSnapshot;
 use crate::trading::core::TradingCore;
 use crate::trading::core::plugins::PreTradePlugin;
 use crate::trading::core::private_events::PrivateEvent;
@@ -13,10 +14,25 @@ use crate::trading::transport::{
 };
 use std::collections::VecDeque;
 
+/// Snapshot restore failure returned by [`CoreRunner`].
+#[derive(Debug)]
+pub struct CoreRestoreError(String);
+
+impl std::fmt::Display for CoreRestoreError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for CoreRestoreError {}
+
 /// One poll's core commands and projected events.
 pub struct CoreEvents {
+    /// Number of commands executed during this poll.
     pub commands: usize,
+    /// Private events produced by the poll.
     pub private: Vec<PrivateEvent>,
+    /// Public events produced by the poll.
     pub public: Vec<PublicEvent>,
 }
 
@@ -108,6 +124,7 @@ impl<P: PreTradePlugin> CoreRunner<P> {
     }
 
     /// Drains commands and returns the resulting events through one seam.
+    #[must_use]
     pub fn poll_events(&mut self) -> CoreEvents {
         let mut commands = 0;
         while let Some(result) = self.consumer.recv() {
@@ -149,11 +166,10 @@ impl<P: PreTradePlugin> CoreRunner<P> {
     ///
     /// # Errors
     /// Returns the core's snapshot compatibility error.
-    pub fn restore_snapshot(
-        &mut self,
-        snapshot: crate::trading::core::CoreSnapshot,
-    ) -> Result<(), String> {
-        self.core.restore_snapshot(snapshot)
+    pub fn restore_snapshot(&mut self, snapshot: CoreSnapshot) -> Result<(), CoreRestoreError> {
+        self.core
+            .restore_snapshot(snapshot)
+            .map_err(CoreRestoreError)
     }
 
     #[must_use]
