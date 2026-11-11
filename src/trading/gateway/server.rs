@@ -133,54 +133,6 @@ impl GatewayServerHandle {
         }
     }
 
-    /// Writes an already encoded batch of fixed-size frames.
-    ///
-    /// # Errors
-    /// Returns an I/O error when the connection is unknown or the write fails.
-    pub fn send_encoded(&self, connection_id: u64, bytes: &[u8], frames: usize) -> io::Result<()> {
-        if frames == 0 {
-            return Ok(());
-        }
-        let stream = {
-            let connections = self
-                .connections
-                .lock()
-                .map_err(|_| io::Error::other("gateway connection lock poisoned"))?;
-            connections
-                .get(&connection_id)
-                .cloned()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "gateway not connected"))?
-        };
-        let timing = self.stats.timing_enabled();
-        let start = timing.then(std::time::Instant::now);
-        let mut stream = stream
-            .lock()
-            .map_err(|_| io::Error::other("gateway stream lock poisoned"))?;
-        let result = stream.write_all(bytes);
-        if let Some(start) = start {
-            self.stats
-                .write_ns
-                .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
-        }
-        match result {
-            Ok(()) => {
-                self.stats
-                    .writes
-                    .fetch_add(frames as u64, Ordering::Relaxed);
-                self.stats
-                    .bytes_written
-                    .fetch_add(bytes.len() as u64, Ordering::Relaxed);
-                Ok(())
-            }
-            Err(error) => {
-                self.stats
-                    .write_errors
-                    .fetch_add(frames as u64, Ordering::Relaxed);
-                Err(error)
-            }
-        }
-    }
-
     /// Enables read/write timing counters (diagnostic mode).
     pub fn enable_timing(&self) {
         self.stats.timing.store(true, Ordering::Relaxed);

@@ -399,28 +399,18 @@ impl GatewayRuntime {
         server: &GatewayServerHandle,
         events: impl IntoIterator<Item = crate::trading::core::private_events::PrivateEvent>,
     ) -> usize {
-        let mut batches: U64MixMap<Vec<u8>> = U64MixMap::default();
-        let mut counts: U64MixMap<usize> = U64MixMap::default();
+        let mut sent = 0;
         for mut event in events {
             event.seq = self.assign_private_seq(event.account_id);
             let user_id = u32::try_from(event.account_id).unwrap_or(u32::MAX);
             self.private_replay.push(event.account_id, event.clone());
             if let Some(session) = self.middleware.session_by_user(user_id) {
-                batches
-                    .entry(session.session_id)
-                    .or_default()
-                    .extend_from_slice(&GatewayFrame::PrivateEvent(event).encode());
-                *counts.entry(session.session_id).or_insert(0) += 1;
+                match server.send_private(session.session_id, &event) {
+                    Ok(()) => sent += 1,
+                    Err(_) => self.private_send_errors += 1,
+                }
             } else {
                 self.private_unrouted += 1;
-            }
-        }
-        let mut sent = 0;
-        for (session_id, bytes) in batches {
-            let frames = counts.get(&session_id).copied().unwrap_or(0);
-            match server.send_encoded(session_id, &bytes, frames) {
-                Ok(()) => sent += frames,
-                Err(_) => self.private_send_errors += frames as u64,
             }
         }
         sent
