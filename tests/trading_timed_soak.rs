@@ -68,9 +68,8 @@ fn timed_core_soak() {
             producer.send(&command(seq)).unwrap();
             seq += 1;
         }
-        total += runner.poll() as u64;
-        let _ = runner.drain_private();
-        let _ = runner.drain_public();
+        total += runner.poll_events().commands as u64;
+        let _ = runner.poll_events();
     }
     drop(producer);
     let elapsed = started.elapsed();

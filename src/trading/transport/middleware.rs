@@ -55,16 +55,24 @@ impl MiddlewareSequencer {
         self.submitted
     }
 
-    /// Submits only when the command's session is open and active.
-    pub fn submit_for_session(&mut self, command: Command) -> Result<u64, CommandTransportError> {
+    /// Admits a command for the connection that owns it.
+    ///
+    /// Derives session and member identity from the registry, rejects inactive
+    /// or mismatched sessions, and submits with a fresh global sequence.
+    pub fn admit(
+        &mut self,
+        connection_id: u64,
+        mut command: Command,
+    ) -> Result<u64, CommandTransportError> {
         let session = self
             .sessions
-            .get(command.session_id)
+            .get(connection_id)
             .filter(|session| session.active)
             .ok_or(CommandTransportError::Unauthorized)?;
-        if session.member_id != command.member_id {
-            return Err(CommandTransportError::Unauthorized);
-        }
+        // The authenticated session is the source of truth; wire identity is
+        // overwritten so a client cannot submit as another member.
+        command.session_id = connection_id;
+        command.member_id = session.member_id;
         self.submit(command)
     }
 
@@ -116,7 +124,7 @@ impl MiddlewareSequencer {
     /// # Errors
     /// Returns `Full` when the command ring is full; the sequence is not
     /// consumed in that case.
-    pub fn submit(&mut self, mut command: Command) -> Result<u64, CommandTransportError> {
+    pub(crate) fn submit(&mut self, mut command: Command) -> Result<u64, CommandTransportError> {
         let global_seq = self.next_global_seq;
         command.global_seq = global_seq;
         let producer = if command.combo_id != 0 {
@@ -247,22 +255,20 @@ mod tests {
         let mut order = command(1, Side::Buy, 50_000, 1);
         order.session_id = 1;
         order.member_id = 10;
-        assert_eq!(middleware.submit_for_session(order).unwrap(), 1);
+        assert_eq!(middleware.admit(order.session_id, order).unwrap(), 1);
 
+        // The authenticated session overwrites a conflicting wire member id.
         let mut wrong_member = command(2, Side::Buy, 50_000, 1);
         wrong_member.session_id = 1;
         wrong_member.member_id = 11;
-        assert!(matches!(
-            middleware.submit_for_session(wrong_member),
-            Err(CommandTransportError::Unauthorized)
-        ));
+        assert_eq!(middleware.admit(1, wrong_member).unwrap(), 2);
 
         middleware.sessions_mut().close(1);
         let mut after_close = command(3, Side::Buy, 50_000, 1);
         after_close.session_id = 1;
         after_close.member_id = 10;
         assert!(matches!(
-            middleware.submit_for_session(after_close),
+            middleware.admit(after_close.session_id, after_close),
             Err(CommandTransportError::Unauthorized)
         ));
         let _ = std::fs::remove_file(&path);
@@ -292,7 +298,7 @@ mod tests {
         let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
         let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
         let mut runner = CoreRunner::new(core, consumer, NoPlugins);
-        assert_eq!(runner.poll(), 3);
+        assert_eq!(runner.poll_events().commands, 3);
         assert_eq!(runner.core().phase(), TradingPhase::Continuous);
         assert_eq!(runner.core().trading_day(), 7);
         let _ = std::fs::remove_file(&path);
@@ -371,7 +377,7 @@ mod tests {
                 .unwrap(),
             2
         );
-        assert_eq!(runner.poll(), 2);
+        assert_eq!(runner.poll_events().commands, 2);
         assert!(!runner.core().positions().snapshot().is_empty());
         assert_eq!(middleware.next_global_seq(), 3);
         let _ = std::fs::remove_file(&path);

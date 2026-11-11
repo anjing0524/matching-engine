@@ -5,8 +5,9 @@
 
 use crate::trading::combo::engine::{ComboEngine, ComboEngineSnapshot};
 use crate::trading::combo::market_data::ComboMarketDataPublisher;
+use crate::trading::combo::{ComboExecError, ComboFill};
 use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
-use crate::trading::core::protocol::{Command, CommandType};
+use crate::trading::core::protocol::{Command, CommandType, Side};
 use crate::trading::transport::CommandConsumer;
 
 /// Private fills and command statuses produced by one combo tick.
@@ -149,24 +150,6 @@ impl ComboRuntime {
         std::mem::take(&mut self.command_events)
     }
 
-    /// Publishes fill events produced since the last tick.
-    ///
-    /// Fills are drained even when no publisher is configured.
-    pub fn tick(&mut self) -> usize {
-        let events = self.engine.drain_events();
-        let Some(publisher) = &self.publisher else {
-            return 0;
-        };
-        let mut sent = 0;
-        for event in events {
-            if publisher.send(&event.public_fill()).is_ok() {
-                sent += 1;
-                self.public_sent += 1;
-            }
-        }
-        sent
-    }
-
     /// Runs marketable combo orders, publishes fills, and returns private effects.
     pub fn tick_effects(&mut self) -> ComboEffects {
         let private_commands = self.drain_command_events();
@@ -188,9 +171,15 @@ impl ComboRuntime {
         }
     }
 
+    /// Number of queued combo orders.
     #[must_use]
-    pub fn engine(&self) -> &ComboEngine {
-        &self.engine
+    pub fn queue_len(&self) -> usize {
+        self.engine.queue_len()
+    }
+
+    /// Executes the best marketable combo order for `side`.
+    pub fn try_execute_best(&mut self, side: Side) -> Option<Result<ComboFill, ComboExecError>> {
+        self.engine.try_execute_best(side)
     }
 
     #[must_use]
@@ -217,10 +206,6 @@ impl ComboRuntime {
         self.public_sent = snapshot.public_sent;
         self.command_events.clear();
         Ok(())
-    }
-
-    pub fn engine_mut(&mut self) -> &mut ComboEngine {
-        &mut self.engine
     }
 
     #[must_use]
@@ -291,7 +276,7 @@ mod tests {
         command.quantity = 5;
         producer.send(&command).unwrap();
         assert_eq!(runtime.poll_commands(), 1);
-        assert_eq!(runtime.engine().queue_len(), 1);
+        assert_eq!(runtime.queue_len(), 1);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -313,14 +298,14 @@ mod tests {
         command.price_ticks = 49_900;
         command.quantity = 5;
         assert!(runtime.submit_command(&command));
-        assert_eq!(runtime.engine().queue_len(), 1);
+        assert_eq!(runtime.queue_len(), 1);
 
         let mut cancel = Command::zeroed();
         cancel.command_type = CommandType::Cancel;
         cancel.combo_id = 7;
         cancel.cancel_order_id = 42;
         assert!(runtime.submit_command(&cancel));
-        assert_eq!(runtime.engine().queue_len(), 0);
+        assert_eq!(runtime.queue_len(), 0);
     }
 
     #[test]
@@ -347,7 +332,8 @@ mod tests {
             ComboMarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap())
                 .unwrap();
         let mut runtime = ComboRuntime::new(engine).with_publisher(publisher);
-        assert_eq!(runtime.tick(), 1);
+        let effects = runtime.tick_effects();
+        assert_eq!(effects.public_sent, 1);
         assert_eq!(runtime.public_sent(), 1);
         let fill = subscriber.recv().unwrap();
         assert_eq!(fill.quantity, 5);
@@ -372,7 +358,7 @@ mod tests {
             ContractSpec::new("LEG2", 1, 1, 100_000),
         ));
         restored.restore_snapshot(snapshot).unwrap();
-        assert_eq!(restored.engine().queue_len(), 1);
+        assert_eq!(restored.queue_len(), 1);
         assert_eq!(restored.next_private_seq(), 1);
     }
     #[test]
@@ -399,8 +385,8 @@ mod tests {
             ComboMarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap())
                 .unwrap();
         let mut runtime = ComboRuntime::new(engine);
-        assert_eq!(runtime.tick(), 0);
+        assert_eq!(runtime.tick_effects().public_sent, 0);
         runtime = runtime.with_publisher(publisher);
-        assert_eq!(runtime.tick(), 0);
+        assert_eq!(runtime.tick_effects().public_sent, 0);
     }
 }

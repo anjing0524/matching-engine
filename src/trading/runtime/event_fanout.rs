@@ -1,14 +1,12 @@
 //! Output fan-out for public/private projections.
 //!
-//! One module owns result logs, repair buffers, the market-data publisher, and
+//! One module owns result logs, repair forwarding, the market-data publisher, and
 //! their counters. The runtime only decides when to publish.
 
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::core::public_events::PublicEvent;
 use crate::trading::market_data::MarketDataPublisher;
-#[cfg(test)]
-use crate::trading::market_data::repair::NackRequest;
-use crate::trading::market_data::repair::{RepairBuffer, RepairServer};
+use crate::trading::market_data::repair::RepairServer;
 use crate::trading::transport::result_log::{PrivateResultLog, PublicResultLog};
 
 /// Sink set for one runtime's projected events.
@@ -16,7 +14,6 @@ use crate::trading::transport::result_log::{PrivateResultLog, PublicResultLog};
 pub struct EventFanout {
     public_log: Option<PublicResultLog>,
     private_log: Option<PrivateResultLog>,
-    repair_buffer: Option<RepairBuffer>,
     repair_server: Option<RepairServer>,
     market_data: Option<MarketDataPublisher>,
     public_sent: u64,
@@ -29,7 +26,6 @@ pub struct EventFanout {
 pub struct EventFanoutOptions {
     pub public_log: Option<PublicResultLog>,
     pub private_log: Option<PrivateResultLog>,
-    pub repair_buffer_capacity: Option<usize>,
     pub repair_server: Option<RepairServer>,
     pub market_data: Option<MarketDataPublisher>,
 }
@@ -44,7 +40,6 @@ impl EventFanout {
     pub fn with_options(mut self, options: EventFanoutOptions) -> Self {
         self.public_log = options.public_log;
         self.private_log = options.private_log;
-        self.repair_buffer = options.repair_buffer_capacity.map(RepairBuffer::new);
         self.repair_server = options.repair_server;
         self.market_data = options.market_data;
         self
@@ -100,11 +95,6 @@ impl EventFanout {
                 self.sink_errors += 1;
             }
         }
-        if let Some(buffer) = &mut self.repair_buffer {
-            for event in events {
-                buffer.push(*event);
-            }
-        }
         if let Some(server) = &mut self.repair_server {
             for event in events {
                 server.push(*event);
@@ -118,14 +108,6 @@ impl EventFanout {
                 }
             }
         }
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn repair(&self, request: NackRequest) -> Vec<PublicEvent> {
-        self.repair_buffer
-            .as_ref()
-            .map_or_else(Vec::new, |buffer| buffer.repair(request))
     }
 
     pub fn poll_repair(&mut self) -> u64 {
@@ -143,46 +125,5 @@ impl EventFanout {
                 0
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::trading::core::public_events::{PublicEvent, PublicEventType};
-
-    fn event(seq: u64) -> PublicEvent {
-        PublicEvent {
-            seq,
-            event_type: PublicEventType::TimeTick,
-            trading_ts_ns: 0,
-            phase: 0,
-            instrument_id: 0,
-            order_id: 0,
-            trade_id: 0,
-            buy_order_id: 0,
-            sell_order_id: 0,
-            side: None,
-            price_ticks: 0,
-            quantity: 0,
-            volume: 0,
-        }
-    }
-
-    #[test]
-    fn emit_feeds_repair_buffer() {
-        let mut fanout = EventFanout::new().with_options(EventFanoutOptions {
-            repair_buffer_capacity: Some(4),
-            ..EventFanoutOptions::default()
-        });
-        let event = event(7);
-        assert_eq!(fanout.emit(&[], &[event]), 0);
-        assert_eq!(
-            fanout.repair(NackRequest {
-                from_seq: 7,
-                to_seq: 7
-            }),
-            vec![event]
-        );
     }
 }

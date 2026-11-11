@@ -4,6 +4,7 @@
 //! through a static pre-trade plugin chain, and exposes the resulting private
 //! and public events. It is deliberately single-threaded and has no networking.
 
+use crate::trading::core::CoreSnapshot;
 use crate::trading::core::TradingCore;
 use crate::trading::core::plugins::PreTradePlugin;
 use crate::trading::core::private_events::PrivateEvent;
@@ -12,6 +13,49 @@ use crate::trading::transport::{
     CommandConsumer, CommandTransportError, PrivateEventProducer, PublicEventProducer,
 };
 use std::collections::VecDeque;
+use std::fmt::{Display, Formatter, Result as FmtResult};
+
+fn flush_queue<T>(
+    mut send: impl FnMut(&T) -> Result<(), CommandTransportError>,
+    pending: &mut VecDeque<T>,
+    events: Vec<T>,
+) {
+    pending.extend(events);
+    while let Some(event) = pending.front() {
+        match send(event) {
+            Ok(()) => {
+                pending.pop_front();
+            }
+            Err(CommandTransportError::Full) => break,
+            Err(_) => {
+                pending.pop_front();
+            }
+        }
+    }
+}
+
+/// Snapshot restore failure returned by [`CoreRunner`].
+#[derive(Debug)]
+pub struct CoreRestoreError(String);
+
+impl Display for CoreRestoreError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for CoreRestoreError {}
+
+/// One poll's core commands and projected events.
+#[non_exhaustive]
+pub struct CoreEvents {
+    /// Number of commands executed during this poll.
+    pub commands: usize,
+    /// Private events produced by the poll.
+    pub private: Vec<PrivateEvent>,
+    /// Public events produced by the poll.
+    pub public: Vec<PublicEvent>,
+}
 
 /// Drains commands from a `CommandConsumer` and applies them to `TradingCore`.
 pub struct CoreRunner<P> {
@@ -52,77 +96,84 @@ impl<P: PreTradePlugin> CoreRunner<P> {
         self
     }
 
-    /// Flushes buffered public/private events to the attached transports.
-    ///
-    /// A full ring keeps the unsent tail in memory and retries on the next
-    /// call; events are only dropped after a non-backpressure transport error.
-    pub fn flush_events(&mut self) {
-        if self.public_producer.is_some() {
-            self.pending_public.extend(self.core.drain_public_events());
-            self.drain_public_queue();
-        }
-        if self.private_producer.is_some() {
-            self.pending_private
-                .extend(self.core.drain_private_events());
-            self.drain_private_queue();
-        }
-    }
-
-    fn drain_public_queue(&mut self) {
+    fn flush_public(&mut self) {
         let Some(producer) = &self.public_producer else {
             return;
         };
-        while let Some(event) = self.pending_public.front() {
-            match producer.send(event) {
-                Ok(()) => {
-                    self.pending_public.pop_front();
-                }
-                Err(CommandTransportError::Full) => break,
-                Err(_) => {
-                    self.pending_public.pop_front();
-                }
-            }
-        }
+        let events = self.core.drain_public_events();
+        flush_queue(
+            |event| producer.send(event),
+            &mut self.pending_public,
+            events,
+        );
     }
 
-    fn drain_private_queue(&mut self) {
+    fn flush_private(&mut self) {
         let Some(producer) = &self.private_producer else {
             return;
         };
-        while let Some(event) = self.pending_private.front() {
-            match producer.send(event) {
-                Ok(()) => {
-                    self.pending_private.pop_front();
-                }
-                Err(CommandTransportError::Full) => break,
-                Err(_) => {
-                    self.pending_private.pop_front();
-                }
-            }
-        }
+        let events = self.core.drain_private_events();
+        flush_queue(
+            |event| producer.send(event),
+            &mut self.pending_private,
+            events,
+        );
     }
 
-    #[must_use]
-    pub fn pending_event_count(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn flush_pending(&mut self) {
+        self.flush_public();
+        self.flush_private();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_event_count(&self) -> usize {
         self.pending_public.len() + self.pending_private.len()
     }
 
-    pub fn poll(&mut self) -> usize {
-        let mut executed = 0;
+    /// Drains commands and returns the resulting events through one seam.
+    #[must_use]
+    pub fn poll_events(&mut self) -> CoreEvents {
+        let mut commands = 0;
         while let Some(result) = self.consumer.recv() {
             match result {
                 Ok(command) => {
                     self.core
                         .execute_with_plugins_discard(command, &self.plugin);
-                    executed += 1;
+                    commands += 1;
                 }
                 Err(_) => {
                     self.decode_errors += 1;
                 }
             }
         }
-        self.flush_events();
-        executed
+        let private = if self.private_producer.is_some() {
+            self.flush_private();
+            Vec::new()
+        } else {
+            self.core.drain_private_events()
+        };
+        let public = if self.public_producer.is_some() {
+            self.flush_public();
+            Vec::new()
+        } else {
+            self.core.drain_public_events()
+        };
+        CoreEvents {
+            commands,
+            private,
+            public,
+        }
+    }
+
+    /// Restores a durable core snapshot without exposing the kernel.
+    ///
+    /// # Errors
+    /// Returns the core's snapshot compatibility error.
+    pub fn restore_snapshot(&mut self, snapshot: CoreSnapshot) -> Result<(), CoreRestoreError> {
+        self.core
+            .restore_snapshot(snapshot)
+            .map_err(CoreRestoreError)
     }
 
     #[must_use]
@@ -130,21 +181,9 @@ impl<P: PreTradePlugin> CoreRunner<P> {
         &self.core
     }
 
-    pub fn core_mut(&mut self) -> &mut TradingCore {
-        &mut self.core
-    }
-
     #[must_use]
     pub fn decode_errors(&self) -> u64 {
         self.decode_errors
-    }
-
-    pub fn drain_private(&mut self) -> Vec<PrivateEvent> {
-        self.core.drain_private_events()
-    }
-
-    pub fn drain_public(&mut self) -> Vec<PublicEvent> {
-        self.core.drain_public_events()
     }
 }
 
@@ -223,7 +262,7 @@ mod tests {
             .with_event_transports(public_producer, private_producer);
 
         producer.send(&command(1, Side::Buy, 50_000, 5)).unwrap();
-        assert_eq!(runner.poll(), 1);
+        assert_eq!(runner.poll_events().commands, 1);
         let public = public_consumer.recv().unwrap().unwrap();
         assert_eq!(
             public.event_type,
@@ -260,11 +299,11 @@ mod tests {
 
         producer.send(&command(1, Side::Buy, 50_000, 5)).unwrap();
         producer.send(&command(2, Side::Buy, 50_100, 5)).unwrap();
-        assert_eq!(runner.poll(), 2);
+        assert_eq!(runner.poll_events().commands, 2);
         assert_eq!(runner.pending_event_count(), 1);
         let first = public_consumer.recv().unwrap().unwrap();
         assert_eq!(first.quantity, 5);
-        runner.flush_events();
+        runner.flush_pending();
         assert_eq!(runner.pending_event_count(), 0);
         let second = public_consumer.recv().unwrap().unwrap();
         assert_eq!(second.price_ticks, 50_100);
@@ -285,7 +324,7 @@ mod tests {
 
         producer.send(&command(1, Side::Buy, 50_000, 5)).unwrap();
         producer.send(&command(2, Side::Sell, 50_000, 5)).unwrap();
-        assert_eq!(runner.poll(), 2);
+        assert_eq!(runner.poll_events().commands, 2);
         assert!(runner.core().best_bid().is_none());
         assert!(!runner.core().positions().snapshot().is_empty());
         drop(producer);
@@ -304,9 +343,10 @@ mod tests {
         tick.command_type = CommandType::TimeTick;
         tick.trading_ts_ns = 99;
         producer.send(&tick).unwrap();
-        assert_eq!(runner.poll(), 1);
+        let events = runner.poll_events();
+        assert_eq!(events.commands, 1);
         assert_eq!(runner.core().last_trading_ts_ns(), 99);
-        assert_eq!(runner.drain_public().len(), 1);
+        assert_eq!(events.public.len(), 1);
         drop(producer);
         let _ = std::fs::remove_file(&path);
     }

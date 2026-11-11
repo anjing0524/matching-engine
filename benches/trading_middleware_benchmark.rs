@@ -13,6 +13,7 @@ use trading_system_engine::trading::core::protocol::{
 use trading_system_engine::trading::transport::create;
 use trading_system_engine::trading::transport::middleware::MiddlewareSequencer;
 use trading_system_engine::trading::transport::runner::CoreRunner;
+use trading_system_engine::trading::transport::session::SessionInfo;
 
 fn command(seq: u64) -> Command {
     let mut command = Command::zeroed();
@@ -48,6 +49,15 @@ fn main() {
     let _ = std::fs::remove_file(&path);
     let (producer, consumer) = create(&path, 1 << 20).unwrap();
     let mut middleware = MiddlewareSequencer::new(producer);
+    middleware.sessions_mut().open(SessionInfo {
+        session_id: 1,
+        gateway_id: 1,
+        member_id: 1,
+        user_id: 1,
+        seat_id: 1,
+        last_private_seq: 0,
+        active: true,
+    });
     let spec = ContractSpec::new("BTCUSDT", 1, 1, 1_000_000);
     let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
     let mut runner = CoreRunner::new(core, consumer, NoPlugins);
@@ -55,7 +65,7 @@ fn main() {
     let orders = 200_000u64;
     let start = Instant::now();
     for seq in 1..=orders {
-        middleware.submit(command(seq)).unwrap();
+        middleware.admit(1, command(seq)).unwrap();
     }
     black_box(middleware.next_global_seq());
     let elapsed = start.elapsed();
@@ -63,7 +73,7 @@ fn main() {
     println!("middleware submit: {orders} commands in {elapsed:?} ({per_sec:.0} cmd/s)");
 
     let start = Instant::now();
-    let executed = runner.poll();
+    let executed = runner.poll_events().commands;
     let elapsed = start.elapsed();
     black_box(runner.core());
     assert_eq!(executed as u64, orders);

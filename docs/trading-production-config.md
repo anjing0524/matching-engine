@@ -5,7 +5,6 @@
 | Setting | Default | Meaning |
 |---|---|---|
 | `private_replay_capacity` | 1024 | private events retained per user for reconnect |
-| `repair_buffer_capacity` | 100000 | public events retained for NACK repair |
 | `idle_timeout` | 30s | gateway session timeout |
 | `multicast_group` | none | public market-data group |
 | `multicast_port` | none | public market-data UDP port |
@@ -17,7 +16,6 @@
 ```rust
 let config = TradingConfig {
     private_replay_capacity: 4096,
-    repair_buffer_capacity: 1_000_000,
     idle_timeout: Some(Duration::from_secs(15)),
     multicast_group: Some("239.10.20.30".to_string()),
     multicast_port: Some(40_000),

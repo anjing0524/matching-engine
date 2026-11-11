@@ -14,6 +14,7 @@ use crate::trading::gateway::private_downlink::PrivateDownlink;
 use crate::trading::gateway::private_replay::ReplayEvent;
 use crate::trading::gateway::rate_limit::TokenBucket;
 use crate::trading::gateway::server::{GatewayEvent, GatewayServerHandle};
+use crate::trading::gateway::session_policy::SessionPolicy;
 use crate::trading::transport::middleware::MiddlewareSequencer;
 use crate::trading::transport::session::SessionInfo;
 use std::sync::mpsc::Receiver;
@@ -40,13 +41,33 @@ impl ConnectionState {
 }
 
 /// One poll's gateway effects, already drained from per-connection state.
-pub struct GatewayEffects {
+pub(crate) struct GatewayEffects {
+    /// Number of frame/closed events processed.
     pub events: usize,
+    /// Connections that must receive a redirect.
     pub redirects: Vec<(u64, String)>,
+    /// Replay batches keyed by connection id.
     pub replays: Vec<(u64, Vec<ReplayEvent>)>,
+}
+
+/// Counts returned after one gateway effect application.
+#[non_exhaustive]
+pub struct AppliedGatewayEffects {
+    /// Number of frame/closed events processed.
+    pub events: usize,
+    /// Number of redirect frames sent.
+    pub redirects: usize,
+    /// Number of replayed private events sent.
+    pub replays: usize,
+    /// Number of idle sessions expired.
+    pub expired: usize,
+    /// Active session count after application.
     pub active_sessions: usize,
+    /// Closed session count after application.
     pub closed_sessions: usize,
 }
+
+const MAX_CLOSED_SESSIONS: usize = 4096;
 
 /// Drains gateway events and applies them to middleware.
 pub struct GatewayRuntime {
@@ -56,10 +77,7 @@ pub struct GatewayRuntime {
     downlink: PrivateDownlink,
     replay_pending: U64MixSet,
     redirect_pending: U64MixSet,
-    rate_limit: Option<(f64, f64)>,
-    auth_token: Option<u64>,
-    credentials: Option<GatewayCredentials>,
-    redirect_target: Option<String>,
+    policy: SessionPolicy,
     errors: u64,
 }
 
@@ -82,10 +100,7 @@ impl GatewayRuntime {
             downlink: PrivateDownlink::new(replay_capacity),
             replay_pending: U64MixSet::default(),
             redirect_pending: U64MixSet::default(),
-            rate_limit: None,
-            auth_token: None,
-            credentials: None,
-            redirect_target: None,
+            policy: SessionPolicy::default(),
             errors: 0,
         }
     }
@@ -93,28 +108,28 @@ impl GatewayRuntime {
     /// Requires every login to carry the given shared token.
     #[must_use]
     pub fn with_auth_token(mut self, token: u64) -> Self {
-        self.auth_token = Some(token);
+        self.policy = self.policy.with_auth_token(token);
         self
     }
 
     /// Requires a per-member token; unknown members are rejected.
     #[must_use]
     pub fn with_credentials(mut self, credentials: GatewayCredentials) -> Self {
-        self.credentials = Some(credentials);
+        self.policy = self.policy.with_credentials(credentials);
         self
     }
 
     /// Sets the address sent to clients displaced by a newer login.
     #[must_use]
     pub fn with_redirect_target(mut self, target: String) -> Self {
-        self.redirect_target = Some(target);
+        self.policy = self.policy.with_redirect_target(target);
         self
     }
 
     /// Enables a per-connection token bucket for command frames.
     #[must_use]
     pub fn with_rate_limit(mut self, capacity: f64, refill_per_sec: f64) -> Self {
-        self.rate_limit = Some((capacity, refill_per_sec));
+        self.policy = self.policy.with_rate_limit(capacity, refill_per_sec);
         self
     }
 
@@ -148,18 +163,66 @@ impl GatewayRuntime {
     }
 
     /// Polls frames and returns every lifecycle effect in one value.
-    pub fn poll_effects(&mut self) -> GatewayEffects {
+    pub(crate) fn poll_effects(&mut self) -> GatewayEffects {
         let events = self.poll();
-        if events > 0 {
-            self.prune_closed_sessions(4096);
-        }
         let redirects = self.take_redirects();
         let replays = self.take_replay_batches();
-        let (active_sessions, closed_sessions) = self.session_counts();
         GatewayEffects {
             events,
             redirects,
             replays,
+        }
+    }
+
+    /// Applies lifecycle effects to the server in one fixed order.
+    ///
+    /// Redirects and replay are sent, idle sessions are expired, redirected
+    /// connections are closed, and closed session records are pruned. Both
+    /// drivers use this operation instead of composing the drain accessors.
+    pub fn apply_effects(
+        &mut self,
+        server: &GatewayServerHandle,
+        idle_timeout: Option<Duration>,
+    ) -> AppliedGatewayEffects {
+        let effects = self.poll_effects();
+        let redirects = effects.redirects.len();
+        let redirected: Vec<u64> = effects
+            .redirects
+            .iter()
+            .map(|(connection_id, _)| *connection_id)
+            .collect();
+        for (connection_id, address) in effects.redirects {
+            let _ = server.send(connection_id, GatewayFrame::Redirect { address });
+        }
+        let mut replays = 0;
+        for (connection_id, events) in effects.replays {
+            for event in events {
+                let frame = match event {
+                    ReplayEvent::Core(event) => GatewayFrame::PrivateEvent(event),
+                    ReplayEvent::Combo(fill) => GatewayFrame::ComboPrivate(fill),
+                };
+                if server.send(connection_id, frame).is_ok() {
+                    replays += 1;
+                }
+            }
+        }
+        let mut expired = 0;
+        if let Some(timeout) = idle_timeout {
+            for connection_id in self.expire_idle(timeout) {
+                server.close(connection_id);
+                expired += 1;
+            }
+        }
+        for connection_id in redirected {
+            server.close(connection_id);
+        }
+        self.prune_closed_sessions(MAX_CLOSED_SESSIONS);
+        let (active_sessions, closed_sessions) = self.session_counts();
+        AppliedGatewayEffects {
+            events: effects.events,
+            redirects,
+            replays,
+            expired,
             active_sessions,
             closed_sessions,
         }
@@ -175,13 +238,7 @@ impl GatewayRuntime {
                 last_private_seq,
                 auth_token,
             } => {
-                let token_ok = if let Some(credentials) = &self.credentials {
-                    credentials.verify_login(member_id, auth_token, seat_id)
-                } else {
-                    self.auth_token
-                        .is_none_or(|expected| expected == auth_token)
-                };
-                if !token_ok {
+                if !self.policy.login_allowed(member_id, seat_id, auth_token) {
                     self.errors += 1;
                     return;
                 }
@@ -202,12 +259,12 @@ impl GatewayRuntime {
                     }
                 };
                 if let Some(old) = replaced
-                    && let Some(target) = &self.redirect_target
+                    && let Some(target) = self.policy.redirect_target()
                 {
                     self.connections
                         .entry(old)
                         .or_insert_with(ConnectionState::new)
-                        .redirect = Some(target.clone());
+                        .redirect = Some(target.to_string());
                     self.redirect_pending.insert(old);
                 }
                 let user_id = u64::from(user_id);
@@ -221,25 +278,21 @@ impl GatewayRuntime {
                 }
                 state.replay = replay;
             }
-            GatewayFrame::Command(mut command) => {
-                if let Some((capacity, refill)) = self.rate_limit {
+            GatewayFrame::Command(command) => {
+                if let Some(limit) = self.policy.rate_limit() {
                     let state = self
                         .connections
                         .entry(connection_id)
                         .or_insert_with(ConnectionState::new);
-                    let bucket = state
-                        .bucket
-                        .get_or_insert_with(|| TokenBucket::new(capacity, refill));
+                    let bucket = state.bucket.get_or_insert_with(|| {
+                        TokenBucket::new(limit.capacity, limit.refill_per_sec)
+                    });
                     if !bucket.try_acquire() {
                         self.errors += 1;
                         return;
                     }
                 }
-                command.session_id = connection_id;
-                if let Some(session) = self.middleware.sessions().get(connection_id) {
-                    command.member_id = session.member_id;
-                }
-                if self.middleware.submit_for_session(command).is_err() {
+                if self.middleware.admit(connection_id, command).is_err() {
                     self.errors += 1;
                 }
             }
@@ -273,7 +326,7 @@ impl GatewayRuntime {
         self.middleware.sessions_mut().prune_closed(keep_closed)
     }
 
-    pub fn take_redirects(&mut self) -> Vec<(u64, String)> {
+    pub(crate) fn take_redirects(&mut self) -> Vec<(u64, String)> {
         let mut redirects = Vec::new();
         for connection_id in self.redirect_pending.iter().copied().collect::<Vec<_>>() {
             let Some(state) = self.connections.get_mut(&connection_id) else {
@@ -287,33 +340,16 @@ impl GatewayRuntime {
         redirects
     }
 
-    /// Drains all sessions owned by a gateway before planned failover.
-    ///
-    /// Returns the drained connection ids; callers should close their TCP
-    /// connections. Retained private replay lets clients reconnect with
-    /// `last_private_seq`.
-    pub fn drain_gateway(&mut self, gateway_id: u32) -> Vec<u64> {
-        let drained = self.middleware.sessions_mut().drain_gateway(gateway_id);
-        for connection_id in &drained {
-            let redirect = self.redirect_target.clone();
-            let mut state = ConnectionState::new();
-            state.redirect = redirect;
-            self.connections.insert(*connection_id, state);
-            self.redirect_pending.insert(*connection_id);
-        }
-        drained
-    }
-
     /// Closes sessions idle for at least `timeout`.
     ///
     /// Returns the connection ids that were expired. The caller should also
     /// close the corresponding TCP connection.
-    pub fn expire_idle(&mut self, timeout: Duration) -> Vec<u64> {
+    pub(crate) fn expire_idle(&mut self, timeout: Duration) -> Vec<u64> {
         let now = Instant::now();
         let expired: Vec<u64> = self
             .connections
             .iter()
-            .filter(|(_, state)| now.duration_since(state.last_seen) >= timeout)
+            .filter(|(_, state)| SessionPolicy::idle_expired(state.last_seen, now, timeout))
             .map(|(id, _)| *id)
             .collect();
         for id in &expired {
@@ -325,7 +361,7 @@ impl GatewayRuntime {
 
     /// Drains core and combo replay batches in per-user sequence order.
     #[must_use]
-    pub fn take_replay_batches(&mut self) -> Vec<(u64, Vec<ReplayEvent>)> {
+    pub(crate) fn take_replay_batches(&mut self) -> Vec<(u64, Vec<ReplayEvent>)> {
         let mut batches = Vec::new();
         for connection_id in self.replay_pending.iter().copied().collect::<Vec<_>>() {
             let Some(state) = self.connections.get_mut(&connection_id) else {
@@ -391,7 +427,7 @@ mod tests {
     };
     use crate::trading::gateway::server::start;
     use crate::trading::transport::create;
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::net::TcpStream;
 
     fn command() -> Command {
@@ -487,6 +523,87 @@ mod tests {
             GatewayFrame::decode(&frame).unwrap(),
             GatewayFrame::ComboPrivate(fill)
         );
+        server.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn apply_effects_replays_core_and_combo_in_order() {
+        use crate::trading::combo::engine::ComboPrivateFill;
+        use crate::trading::gateway::private_replay::ReplayEvent;
+
+        let path = std::env::temp_dir().join(format!(
+            "trading-system-engine-gateway-effect-replay-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let mut runtime = GatewayRuntime::new(middleware, events);
+        let mut stream = TcpStream::connect(server.addr()).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                    auth_token: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_some()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let core = PrivateEvent {
+            seq: 1,
+            order_id: 1,
+            client_order_id: 1,
+            account_id: 2,
+            status: crate::trading::core::private_events::PrivateStatus::Accepted,
+            filled_delta: 0,
+            remaining: 1,
+            reason: None,
+        };
+        let combo = ComboPrivateFill {
+            seq: 2,
+            order_id: 2,
+            user_id: 2,
+            side: Side::Buy,
+            quantity: 1,
+            leg1_price: 50_000,
+            leg2_price: 100,
+            spread_ticks: 49_900,
+        };
+        let state = runtime.connections.get_mut(&1).unwrap();
+        state.replay = vec![ReplayEvent::Core(core), ReplayEvent::Combo(combo)];
+        runtime.replay_pending.insert(1);
+        let effects = runtime.apply_effects(&server, None);
+        assert_eq!(effects.replays, 2);
+        let mut first = [0u8; crate::trading::gateway::GATEWAY_FRAME_SIZE];
+        stream.read_exact(&mut first).unwrap();
+        assert!(matches!(
+            GatewayFrame::decode(&first).unwrap(),
+            GatewayFrame::PrivateEvent(_)
+        ));
+        let mut second = [0u8; crate::trading::gateway::GATEWAY_FRAME_SIZE];
+        stream.read_exact(&mut second).unwrap();
+        assert!(matches!(
+            GatewayFrame::decode(&second).unwrap(),
+            GatewayFrame::ComboPrivate(_)
+        ));
         server.stop();
         let _ = std::fs::remove_file(&path);
     }
@@ -612,13 +729,15 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        let redirects = runtime.take_redirects();
+        let effects = runtime.apply_effects(&server, None);
+        assert_eq!(effects.redirects, 1);
+        let mut frame = [0u8; crate::trading::gateway::GATEWAY_FRAME_SIZE];
+        first.read_exact(&mut frame).unwrap();
         assert_eq!(
-            redirects
-                .iter()
-                .find(|(id, _)| *id == 1)
-                .map(|(_, target)| target.as_str()),
-            Some("127.0.0.1:9000")
+            GatewayFrame::decode(&frame).unwrap(),
+            GatewayFrame::Redirect {
+                address: "127.0.0.1:9000".to_string()
+            }
         );
         server.stop();
         let _ = std::fs::remove_file(&path);

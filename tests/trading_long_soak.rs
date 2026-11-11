@@ -61,9 +61,8 @@ fn five_million_commands_complete() {
             producer.send(&command(seq)).unwrap();
             seq += 1;
         }
-        assert_eq!(runner.poll() as u64, batch);
-        let _ = runner.drain_private();
-        let _ = runner.drain_public();
+        assert_eq!(runner.poll_events().commands as u64, batch);
+        let _ = runner.poll_events();
     }
     drop(producer);
     let _ = std::fs::remove_file(&path);

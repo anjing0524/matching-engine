@@ -54,7 +54,7 @@ fn main() {
     }
 
     let start = Instant::now();
-    let executed = runner.poll();
+    let executed = runner.poll_events().commands;
     let elapsed = start.elapsed();
     black_box(runner.core());
     assert_eq!(executed as u64, orders);
@@ -69,7 +69,7 @@ fn main() {
             .unwrap();
     }
     let start = Instant::now();
-    let executed = runner.poll();
+    let executed = runner.poll_events().commands;
     let elapsed = start.elapsed();
     black_box(runner.core());
     assert_eq!(executed as u64, orders);

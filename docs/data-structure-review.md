@@ -108,7 +108,7 @@ closed_order: VecDeque<u64>      bounded pruning order
 ```
 
 This makes `session_counts` and `find_active_by_user` O(1) and
-`drain_gateway` O(sessions on that gateway) instead of O(all sessions).
+gateway session counts remain O(1); closed-session pruning stays bounded.
 `find_active_by_user` is on the private-dispatch path, so this also removes a
 per-event scan. Login takeover resolves its `(member,user,seat)` key directly
 instead of scanning every session.

@@ -36,7 +36,7 @@ The wire/frame/command layouts are currently versioned only inside snapshots and
 logs, not negotiated between gateway and middleware. Until protocol negotiation
 exists:
 
-1. drain gateway sessions (`drain_gateway`) and stop new logins
+1. stop the gateway listener, close its connections, and stop new logins
 2. stop core after the command log is flushed
 3. upgrade middleware and core together with matching ring layouts
 4. restore the core snapshot and replay the post-snapshot command log

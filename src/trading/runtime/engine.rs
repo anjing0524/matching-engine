@@ -13,8 +13,6 @@ use crate::trading::gateway::runtime::GatewayRuntime;
 use crate::trading::gateway::server::GatewayServerHandle;
 use crate::trading::market_data::MarketDataPublisher;
 use crate::trading::market_data::metrics::TradingMetrics;
-#[cfg(test)]
-use crate::trading::market_data::repair::NackRequest;
 use crate::trading::market_data::repair::RepairServer;
 use crate::trading::runtime::event_fanout::{EventFanout, EventFanoutOptions};
 use crate::trading::transport::result_log::{PrivateResultLog, PublicResultLog};
@@ -54,7 +52,6 @@ impl TradingSnapshot {
 pub struct RuntimeOptions {
     pub public_log: Option<PublicResultLog>,
     pub private_log: Option<PrivateResultLog>,
-    pub repair_buffer_capacity: Option<usize>,
     pub repair_server: Option<RepairServer>,
     pub market_data: Option<MarketDataPublisher>,
     pub combo: Option<ComboRuntime>,
@@ -100,7 +97,6 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         self.fanout = self.fanout.with_options(EventFanoutOptions {
             public_log: options.public_log,
             private_log: options.private_log,
-            repair_buffer_capacity: options.repair_buffer_capacity,
             repair_server: options.repair_server,
             market_data: options.market_data,
         });
@@ -125,66 +121,33 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         self.fanout.public_sent()
     }
 
-    #[must_use]
-    #[cfg(test)]
-    pub(crate) fn repair(
-        &self,
-        request: NackRequest,
-    ) -> Vec<crate::trading::core::public_events::PublicEvent> {
-        self.fanout.repair(request)
-    }
-
     pub fn tick(&mut self) {
         let tick_start = Instant::now();
-        let effects = self.gateway.poll_effects();
+        let idle_timeout = self
+            .idle_timeout
+            .filter(|timeout| self.last_expire.elapsed() >= *timeout / 2);
+        let effects = self.gateway.apply_effects(&self.server, idle_timeout);
         self.metrics.gateway_events += effects.events as u64;
         self.metrics.active_sessions = effects.active_sessions as u64;
         self.metrics.closed_sessions = effects.closed_sessions as u64;
-        for (connection_id, address) in effects.redirects {
-            let _ = self.server.send(
-                connection_id,
-                crate::trading::gateway::GatewayFrame::Redirect {
-                    address: address.clone(),
-                },
-            );
-            self.server.close(connection_id);
+        self.metrics.replay_events_sent += effects.replays as u64;
+        self.metrics.idle_sessions_expired += effects.expired as u64;
+        if idle_timeout.is_some() {
+            self.last_expire = Instant::now();
         }
-        for (connection_id, replay) in effects.replays {
-            for event in replay {
-                let sent = match &event {
-                    crate::trading::gateway::private_replay::ReplayEvent::Core(event) => {
-                        self.server.send(
-                            connection_id,
-                            crate::trading::gateway::GatewayFrame::PrivateEvent(event.clone()),
-                        )
-                    }
-                    crate::trading::gateway::private_replay::ReplayEvent::Combo(event) => {
-                        self.server.send(
-                            connection_id,
-                            crate::trading::gateway::GatewayFrame::ComboPrivate(*event),
-                        )
-                    }
-                };
-                if sent.is_ok() {
-                    self.metrics.replay_events_sent += 1;
-                }
-            }
-        }
-        let commands = self.core.poll();
-        self.metrics.commands_executed += commands as u64;
-        self.core
-            .core_mut()
-            .drain_private_events_into(&mut self.private_events);
+        let events = self.core.poll_events();
+        self.metrics.commands_executed += events.commands as u64;
+        self.private_events.extend(events.private);
+        self.public_events.extend(events.public);
         self.fanout.emit(&self.private_events, &[]);
         let sent = self
             .gateway
             .dispatch_private(&self.server, self.private_events.drain(..));
         self.metrics.private_events_sent += sent as u64;
-        self.core
-            .core_mut()
-            .drain_public_events_into(&mut self.public_events);
         let public_sent = self.fanout.emit(&[], &self.public_events);
         self.metrics.public_events_sent += public_sent;
+        // Project each public event once; stale events must not be re-emitted.
+        self.public_events.clear();
         if let Some(combo) = &mut self.combo {
             combo.poll_commands();
             let effects = combo.tick_effects();
@@ -200,19 +163,10 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
                     .map(crate::trading::combo::engine::ComboFillEvent::private_fill),
             );
             self.metrics.private_events_sent += (command_events + fill_events) as u64;
-            self.metrics.combo_queue_orders = combo.engine().queue_len() as u64;
+            self.metrics.combo_queue_orders = combo.queue_len() as u64;
         }
         let repaired = self.fanout.poll_repair();
         self.metrics.repair_events_sent += repaired;
-        if let Some(timeout) = self.idle_timeout
-            && self.last_expire.elapsed() >= timeout / 2
-        {
-            for connection_id in self.gateway.expire_idle(timeout) {
-                self.server.close(connection_id);
-                self.metrics.idle_sessions_expired += 1;
-            }
-            self.last_expire = Instant::now();
-        }
         self.metrics.fanout_errors = self.fanout.sink_errors();
         let elapsed_ns = u64::try_from(tick_start.elapsed().as_nanos()).unwrap_or(u64::MAX);
         self.metrics.tick_latency.observe(elapsed_ns);
@@ -250,7 +204,9 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         if self.gateway.session_counts().0 > 0 {
             return Err("cannot restore a snapshot while sessions are active".to_string());
         }
-        self.core.core_mut().restore_snapshot(snapshot.core)?;
+        self.core
+            .restore_snapshot(snapshot.core)
+            .map_err(|error| error.to_string())?;
         match (self.combo.as_mut(), snapshot.combo) {
             (Some(combo), Some(combo_snapshot)) => combo.restore_snapshot(combo_snapshot),
             (None, None) => Ok(()),
@@ -561,98 +517,6 @@ mod tests {
         runtime.tick();
         let fill = subscriber.recv().unwrap();
         assert_eq!(fill.quantity, 5);
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn config_builder_sets_repair_capacity_and_timeout() {
-        let path = std::env::temp_dir().join(format!(
-            "trading-system-engine-trading-runtime-config-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        let (producer, consumer) = create(&path, 8).unwrap();
-        let middleware = MiddlewareSequencer::new(producer);
-        let (server, events) = start("127.0.0.1:0").unwrap();
-        let gateway = GatewayRuntime::new(middleware, events);
-        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
-        let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
-        let runner = CoreRunner::new(core, consumer, NoPlugins);
-        let runtime = TradingRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
-            repair_buffer_capacity: Some(3),
-            ..RuntimeOptions::default()
-        });
-        assert_eq!(
-            runtime
-                .repair(NackRequest {
-                    from_seq: 1,
-                    to_seq: 1
-                })
-                .len(),
-            0
-        );
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn runtime_public_events_fill_repair_buffer() {
-        use crate::trading::market_data::repair::NackRequest;
-
-        let path = std::env::temp_dir().join(format!(
-            "trading-system-engine-trading-runtime-repair-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        let (producer, consumer) = create(&path, 16).unwrap();
-        let middleware = MiddlewareSequencer::new(producer);
-        let (server, events) = start("127.0.0.1:0").unwrap();
-        let addr = server.addr();
-        let gateway = GatewayRuntime::new(middleware, events);
-        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
-        let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
-        let runner = CoreRunner::new(core, consumer, NoPlugins);
-        let mut runtime =
-            TradingRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
-                repair_buffer_capacity: Some(16),
-                ..Default::default()
-            });
-
-        let mut stream = TcpStream::connect(addr).unwrap();
-        stream
-            .write_all(
-                &GatewayFrame::Login {
-                    member_id: 10,
-                    auth_token: 0,
-                    user_id: 2,
-                    seat_id: 3,
-                    session_epoch: 1,
-                    last_private_seq: 0,
-                }
-                .encode(),
-            )
-            .unwrap();
-        stream
-            .write_all(&GatewayFrame::Command(command()).encode())
-            .unwrap();
-        for _ in 0..100 {
-            runtime.tick();
-            if !runtime
-                .repair(NackRequest {
-                    from_seq: 1,
-                    to_seq: 1,
-                })
-                .is_empty()
-            {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        let repaired = runtime.repair(NackRequest {
-            from_seq: 1,
-            to_seq: 10,
-        });
-        assert_eq!(repaired.len(), 1);
-        assert_eq!(repaired[0].seq, 1);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1004,12 +868,12 @@ mod tests {
         cancel.combo_id = 7;
         cancel.cancel_order_id = 42;
         assert!(runtime.combo_mut().unwrap().submit_command(&cancel));
-        assert_eq!(runtime.combo_mut().unwrap().engine().queue_len(), 0);
+        assert_eq!(runtime.combo_mut().unwrap().queue_len(), 0);
 
         let json = serde_json::to_string(&snapshot).unwrap();
         let snapshot: TradingSnapshot = serde_json::from_str(&json).unwrap();
         runtime.restore_snapshot(snapshot).unwrap();
-        assert_eq!(runtime.combo_mut().unwrap().engine().queue_len(), 1);
+        assert_eq!(runtime.combo_mut().unwrap().queue_len(), 1);
         let _ = std::fs::remove_file(&core_path);
         let _ = std::fs::remove_file(&combo_path);
     }

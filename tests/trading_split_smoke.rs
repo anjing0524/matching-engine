@@ -142,3 +142,63 @@ fn split_core_and_middleware_deliver_private_event() {
     let _ = middleware.0.kill();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn split_middleware_applies_redirect_effect() {
+    let dir = std::env::temp_dir().join(format!("trading-split-redirect-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let command_ring = dir.join("command.ring");
+    let public_ring = dir.join("public.ring");
+    let private_ring = dir.join("private.ring");
+
+    let free = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = free.local_addr().unwrap().port();
+    drop(free);
+    let listen = format!("127.0.0.1:{port}");
+
+    let _middleware = ChildGuard(
+        ProcessCommand::new(env!("CARGO_BIN_EXE_trading-middleware"))
+            .args([
+                "--listen",
+                &listen,
+                "--command-ring",
+                command_ring.to_str().unwrap(),
+                "--public-ring",
+                public_ring.to_str().unwrap(),
+                "--private-ring",
+                private_ring.to_str().unwrap(),
+                "--redirect-target",
+                "127.0.0.1:9999",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn middleware"),
+    );
+    wait_for(&command_ring);
+    let login = GatewayFrame::Login {
+        member_id: 1,
+        user_id: 1,
+        seat_id: 1,
+        session_epoch: 1,
+        last_private_seq: 0,
+        auth_token: 0,
+    };
+    let mut displaced = connect(&listen);
+    displaced
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    displaced.write_all(&login.clone().encode()).unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    let mut replacement = connect(&listen);
+    replacement.write_all(&login.encode()).unwrap();
+    let mut frame = [0u8; GATEWAY_FRAME_SIZE];
+    displaced.read_exact(&mut frame).unwrap();
+    assert_eq!(
+        GatewayFrame::decode(&frame).unwrap(),
+        GatewayFrame::Redirect {
+            address: "127.0.0.1:9999".to_string()
+        }
+    );
+}

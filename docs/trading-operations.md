@@ -27,12 +27,12 @@ Deployment order:
 - Public multicast must select a real NIC via `multicast_interface` in production.
 - `idle_timeout = None` disables gateway expiry; default is 30s.
 
-## Planned gateway drain
+## Planned gateway stop
 
 Before stopping one gateway process:
 
-1. call `GatewayRuntime::drain_gateway(gateway_id)`
-2. close the returned TCP connections
+1. stop accepting new logins
+2. close its TCP connections
 3. clients reconnect through another gateway with `last_private_seq`
 4. middleware replays retained private events after that sequence
 
