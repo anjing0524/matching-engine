@@ -23,6 +23,10 @@ pub enum GatewayEvent {
         connection_id: u64,
         frame: GatewayFrame,
     },
+    Frames {
+        connection_id: u64,
+        frames: Vec<GatewayFrame>,
+    },
     Closed {
         connection_id: u64,
     },
@@ -341,6 +345,7 @@ fn serve_connection(
             Err(_) => break,
         };
         pending.extend_from_slice(&buffer[..count]);
+        let mut frames = Vec::with_capacity(count / GATEWAY_FRAME_SIZE);
         while pending.len() >= GATEWAY_FRAME_SIZE {
             let mut frame = [0u8; GATEWAY_FRAME_SIZE];
             frame.copy_from_slice(&pending[..GATEWAY_FRAME_SIZE]);
@@ -350,15 +355,17 @@ fn serve_connection(
                 Err(_) => return,
             };
             stats.frames_read.fetch_add(1, Ordering::Relaxed);
-            if tx
-                .send(GatewayEvent::Frame {
+            frames.push(frame);
+        }
+        if !frames.is_empty()
+            && tx
+                .send(GatewayEvent::Frames {
                     connection_id: id,
-                    frame,
+                    frames,
                 })
                 .is_err()
-            {
-                return;
-            }
+        {
+            return;
         }
     }
     let _ = tx.send(GatewayEvent::Closed { connection_id: id });
@@ -389,9 +396,9 @@ mod tests {
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!(
             event,
-            GatewayEvent::Frame {
+            GatewayEvent::Frames {
                 connection_id: 1,
-                frame: login
+                frames: vec![login]
             }
         );
 
@@ -401,9 +408,9 @@ mod tests {
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!(
             event,
-            GatewayEvent::Frame {
+            GatewayEvent::Frames {
                 connection_id: 1,
-                frame: GatewayFrame::Heartbeat { seq: 9 }
+                frames: vec![GatewayFrame::Heartbeat { seq: 9 }]
             }
         );
     }
@@ -426,7 +433,10 @@ mod tests {
             )
             .unwrap();
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert!(matches!(event, GatewayEvent::Frame { .. }));
+        assert!(matches!(
+            event,
+            GatewayEvent::Frame { .. } | GatewayEvent::Frames { .. }
+        ));
         let handle = Arc::new(handle);
 
         let mut writers = Vec::new();
