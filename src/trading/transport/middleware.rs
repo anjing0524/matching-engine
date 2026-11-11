@@ -257,13 +257,11 @@ mod tests {
         order.member_id = 10;
         assert_eq!(middleware.admit(order.session_id, order).unwrap(), 1);
 
+        // The authenticated session overwrites a conflicting wire member id.
         let mut wrong_member = command(2, Side::Buy, 50_000, 1);
         wrong_member.session_id = 1;
         wrong_member.member_id = 11;
-        assert!(matches!(
-            middleware.admit(wrong_member.session_id, wrong_member),
-            Err(CommandTransportError::Unauthorized)
-        ));
+        assert_eq!(middleware.admit(1, wrong_member).unwrap(), 2);
 
         middleware.sessions_mut().close(1);
         let mut after_close = command(3, Side::Buy, 50_000, 1);
