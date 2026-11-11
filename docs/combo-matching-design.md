@@ -138,13 +138,12 @@ plan_buy_combo:
   available = min over both legs and price constraints
   fill = min(need, available)
   if fill == 0 -> no mutation
-  if M1 FOK-like requirement not present -> only full requested qty accepted
+  M1 GFD: consume `fill`, leave the remainder resting; no single-leg fill
 ```
 
-M1 has no partial fills. If the full requested quantity cannot be executed
-atomically, the combo order remains unchanged. A marketable combo order that
-cannot fully fill is rejected or remains resting according to its order
-semantics; it never partially fills.
+M1 permits partial combo fills over time: each fill consumes the same quantity
+from both legs, and the remainder stays resting. A single-leg fill is never
+produced. FOK-style all-or-none semantics are M2.
 
 On commit:
 
