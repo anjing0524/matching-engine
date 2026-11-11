@@ -535,6 +535,87 @@ mod tests {
     }
 
     #[test]
+    fn apply_effects_replays_core_and_combo_in_order() {
+        use crate::trading::combo::engine::ComboPrivateFill;
+        use crate::trading::gateway::private_replay::ReplayEvent;
+
+        let path = std::env::temp_dir().join(format!(
+            "trading-system-engine-gateway-effect-replay-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let mut runtime = GatewayRuntime::new(middleware, events);
+        let mut stream = TcpStream::connect(server.addr()).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                    auth_token: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_some()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let core = PrivateEvent {
+            seq: 1,
+            order_id: 1,
+            client_order_id: 1,
+            account_id: 2,
+            status: crate::trading::core::private_events::PrivateStatus::Accepted,
+            filled_delta: 0,
+            remaining: 1,
+            reason: None,
+        };
+        let combo = ComboPrivateFill {
+            seq: 2,
+            order_id: 2,
+            user_id: 2,
+            side: Side::Buy,
+            quantity: 1,
+            leg1_price: 50_000,
+            leg2_price: 100,
+            spread_ticks: 49_900,
+        };
+        let state = runtime.connections.get_mut(&1).unwrap();
+        state.replay = vec![ReplayEvent::Core(core), ReplayEvent::Combo(combo)];
+        runtime.replay_pending.insert(1);
+        let effects = runtime.apply_effects(&server, None);
+        assert_eq!(effects.replays, 2);
+        let mut first = [0u8; crate::trading::gateway::GATEWAY_FRAME_SIZE];
+        stream.read_exact(&mut first).unwrap();
+        assert!(matches!(
+            GatewayFrame::decode(&first).unwrap(),
+            GatewayFrame::PrivateEvent(_)
+        ));
+        let mut second = [0u8; crate::trading::gateway::GATEWAY_FRAME_SIZE];
+        stream.read_exact(&mut second).unwrap();
+        assert!(matches!(
+            GatewayFrame::decode(&second).unwrap(),
+            GatewayFrame::ComboPrivate(_)
+        ));
+        server.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn replay_capacity_evicts_oldest() {
         // Capacity is exercised through the replay buffer directly; the gateway
         // only wires the value through.
