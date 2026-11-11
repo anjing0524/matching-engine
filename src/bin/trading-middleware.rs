@@ -243,7 +243,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let gateway_stats = server.stats();
             let unrouted = gateway.private_unrouted();
             let send_errors = gateway.private_send_errors();
-            let (batches, batched_frames, max_batch) = gateway.private_batches();
             eprintln!(
                 "middleware_stats ticks={ticks} gateway_events={gateway_events} submitted={submitted} private={private_events} public={public_events} accepted={} frames_read={} writes={} bytes={} write_errors={} unrouted={unrouted} send_errors={send_errors}",
                 gateway_stats.accepted,
@@ -252,7 +251,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 gateway_stats.bytes_written,
                 gateway_stats.write_errors
             );
-            eprintln!("private_batches batches={batches} frames={batched_frames} max={max_batch}");
             eprintln!(
                 "gateway_timing read_calls={} read_ns={} write_ns={}",
                 gateway_stats.read_calls, gateway_stats.read_ns, gateway_stats.write_ns

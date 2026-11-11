@@ -66,9 +66,6 @@ pub struct GatewayRuntime {
     errors: u64,
     private_unrouted: u64,
     private_send_errors: u64,
-    private_batches: u64,
-    private_batched_frames: u64,
-    private_max_batch: usize,
 }
 
 impl GatewayRuntime {
@@ -99,9 +96,6 @@ impl GatewayRuntime {
             errors: 0,
             private_unrouted: 0,
             private_send_errors: 0,
-            private_batches: 0,
-            private_batched_frames: 0,
-            private_max_batch: 0,
         }
     }
 
@@ -421,13 +415,6 @@ impl GatewayRuntime {
                 self.private_unrouted += 1;
             }
         }
-        if !batches.is_empty() {
-            self.private_batches += batches.len() as u64;
-            for frames in counts.values() {
-                self.private_batched_frames += *frames as u64;
-                self.private_max_batch = self.private_max_batch.max(*frames);
-            }
-        }
         let mut sent = 0;
         for (session_id, bytes) in batches {
             let frames = counts.get(&session_id).copied().unwrap_or(0);
@@ -442,15 +429,6 @@ impl GatewayRuntime {
     #[must_use]
     pub fn errors(&self) -> u64 {
         self.errors
-    }
-
-    #[must_use]
-    pub fn private_batches(&self) -> (u64, u64, usize) {
-        (
-            self.private_batches,
-            self.private_batched_frames,
-            self.private_max_batch,
-        )
     }
 
     #[must_use]
