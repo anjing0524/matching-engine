@@ -69,8 +69,9 @@ impl MiddlewareSequencer {
             .get(connection_id)
             .filter(|session| session.active)
             .ok_or(CommandTransportError::Unauthorized)?;
-        // Command frames carry no member id; zero means "derive from session".
-        // A non-zero value must match the authenticated member.
+        // Legacy wire commands may leave member_id zero; identity is then
+        // derived from the authenticated session. A nonzero value is checked
+        // before it is overwritten from the session.
         if command.member_id != 0 && command.member_id != session.member_id {
             return Err(CommandTransportError::Unauthorized);
         }

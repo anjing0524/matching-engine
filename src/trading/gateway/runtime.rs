@@ -41,7 +41,7 @@ impl ConnectionState {
 }
 
 /// One poll's gateway effects, already drained from per-connection state.
-pub struct GatewayEffects {
+pub(crate) struct GatewayEffects {
     /// Number of frame/closed events processed.
     pub events: usize,
     /// Connections that must receive a redirect.
@@ -167,7 +167,7 @@ impl GatewayRuntime {
     }
 
     /// Polls frames and returns every lifecycle effect in one value.
-    pub fn poll_effects(&mut self) -> GatewayEffects {
+    pub(crate) fn poll_effects(&mut self) -> GatewayEffects {
         let events = self.poll();
         let redirects = self.take_redirects();
         let replays = self.take_replay_batches();
@@ -224,13 +224,14 @@ impl GatewayRuntime {
             server.close(connection_id);
         }
         self.prune_closed_sessions(MAX_CLOSED_SESSIONS);
+        let (active_sessions, closed_sessions) = self.session_counts();
         AppliedGatewayEffects {
             events: effects.events,
             redirects,
             replays,
             expired,
-            active_sessions: effects.active_sessions,
-            closed_sessions: effects.closed_sessions,
+            active_sessions,
+            closed_sessions,
         }
     }
 
@@ -328,11 +329,11 @@ impl GatewayRuntime {
     }
 
     /// Prunes old closed session records after connection churn.
-    pub fn prune_closed_sessions(&mut self, keep_closed: usize) -> usize {
+    pub(crate) fn prune_closed_sessions(&mut self, keep_closed: usize) -> usize {
         self.middleware.sessions_mut().prune_closed(keep_closed)
     }
 
-    pub fn take_redirects(&mut self) -> Vec<(u64, String)> {
+    pub(crate) fn take_redirects(&mut self) -> Vec<(u64, String)> {
         let mut redirects = Vec::new();
         for connection_id in self.redirect_pending.iter().copied().collect::<Vec<_>>() {
             let Some(state) = self.connections.get_mut(&connection_id) else {
@@ -350,7 +351,7 @@ impl GatewayRuntime {
     ///
     /// Returns the connection ids that were expired. The caller should also
     /// close the corresponding TCP connection.
-    pub fn expire_idle(&mut self, timeout: Duration) -> Vec<u64> {
+    pub(crate) fn expire_idle(&mut self, timeout: Duration) -> Vec<u64> {
         let now = Instant::now();
         let expired: Vec<u64> = self
             .connections
@@ -367,7 +368,7 @@ impl GatewayRuntime {
 
     /// Drains core and combo replay batches in per-user sequence order.
     #[must_use]
-    pub fn take_replay_batches(&mut self) -> Vec<(u64, Vec<ReplayEvent>)> {
+    pub(crate) fn take_replay_batches(&mut self) -> Vec<(u64, Vec<ReplayEvent>)> {
         let mut batches = Vec::new();
         for connection_id in self.replay_pending.iter().copied().collect::<Vec<_>>() {
             let Some(state) = self.connections.get_mut(&connection_id) else {
