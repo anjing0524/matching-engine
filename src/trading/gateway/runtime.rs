@@ -246,6 +246,7 @@ impl GatewayRuntime {
             GatewayFrame::Ack { private_seq } => {
                 if !self
                     .middleware
+                    .sessions_mut()
                     .acknowledge_private(connection_id, private_seq)
                 {
                     self.errors += 1;
@@ -348,7 +349,7 @@ impl GatewayRuntime {
         events: impl IntoIterator<Item = crate::trading::core::private_events::PrivateEvent>,
     ) -> usize {
         self.downlink
-            .dispatch_private(&self.middleware, server, events)
+            .dispatch_private(self.middleware.sessions(), server, events)
     }
 
     /// Routes combo private fills through the private downlink.
