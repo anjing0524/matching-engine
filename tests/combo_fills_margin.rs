@@ -241,7 +241,7 @@ fn implied_fill_produces_private_fill_for_taker_and_leg_fills_for_owners() {
         core.drain_private_events();
         core.drain_public_events();
     }
-    registry.drain_combo_private_events();
+    let _ = registry.drain_combo_private_events();
 
     let events = registry
         .execute_combo(combo_order(1001, 3, 33, Side::Buy, 10_000, 5))
@@ -323,7 +323,7 @@ fn private_sequence_stays_ordered_across_direct_and_implied_effects() {
         core.drain_private_events();
         core.drain_public_events();
     }
-    registry.drain_combo_private_events();
+    let _ = registry.drain_combo_private_events();
 
     registry
         .execute_combo(combo_order(1102, 9, 99, Side::Buy, 10_000, 5))

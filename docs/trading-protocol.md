@@ -118,13 +118,17 @@ trade_id  = (epoch << 48) | trade_seq
 | 64 | 4 | `instrument_id` | 合约 |
 | 68 | 4 | `combo_id` | 组合 |
 | 72 | 4 | `session_id` | SessionSwitch/TimeTick 用 |
-| 76 | 1 | `event_type` | Rested/Canceled/Trade/TimeTick/SessionSwitch/AuctionResult |
+| 76 | 1 | `event_type` | Rested/Canceled/Trade/TimeTick/SessionSwitch/AuctionResult/ComboTrade |
 | 77 | 1 | `side` | 方向/主动方 |
 | 78 | 1 | `phase` | 交易节 |
 | 79 | 1 | `flags` | combo/synthetic 等 |
 | 80 | 2 | `reason_code` | cancel 原因 |
 | 82 | 2 | `reserved0` | 对齐 |
-| 84 | 44 | `reserved` | 对齐到 128B |
+| 84 | 4 | `pair_id` | ComboTrade 组合 pair |
+| 88 | 8 | `spread_price` | ComboTrade 成交价差 |
+| 96 | 8 | `leg1_price_ticks` | ComboTrade 第一腿价 |
+| 104 | 8 | `leg2_price_ticks` | ComboTrade 第二腿价 |
+| 112 | 16 | `reserved` | 对齐到 128B |
 
 - combo 成交发两条普通 leg event：leg1 order/trade，leg2 order/trade；带 `combo_id` 和 leg。
 - combo 成交同时发布一条 `ComboTrade` 价格统计事件：`pair_id`、成交价差、数量、两腿参考价；隐含单不发布订单事件。

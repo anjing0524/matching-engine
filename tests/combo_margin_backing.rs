@@ -225,7 +225,7 @@ fn rejected_entry_does_not_mutate_book_margin_or_position() {
         core.drain_private_events();
         core.drain_public_events();
     }
-    registry.drain_combo_private_events();
+    let _ = registry.drain_combo_private_events();
 
     let combo_book_before = registry.combo_book(10).unwrap().snapshot();
     let leg1_before = registry.core(1).unwrap().snapshot();

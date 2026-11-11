@@ -111,7 +111,7 @@ fn implied_combo_trade_publishes_combo_price_statistics_and_leg_trades() {
         .unwrap();
     rest_leg(&mut registry, leg_order(1, 1, 1, Side::Sell, 50_000, 5));
     // Drop the setup events so only the trigger's public data is inspected.
-    registry.drain_public_events();
+    let _ = registry.drain_public_events();
 
     rest_leg(&mut registry, leg_order(2, 2, 2, Side::Buy, 40_000, 5));
     let public = registry.drain_public_events();
@@ -159,7 +159,7 @@ fn direct_combo_trade_publishes_combo_price_statistics_with_reference_leg_prices
     // combo cannot fill by implication before the direct taker arrives.
     rest_leg(&mut registry, leg_order(3, 1, 2, Side::Sell, 49_000, 2));
     rest_leg(&mut registry, leg_order(4, 2, 3, Side::Buy, 41_000, 2));
-    registry.drain_public_events();
+    let _ = registry.drain_public_events();
 
     registry
         .execute_combo(combo_order(102, 4, Side::Buy, 100, 2))

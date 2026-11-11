@@ -44,9 +44,6 @@ fn cross_term_and_cross_product_pairs_resolve_to_two_registered_legs() {
     assert_eq!(cross_product.leg2_instrument_id, 3);
     assert_eq!(cross_product.spread_tick, 5);
 
-    let mut listed: Vec<u32> = registry.pairs().map(|pair| pair.pair_id).collect();
-    listed.sort_unstable();
-    assert_eq!(listed, vec![10, 20]);
     assert_eq!(registry.pair_count(), 2);
     assert!(registry.contains_pair(10));
     assert!(!registry.contains_pair(11));

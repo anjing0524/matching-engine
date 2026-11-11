@@ -546,11 +546,6 @@ impl InstrumentRegistry {
         self.pairs.len()
     }
 
-    /// Iterates over registered Combo Pairs in unspecified order.
-    pub fn pairs(&self) -> impl Iterator<Item = &ComboPair> {
-        self.pairs.values()
-    }
-
     /// Returns the base Combo Order book for `pair_id`.
     ///
     /// The book is a combo-only interface: ordinary Contract books never expose
@@ -558,12 +553,6 @@ impl InstrumentRegistry {
     #[must_use]
     pub fn combo_book(&self, pair_id: u32) -> Option<&ComboBook> {
         self.combo_books.get(&u64::from(pair_id))
-    }
-
-    /// Returns the base Combo Order book for `pair_id` for state inspection or
-    /// restore.
-    pub fn combo_book_mut(&mut self, pair_id: u32) -> Option<&mut ComboBook> {
-        self.combo_books.get_mut(&u64::from(pair_id))
     }
 
     /// Returns Combo Private Fills produced since the last drain.
@@ -577,6 +566,7 @@ impl InstrumentRegistry {
     }
 
     /// Drains Combo Private Fills produced since the last drain.
+    #[must_use]
     pub fn drain_combo_private_events(&mut self) -> Vec<ComboPrivateFill> {
         std::mem::take(&mut self.combo_private_events)
     }
@@ -592,6 +582,7 @@ impl InstrumentRegistry {
     /// Cores are visited in ascending instrument id order so a command stream
     /// that touches more than one leg produces the same private event order on
     /// every run.
+    #[must_use]
     pub fn drain_private_events(&mut self) -> Vec<PrivateEvent> {
         let mut events = Vec::new();
         for instrument_id in self.sorted_instrument_ids() {
@@ -608,6 +599,7 @@ impl InstrumentRegistry {
     /// Cores are visited in ascending instrument id order for deterministic
     /// fan-out. Combo trade statistics follow the leg trades of the matching
     /// command, so a consumer sees both leg executions before the combo price.
+    #[must_use]
     pub fn drain_public_events(&mut self) -> Vec<PublicEvent> {
         let mut events = Vec::new();
         for instrument_id in self.sorted_instrument_ids() {
