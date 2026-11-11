@@ -134,22 +134,4 @@ impl EventFanout {
             }
         }
     }
-
-    #[must_use]
-    pub fn repair(&self, request: NackRequest) -> Vec<PublicEvent> {
-        self.repair_buffer
-            .as_ref()
-            .map_or_else(Vec::new, |buffer| buffer.repair(request))
-    }
-
-    /// Switches the multicast publisher's local interface.
-    ///
-    /// # Errors
-    /// Returns an I/O error when no multicast publisher exists or rebinding fails.
-    pub fn switch_interface(&mut self, interface: std::net::Ipv4Addr) -> std::io::Result<()> {
-        let publisher = self.market_data.as_mut().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "no market-data publisher")
-        })?;
-        publisher.switch_interface(interface)
-    }
 }
