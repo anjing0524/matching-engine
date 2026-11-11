@@ -163,13 +163,25 @@ gateway-1: 31590/s
 aggregate: 110055/s
 ```
 
-Pipelined, two gateways, in-flight=32:
+Pipelined, two gateways, in-flight=32, original single-thread client:
 
 ```text
 gateway-0: 18964/s p99=2.48ms
 gateway-1: 18573/s p99=2.48ms
 aggregate: 37537/s
 ```
+
+After splitting writer/reader into separate client threads:
+
+```text
+gateway-0: 17514/s p99=1.95ms
+gateway-1: 16766/s p99=2.91ms
+aggregate: 34280/s
+```
+
+The threaded client did not improve the split path. The bottleneck is therefore
+not the client's single-thread loop; it is CPU/queueing in the gateway/middleware
+chain on this 4C/8T host.
 
 The multi-gateway identity collision is fixed (unique member offsets). Serial
 scales to ~110k aggregate, but the pipelined client path still collapses. The
