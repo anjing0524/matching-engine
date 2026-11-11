@@ -1,7 +1,7 @@
 //! Combination-order queue, leg execution, margin, and runtime.
 
 pub mod engine;
-pub mod exec;
+pub(crate) mod exec;
 pub mod margin;
 pub mod market_data;
 pub mod queue;
