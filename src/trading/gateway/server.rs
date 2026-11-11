@@ -234,6 +234,7 @@ pub fn start(
                                     map.remove(&id);
                                 }
                             });
+                    }
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
                     }
