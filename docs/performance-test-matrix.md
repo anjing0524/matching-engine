@@ -361,6 +361,33 @@ the gateway/middleware path, not in private-event correlation or the load
 generator. It is still far below 1M/s, but it is one middleware process on 4C/8T,
 not a multi-gateway deployment.
 
+### buy-only scaling cap
+
+Protocol-correct buy-only workload, direct middleware + core, 4C/8T:
+
+```text
+1 member,  in-flight=32: 48740/s
+2 members, in-flight=32: 48742/s
+4 members, in-flight=32: 48716/s
+```
+
+The rate is effectively independent of member count. Gateway diagnostics for
+100k commands:
+
+```text
+frames_read = 100001
+submitted   = 100000
+private     = 100000
+writes      = 100000
+write_errors= 0
+read_ns     = 1.089s
+write_ns    = 0.938s
+```
+
+The reader waits about 10.9µs per frame and the writer spends about 9.4µs per
+frame; both are serialized through the single middleware/gateway process. This is
+the current cap, not a core matching limit.
+
 ## Next measurement
 
 Use an independent load-generator host/process and per-process CPU affinity:
