@@ -36,6 +36,30 @@ A valid aggregate number requires all of:
 - mixed buy/sell: multiple private events per command; needs a protocol-aware
   completion model, not one ack per command.
 
+## 500k target result
+
+Direct middleware path, 8 independent clients, middleware on CPU0-1, core on
+CPU2, clients on CPU3-7:
+
+```text
+script: MIDDLEWARE_CPUS=0,1 CORE_CPU=2 CLIENT_CPU_BASE=3 CLIENT_CPU_SPAN=5         scripts/run-load-clients.sh 8 15000 32
+runs: 561526, 560286, 521634 /s
+median: ~560k/s
+```
+
+This meets the reduced 500k target for the direct middleware path.
+
+Two-gateway path, middleware CPU0-1, core CPU2, gateways CPU3/4, clients
+CPU5-7:
+
+```text
+4 clients: 405428/s
+6 clients: 391027/s
+```
+
+It does not reach 500k on this 4C/8T host. The gateway proxy and SMT placement
+remain the limiting factors.
+
 ## Current results
 
 ```text
