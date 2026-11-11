@@ -127,6 +127,37 @@ serial write: 95675/s
 
 Still a regression; reverted.
 
+## 4C/8T multi-client target (current)
+
+Single-shard, one middleware + one core, buy-only, 6 independent clients:
+
+```text
+4 clients: 330195/s total
+6 clients: 400128/s total
+```
+
+Batch gateway read helps single-client p99; batch encoded private writes are a
+tradeoff:
+
+```text
+single client: batch write slower than inline
+4 clients:     batch write 330195/s
+6 clients:     batch write 400128/s
+```
+
+The batch is only useful when many responses are queued; single-frame batches
+should stay on the inline path or be avoided.
+
+Two gateways + 4 clients (middleware/core CPU0-1, gateways CPU2-3, clients on
+SMT CPUs4-7), after switching the proxy to a 64KiB reusable relay buffer:
+
+```text
+205230/s -> 232335/s aggregate
+p50 ~277-296µs, p99 ~1.2-1.3ms
+```
+
+Gateway proxy overhead is now the main gap versus the direct 330-400k path.
+
 ## Interpretation
 
 ```text
