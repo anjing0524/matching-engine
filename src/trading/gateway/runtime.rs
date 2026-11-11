@@ -66,7 +66,6 @@ pub struct GatewayRuntime {
     errors: u64,
     private_unrouted: u64,
     private_send_errors: u64,
-    replay_enabled: bool,
 }
 
 impl GatewayRuntime {
@@ -97,13 +96,7 @@ impl GatewayRuntime {
             errors: 0,
             private_unrouted: 0,
             private_send_errors: 0,
-            replay_enabled: true,
         }
-    }
-
-    /// Enables or disables replay recording (throughput diagnostics).
-    pub fn set_replay_enabled(&mut self, enabled: bool) {
-        self.replay_enabled = enabled;
     }
 
     /// Requires every login to carry the given shared token.
@@ -384,9 +377,7 @@ impl GatewayRuntime {
         let mut sent = 0;
         for mut fill in fills {
             fill.seq = self.assign_private_seq(fill.user_id);
-            if self.replay_enabled {
-                self.combo_replay.push(fill.user_id, fill);
-            }
+            self.combo_replay.push(fill.user_id, fill);
             let user_id = u32::try_from(fill.user_id).unwrap_or(u32::MAX);
             if let Some(session) = self.middleware.session_by_user(user_id) {
                 match server.send_combo_private(session.session_id, &fill) {
@@ -413,9 +404,7 @@ impl GatewayRuntime {
         for mut event in events {
             event.seq = self.assign_private_seq(event.account_id);
             let user_id = u32::try_from(event.account_id).unwrap_or(u32::MAX);
-            if self.replay_enabled {
-                self.private_replay.push(event.account_id, event.clone());
-            }
+            self.private_replay.push(event.account_id, event.clone());
             if let Some(session) = self.middleware.session_by_user(user_id) {
                 batches
                     .entry(session.session_id)
