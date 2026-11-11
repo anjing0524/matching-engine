@@ -183,6 +183,18 @@ middleware:
 No improvement; extra Vec allocation and larger messages offset fewer channel
 sends. Reverted.
 
+### rejected: single-thread busy-poll proxy
+
+Replaced two blocking relay threads per connection with one nonblocking
+busy-poll loop:
+
+```text
+single-thread relay: 218515/s
+two-thread 64KiB:    232335/s
+```
+
+Worse: one gateway CPU became the bottleneck. Reverted.
+
 ## Interpretation
 
 ```text
