@@ -260,6 +260,27 @@ The sample shows no dropped commands and no socket write errors; frames read,
 commands submitted, and private writes track one another. The low rate is
 therefore in gateway read/client pacing, not in core submission or ring drops.
 
+### gateway timing (diagnostic mode)
+
+With `--stats-interval-ms`, gateway read/write timing is enabled only for the
+diagnostic run.
+
+Two-member serial sample (final cumulative):
+
+```text
+read_calls=200002 read_ns=14.69s write_ns=2.79s
+frames_read=200002 submitted=200000 writes=200004
+private=299999 public=200000
+```
+
+Read time dominates: each read blocks waiting for the next member frame, so the
+gateway is not CPU-busy on decode. Write time is about 14µs/frame in this run.
+
+There is also a counter gap to investigate: private=~300k but writes=~200k.
+Possible causes are private events without a live session at dispatch time, or
+timing of the final sample. This is a correctness-adjacent finding, not a
+throughput conclusion.
+
 ## Next measurement
 
 Use an independent load-generator host/process and per-process CPU affinity:
