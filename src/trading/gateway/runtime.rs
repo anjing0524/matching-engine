@@ -374,18 +374,25 @@ impl GatewayRuntime {
         server: &GatewayServerHandle,
         fills: impl IntoIterator<Item = ComboPrivateFill>,
     ) -> usize {
-        let mut sent = 0;
+        let mut batches: U64MixMap<Vec<GatewayFrame>> = U64MixMap::default();
         for mut fill in fills {
             fill.seq = self.assign_private_seq(fill.user_id);
             self.combo_replay.push(fill.user_id, fill);
             let user_id = u32::try_from(fill.user_id).unwrap_or(u32::MAX);
             if let Some(session) = self.middleware.session_by_user(user_id) {
-                match server.send_combo_private(session.session_id, &fill) {
-                    Ok(()) => sent += 1,
-                    Err(_) => self.private_send_errors += 1,
-                }
+                batches
+                    .entry(session.session_id)
+                    .or_default()
+                    .push(GatewayFrame::ComboPrivate(fill));
             } else {
                 self.private_unrouted += 1;
+            }
+        }
+        let mut sent = 0;
+        for (session_id, frames) in batches {
+            match server.send_batch(session_id, &frames) {
+                Ok(()) => sent += frames.len(),
+                Err(_) => self.private_send_errors += frames.len() as u64,
             }
         }
         sent
@@ -399,18 +406,25 @@ impl GatewayRuntime {
         server: &GatewayServerHandle,
         events: impl IntoIterator<Item = crate::trading::core::private_events::PrivateEvent>,
     ) -> usize {
-        let mut sent = 0;
+        let mut batches: U64MixMap<Vec<GatewayFrame>> = U64MixMap::default();
         for mut event in events {
             event.seq = self.assign_private_seq(event.account_id);
             let user_id = u32::try_from(event.account_id).unwrap_or(u32::MAX);
             self.private_replay.push(event.account_id, event.clone());
             if let Some(session) = self.middleware.session_by_user(user_id) {
-                match server.send_private(session.session_id, &event) {
-                    Ok(()) => sent += 1,
-                    Err(_) => self.private_send_errors += 1,
-                }
+                batches
+                    .entry(session.session_id)
+                    .or_default()
+                    .push(GatewayFrame::PrivateEvent(event));
             } else {
                 self.private_unrouted += 1;
+            }
+        }
+        let mut sent = 0;
+        for (session_id, frames) in batches {
+            match server.send_batch(session_id, &frames) {
+                Ok(()) => sent += frames.len(),
+                Err(_) => self.private_send_errors += frames.len() as u64,
             }
         }
         sent
