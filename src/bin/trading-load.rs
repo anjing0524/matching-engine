@@ -75,7 +75,7 @@ fn write_all_nonblocking(stream: &mut TcpStream, bytes: &[u8]) {
     }
 }
 
-fn run_serial_member(addr: String, member: usize, orders: usize, start: Instant) -> Vec<u64> {
+fn run_serial_member(addr: String, member: usize, orders: usize) -> Vec<u64> {
     let mut stream = login(&addr, member);
     stream.set_nonblocking(true).unwrap();
     let user_id = member as u32 + 1;
@@ -211,7 +211,7 @@ fn main() {
         let orders = args.orders_per_member;
         workers.push(std::thread::spawn(move || {
             if in_flight == 1 {
-                run_serial_member(addr, member, orders, start)
+                run_serial_member(addr, member, orders)
             } else {
                 run_member(addr, member, orders, in_flight, start)
             }
