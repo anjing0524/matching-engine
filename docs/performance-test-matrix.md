@@ -417,19 +417,22 @@ and channel allocation outweighed removing the blocking write. Reverted.
 Added `scripts/run-sharded-aggregate.sh`; each shard has its own middleware/core
 and optionally a gateway proxy.
 
-Two shards, buy-only, in-flight=32:
+Two shards, buy-only, in-flight=32, after giving each client two logical CPUs:
 
 ```text
-with gateway proxy: 2 x 12342/s = 24684/s
-without proxy:      2 x 12342/s = 24684/s
+without proxy: 2 x 12342/s = 24684/s
 ```
 
-The per-shard client is pinned to a single logical CPU while it runs writer and
-reader threads, so this sharded number is not a valid scaling measurement yet.
-Direct one-middleware tests with the client on two CPUs reached 48740/s.
+This is still **not valid scaling evidence**: on 4C/8T, CPU0-3 are physical
+cores and CPU4-7 are their SMT siblings. Two shards consume all four physical
+cores for middleware+core, so the clients run on the SMT siblings of the server
+cores. The sharded number is dominated by physical-core contention.
 
-The gateway proxy alone reduced a shard from the direct ~48.7k/s path to
-~12.3k/s; that needs its own investigation.
+Direct one-middleware tests with middleware/core on CPU0-1 and the client on
+CPU2-3 reached 48740/s, because those were separate physical cores.
+
+The gateway proxy run also dropped a shard from ~48.7k/s to ~12.3k/s; proxy
+overhead remains a separate valid concern.
 
 ## Next measurement
 
