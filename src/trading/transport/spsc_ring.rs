@@ -174,6 +174,29 @@ impl SpscRing {
         Ok(())
     }
 
+    #[cfg(test)]
+    fn try_pop_into(&self, out: &mut Vec<u8>) -> bool {
+        let tail = self.tail().load(Ordering::Relaxed);
+        let head = self.head().load(Ordering::Acquire);
+        if tail == head {
+            return false;
+        }
+        let index = tail % self.capacity;
+        let slot = unsafe { self.slot_ptr(index) };
+        let len = unsafe { ptr::read(slot as *const u32) } as usize;
+        if len > self.slot_size {
+            self.tail().store(tail.wrapping_add(1), Ordering::Release);
+            out.clear();
+            return true;
+        }
+        out.resize(len, 0);
+        unsafe {
+            ptr::copy_nonoverlapping(slot.add(SLOT_HEADER), out.as_mut_ptr(), len);
+        }
+        self.tail().store(tail.wrapping_add(1), Ordering::Release);
+        true
+    }
+
     /// Pops one payload into a fixed stack buffer.
     ///
     /// Returns the stored payload length; the caller validates it against the
