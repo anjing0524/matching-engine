@@ -88,14 +88,25 @@ fn relay(member: TcpStream, upstream_addr: String) {
     let upstream_thread = thread::spawn(move || {
         let mut reader = upstream_read;
         let mut writer = member_write;
-        let _ = io::copy(&mut reader, &mut writer);
+        let _ = pump(&mut reader, &mut writer);
         let _ = writer.shutdown(Shutdown::Both);
     });
     let mut reader = member_read;
     let mut writer = upstream_write;
-    let _ = io::copy(&mut reader, &mut writer);
+    let _ = pump(&mut reader, &mut writer);
     let _ = writer.shutdown(Shutdown::Both);
     let _ = upstream_thread.join();
+}
+
+fn pump(reader: &mut TcpStream, writer: &mut TcpStream) -> io::Result<()> {
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(());
+        }
+        writer.write_all(&buffer[..read])?;
+    }
 }
 
 #[cfg(test)]
