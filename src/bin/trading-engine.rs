@@ -195,11 +195,9 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
     // The single-process production binary always uses the registry path so a
     // non-zero combo id can never be treated as an ordinary order. The legacy
     // single-core runner remains for split deployment and tests only.
-    let registry_mode = args.combo_config.is_some()
-        || args.registry_snapshot.is_some()
-        || full_snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.registry.is_some());
+    // Production single-process always routes through the registry: without
+    // this, a non-zero combo id would fall through to the ordinary core.
+    let registry_mode = true;
     let mut runtime = if registry_mode {
         let mut registry = if let Some(path) = &args.combo_config {
             ComboVenueConfig::load(std::path::Path::new(path))?.build_registry()?
