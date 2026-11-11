@@ -3,8 +3,8 @@
 ## Contract
 
 A single tradable futures instrument with its own order book, tick size, price
-limits, and expiry. Ordinary orders and combo legs trade against the same
-Contract order book.
+limits, and expiry. Ordinary orders and implied combo legs trade against the
+same Contract order book.
 
 ## Leg
 
@@ -13,40 +13,51 @@ the combo engine.
 
 ## Combo Pair
 
-A static definition of two Contracts that may be traded atomically:
+An exchange-defined two-leg spread contract. For the first version it follows
+the SHFE-style rules:
 
 ```text
-leg1 Contract
-leg2 Contract
-positive integer ratio
-spread tick
-margin parameters
+leg1 and leg2
+quantity ratio 1:1
+cross-term: same product, different months
+cross-product: different products, same month
 ```
 
-A Combo Pair has an identifier used by Combo Orders. Pairs are loaded at
-startup; runtime pair creation is out of scope for the first version.
+A Combo Pair has an identifier used by Combo Orders and is present in the
+instrument registry at startup.
+
+## Leg Contract
+
+The ordinary Contract underlying one Leg of a Combo Pair. Leg Contracts have
+their own order books, positions, margin, and market data.
 
 ## Spread Price
 
-The quoted price of a Combo Order:
+The quoted price of a Combo Order. It may be negative.
 
 ```text
-spread = leg1 price - ratio * leg2 price
+buy spread  = leg1 bid - leg2 ask
+sell spread = leg1 ask - leg2 bid
 ```
 
-Buying the spread means buying leg1 and selling leg2. The spread is quoted in
-leg1 price ticks.
+For cross-term spreads leg1 is the near month and leg2 the far month. For
+cross-product spreads leg1 and leg2 are the two products in exchange-defined
+order.
+
+The Combo Pair tick follows the exchange rule: cross-term uses the leg tick;
+cross-product uses the common tick rule for the two products.
 
 ## Combo Order
 
-An order for a Combo Pair whose two Legs must fill together. First version:
-spread limit, GFD, cancel. No partial fill; no single-leg fill.
+An order for a Combo Pair. First version supports limit, FOK/FAK and cancel;
+market orders and auction participation are deferred. Combo orders do not
+participate in call auction.
 
 ## Combo Fill
 
-One atomic execution of a Combo Order. It consumes resting liquidity from both
-Leg order books at their own prices and reports the resulting leg prices and
-quantity to the combo owner.
+One atomic execution of a Combo Order. The two legs fill together at the
+resting leg prices; the combo owner receives a Combo Fill report. The Combo
+Pair itself has no position; positions live on the leg Contracts.
 
 ## Leg Fill
 
@@ -55,13 +66,21 @@ Combo Fill. It is the same Contract-level fill that an ordinary trade produces.
 
 ## Implied-in
 
-A Combo Order consuming resting liquidity from its Leg order books.
+Two leg orders combine into an implied Combo Order and execute against a
+resting or incoming Combo Order.
 
 ## Implied-out
 
-An ordinary Leg order interacting with a resting Combo Order. Deferred beyond
-the first combo version; the pair model must not preclude it.
+A Combo Order combines with an opposite leg order to produce the other leg
+order, which then executes against a leg order. Implied-out is first-class
+exchange behavior, not a later extension.
 
-## Atomic
+## Direct Combo Matching
 
-Both Legs fill in the same matching operation, or neither fills.
+Two opposite Combo Orders on the same Combo Pair match directly.
+
+## Base Order Priority
+
+At the same price, directly entered leg orders take priority over implied
+orders. Among implied orders at the same price, cross-term precedes
+cross-product, and the exchange-defined contract order breaks ties.
