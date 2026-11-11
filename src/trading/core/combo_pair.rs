@@ -97,6 +97,11 @@ impl ComboPair {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ComboPairError {
+    /// Pair id zero is reserved as the non-combo command sentinel.
+    InvalidPairId {
+        /// Rejected pair id.
+        pair_id: u32,
+    },
     /// A pair with this id is already registered.
     DuplicatePairId {
         /// Pair id that was already present.
@@ -137,6 +142,9 @@ pub enum ComboPairError {
 impl Display for ComboPairError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
         match self {
+            Self::InvalidPairId { pair_id } => {
+                write!(formatter, "combo pair id {pair_id} is reserved")
+            }
             Self::DuplicatePairId { pair_id } => {
                 write!(formatter, "combo pair {pair_id} is already registered")
             }

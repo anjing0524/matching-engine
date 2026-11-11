@@ -174,3 +174,11 @@ fn commands_do_not_create_combo_pairs_at_runtime() {
     assert_eq!(registry.pair_count(), 1);
     assert!(!registry.contains_pair(77));
 }
+
+#[test]
+fn pair_id_zero_is_rejected_as_non_combo_sentinel() {
+    let mut registry = registry_with_legs();
+    let error = registry.register_pair(pair(0, 1, 2, 1)).unwrap_err();
+    assert_eq!(error, ComboPairError::InvalidPairId { pair_id: 0 });
+    assert_eq!(registry.pair_count(), 0);
+}

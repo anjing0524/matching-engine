@@ -251,6 +251,9 @@ fn validate_pair(
     instruments: &U64MixMap<TradingCore>,
     pair: &ComboPair,
 ) -> Result<(), ComboPairError> {
+    if pair.pair_id == 0 {
+        return Err(ComboPairError::InvalidPairId { pair_id: 0 });
+    }
     if pair.leg1_instrument_id == pair.leg2_instrument_id {
         return Err(ComboPairError::IdenticalLegs {
             pair_id: pair.pair_id,
