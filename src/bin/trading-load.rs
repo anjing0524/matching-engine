@@ -24,6 +24,9 @@ struct Args {
     orders_per_member: usize,
     #[arg(long, default_value_t = 32)]
     in_flight: usize,
+    /// Offset added to member/user ids; use distinct offsets per gateway.
+    #[arg(long, default_value_t = 0)]
+    member_offset: usize,
 }
 
 fn command(id: u64, user_id: u32, side: Side, price: i64) -> Command {
@@ -75,12 +78,13 @@ fn write_all_nonblocking(stream: &mut TcpStream, bytes: &[u8]) {
     }
 }
 
-fn run_serial_member(addr: String, member: usize, orders: usize) -> Vec<u64> {
-    let mut stream = login(&addr, member);
+fn run_serial_member(addr: String, member: usize, orders: usize, member_offset: usize) -> Vec<u64> {
+    let identity = member_offset + member;
+    let mut stream = login(&addr, identity);
     stream.set_nonblocking(true).unwrap();
-    let user_id = member as u32 + 1;
-    let price = 50_000 + member as i64;
-    let base = member.saturating_mul(orders);
+    let user_id = identity as u32 + 1;
+    let price = 50_000 + identity as i64;
+    let base = identity.saturating_mul(orders);
     let mut samples = Vec::with_capacity(orders);
     let mut buffer = Vec::with_capacity(264 * 4);
     for seq in 0..orders {
@@ -125,12 +129,14 @@ fn run_member(
     orders: usize,
     in_flight: usize,
     start: Instant,
+    member_offset: usize,
 ) -> Vec<u64> {
-    let mut stream = login(&addr, member);
+    let identity = member_offset + member;
+    let mut stream = login(&addr, identity);
     stream.set_nonblocking(true).unwrap();
-    let user_id = member as u32 + 1;
-    let price = 50_000 + member as i64;
-    let base = member.saturating_mul(orders);
+    let user_id = identity as u32 + 1;
+    let price = 50_000 + identity as i64;
+    let base = identity.saturating_mul(orders);
     let mut sent_times = vec![u64::MAX; orders];
     let mut acked_flags = vec![false; orders];
     let mut sent = 0usize;
@@ -204,6 +210,7 @@ fn run_member(
 fn main() {
     let args = Args::parse();
     let start = Instant::now();
+    let args_offset = args.member_offset;
     let mut workers = Vec::with_capacity(args.members);
     for member in 0..args.members {
         let addr = args.addr.clone();
@@ -211,9 +218,9 @@ fn main() {
         let orders = args.orders_per_member;
         workers.push(std::thread::spawn(move || {
             if in_flight == 1 {
-                run_serial_member(addr, member, orders)
+                run_serial_member(addr, member, orders, args_offset)
             } else {
-                run_member(addr, member, orders, in_flight, start)
+                run_member(addr, member, orders, in_flight, start, args_offset)
             }
         }));
     }

@@ -98,6 +98,7 @@ for ((i = 0; i < gateways; i++)); do
     --members 1 \
     --orders-per-member "$orders" \
     --in-flight "$in_flight" \
+    --member-offset "$((i * 10))" \
     >"$dir/client-$i.log" 2>&1 &
   client_pids+=($!)
 done
