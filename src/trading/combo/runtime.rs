@@ -177,6 +177,12 @@ impl ComboRuntime {
         self.engine.queue_len()
     }
 
+    /// Open combination quantity for `user_id`.
+    #[must_use]
+    pub fn open_qty(&self, user_id: u64) -> u64 {
+        self.engine.open_qty(user_id)
+    }
+
     /// Executes the best marketable combo order for `side`.
     pub fn try_execute_best(&mut self, side: Side) -> Option<Result<ComboFill, ComboExecError>> {
         self.engine.try_execute_best(side)

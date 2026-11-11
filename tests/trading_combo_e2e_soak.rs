@@ -58,6 +58,6 @@ fn ten_thousand_combo_commands_fill() {
         }
     }
     assert_eq!(runtime.queue_len(), 0);
-    assert_eq!(runtime.engine().open_qty(1), 0);
+    assert_eq!(runtime.open_qty(1), 0);
     let _ = std::fs::remove_file(&path);
 }
