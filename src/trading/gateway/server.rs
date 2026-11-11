@@ -38,6 +38,10 @@ pub struct GatewayStats {
     writes: AtomicU64,
     bytes_written: AtomicU64,
     write_errors: AtomicU64,
+    read_ns: AtomicU64,
+    read_calls: AtomicU64,
+    write_ns: AtomicU64,
+    timing: AtomicBool,
 }
 
 /// Snapshot of [`GatewayStats`].
@@ -48,6 +52,9 @@ pub struct GatewayStatsSnapshot {
     pub writes: u64,
     pub bytes_written: u64,
     pub write_errors: u64,
+    pub read_ns: u64,
+    pub read_calls: u64,
+    pub write_ns: u64,
 }
 
 impl GatewayStats {
@@ -58,7 +65,14 @@ impl GatewayStats {
             writes: self.writes.load(Ordering::Relaxed),
             bytes_written: self.bytes_written.load(Ordering::Relaxed),
             write_errors: self.write_errors.load(Ordering::Relaxed),
+            read_ns: self.read_ns.load(Ordering::Relaxed),
+            read_calls: self.read_calls.load(Ordering::Relaxed),
+            write_ns: self.write_ns.load(Ordering::Relaxed),
         }
+    }
+
+    fn timing_enabled(&self) -> bool {
+        self.timing.load(Ordering::Relaxed)
     }
 }
 
@@ -93,10 +107,18 @@ impl GatewayServerHandle {
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "gateway not connected"))?
         };
         let encoded = frame.encode();
+        let timing = self.stats.timing_enabled();
+        let start = timing.then(std::time::Instant::now);
         let mut stream = stream
             .lock()
             .map_err(|_| io::Error::other("gateway stream lock poisoned"))?;
-        match stream.write_all(&encoded) {
+        let result = stream.write_all(&encoded);
+        if let Some(start) = start {
+            self.stats
+                .write_ns
+                .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        }
+        match result {
             Ok(()) => {
                 self.stats.writes.fetch_add(1, Ordering::Relaxed);
                 self.stats
@@ -109,6 +131,11 @@ impl GatewayServerHandle {
                 Err(error)
             }
         }
+    }
+
+    /// Enables read/write timing counters (diagnostic mode).
+    pub fn enable_timing(&self) {
+        self.stats.timing.store(true, Ordering::Relaxed);
     }
 
     #[must_use]
@@ -251,8 +278,15 @@ fn serve_connection(
     let _ = stream.set_nodelay(true);
     let mut frame = [0u8; GATEWAY_FRAME_SIZE];
     loop {
+        let start = stats.timing_enabled().then(std::time::Instant::now);
         if stream.read_exact(&mut frame).is_err() {
             break;
+        }
+        if let Some(start) = start {
+            stats
+                .read_ns
+                .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            stats.read_calls.fetch_add(1, Ordering::Relaxed);
         }
         match GatewayFrame::decode(&frame) {
             Ok(frame) => {

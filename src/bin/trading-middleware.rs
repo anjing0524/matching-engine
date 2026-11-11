@@ -141,6 +141,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
     }
     let (server, events) = start_gateway(&args.listen)?;
+    if args.stats_interval_ms > 0 {
+        server.enable_timing();
+    }
     let mut gateway = GatewayRuntime::with_replay_capacity(middleware, events, 4096);
     if let Some(token) = args.auth_token {
         gateway = gateway.with_auth_token(token);
@@ -245,6 +248,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 gateway_stats.writes,
                 gateway_stats.bytes_written,
                 gateway_stats.write_errors
+            );
+            eprintln!(
+                "gateway_timing read_calls={} read_ns={} write_ns={}",
+                gateway_stats.read_calls, gateway_stats.read_ns, gateway_stats.write_ns
             );
             stats_start = std::time::Instant::now();
         }
