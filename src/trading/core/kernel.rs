@@ -309,6 +309,16 @@ impl TradingCore {
         &mut self.positions
     }
 
+    /// Applies the combo owner's side of one atomic Combo Fill to this Contract.
+    ///
+    /// Combo orders have no position of their own, so the leg Contract carries
+    /// the owner's open position. M1 combo fills open spec positions and emit
+    /// no ordinary private fill: the combo owner receives a Combo Fill instead.
+    pub(crate) fn apply_combo_fill_position(&mut self, account_id: u64, side: Side, quantity: u64) {
+        let key = PositionKey::new(account_id, side, Hedge::Spec);
+        let _ = self.positions.apply_open(key, quantity);
+    }
+
     #[must_use]
     pub fn pending_open(&self) -> &Positions {
         &self.pending_open

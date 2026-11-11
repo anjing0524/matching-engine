@@ -12,8 +12,11 @@ use crate::domain::orderbook::ContractSpec;
 use crate::shared::SymbolId;
 use crate::shared::collections::identity::U64MixMap;
 use crate::trading::core::combo_book::{
-    ComboBook, ComboCommandError, ComboEvent, ComboOrder, ComboOrderOwner, ImpliedComboFill,
-    validate_new_combo_order,
+    ComboBook, ComboCommandError, ComboEvent, ComboFill, ComboOrder, ComboOrderOwner,
+    ComboPrivateFill, ImpliedComboFill, validate_new_combo_order,
+};
+use crate::trading::core::combo_margin::{
+    ComboMarginFreeze, ComboMarginLedger, LegMargin, LegMarginRate,
 };
 use crate::trading::core::combo_pair::{ComboLeg, ComboPair, ComboPairError};
 use crate::trading::core::kernel::{CoreEvent, TradingCore};
@@ -82,7 +85,11 @@ pub struct InstrumentRegistry {
     instruments: U64MixMap<TradingCore>,
     pairs: U64MixMap<ComboPair>,
     combo_books: U64MixMap<ComboBook>,
+    prior_settlements: U64MixMap<u64>,
+    margin: ComboMarginLedger,
+    combo_private_events: Vec<ComboPrivateFill>,
     next_combo_order_id: u64,
+    next_combo_private_seq: u64,
 }
 
 impl InstrumentRegistry {
@@ -93,7 +100,11 @@ impl InstrumentRegistry {
             instruments: U64MixMap::default(),
             pairs: U64MixMap::default(),
             combo_books: U64MixMap::default(),
+            prior_settlements: U64MixMap::default(),
+            margin: ComboMarginLedger::default(),
+            combo_private_events: Vec::new(),
             next_combo_order_id: 1,
+            next_combo_private_seq: 1,
         }
     }
 
@@ -141,6 +152,48 @@ impl InstrumentRegistry {
         Ok(())
     }
 
+    /// Sets the prior settlement price used to freeze leg margin at combo entry.
+    ///
+    /// Prior settlement is venue state supplied at startup or day roll, not a
+    /// protocol command. An instrument without a prior settlement freezes zero
+    /// estimated margin; actual trade-price margin still applies on fill.
+    ///
+    /// # Errors
+    /// Returns [`RegistryError::UnknownInstrument`] when `instrument_id` is not
+    /// registered. The stored settlement is unchanged in that case.
+    pub fn set_prior_settlement(
+        &mut self,
+        instrument_id: u32,
+        price_ticks: u64,
+    ) -> Result<(), RegistryError> {
+        if !self.instruments.contains_key(&u64::from(instrument_id)) {
+            return Err(RegistryError::UnknownInstrument { instrument_id });
+        }
+        self.prior_settlements
+            .insert(u64::from(instrument_id), price_ticks);
+        Ok(())
+    }
+
+    /// Returns the prior settlement configured for `instrument_id`.
+    #[must_use]
+    pub fn prior_settlement(&self, instrument_id: u32) -> Option<u64> {
+        self.prior_settlements
+            .get(&u64::from(instrument_id))
+            .copied()
+    }
+
+    /// Returns the margin state for `account_id` on one leg Contract.
+    #[must_use]
+    pub fn leg_margin(&self, account_id: u64, instrument_id: u32) -> LegMargin {
+        self.margin.leg_margin(account_id, instrument_id)
+    }
+
+    /// Returns the margin freeze carried by one Combo Order.
+    #[must_use]
+    pub fn combo_margin_freeze(&self, order_id: u64) -> Option<ComboMarginFreeze> {
+        self.margin.freeze_for(order_id)
+    }
+
     /// Looks up the Combo Pair for `pair_id`.
     #[must_use]
     pub fn pair(&self, pair_id: u32) -> Option<&ComboPair> {
@@ -177,6 +230,21 @@ impl InstrumentRegistry {
     /// restore.
     pub fn combo_book_mut(&mut self, pair_id: u32) -> Option<&mut ComboBook> {
         self.combo_books.get_mut(&u64::from(pair_id))
+    }
+
+    /// Returns Combo Private Fills produced since the last drain.
+    ///
+    /// Combo effects use a registry-owned private sequence so direct and
+    /// implied-in fills stay ordered with each other. Ordinary leg fills remain
+    /// in their Contract core's private sequence and are delivered separately.
+    #[must_use]
+    pub fn combo_private_events(&self) -> &[ComboPrivateFill] {
+        &self.combo_private_events
+    }
+
+    /// Drains Combo Private Fills produced since the last drain.
+    pub fn drain_combo_private_events(&mut self) -> Vec<ComboPrivateFill> {
+        std::mem::take(&mut self.combo_private_events)
     }
 
     /// Atomically consumes matching resting liquidity from two leg books.
@@ -327,14 +395,17 @@ impl InstrumentRegistry {
             command.price_ticks,
             command.quantity,
         );
+        self.freeze_combo_margin(&pair, &order);
 
         // Direct combo matching always runs first. Only a residual taker may
         // consume leg liquidity through the implied-in path.
+        let direct_leg_prices = self.direct_leg_reference(&pair, order.side);
         let mut events = self
             .combo_books
             .get_mut(&u64::from(pair_id))
             .ok_or(ComboCommandError::UnknownPair { pair_id })?
             .match_taker(&mut order)?;
+        self.settle_direct_fills(&pair, &events, direct_leg_prices);
         if order.remaining > 0 {
             events.extend(self.match_implied_in(&pair, &mut order));
         }
@@ -419,20 +490,188 @@ impl InstrumentRegistry {
             if let Some(book) = self.combo_books.get_mut(&u64::from(pair.pair_id)) {
                 book.record_trade_price(spread_price);
             }
-            events.push(ComboEvent::ImpliedFilled {
-                fill: ImpliedComboFill {
-                    pair_id: pair.pair_id,
-                    order_id: order.order_id,
-                    owner: order.owner,
-                    side: order.side,
-                    spread_price,
-                    quantity,
-                    leg1_price_ticks: leg1_price,
-                    leg2_price_ticks: leg2_price,
+            let fill = ImpliedComboFill {
+                pair_id: pair.pair_id,
+                order_id: order.order_id,
+                owner: order.owner,
+                side: order.side,
+                spread_price,
+                quantity,
+                leg1_price_ticks: leg1_price,
+                leg2_price_ticks: leg2_price,
+            };
+            self.margin.release_on_fill(fill.order_id, fill.quantity);
+            self.apply_combo_owner_fill(
+                pair,
+                fill.owner.user_id,
+                fill.side,
+                fill.quantity,
+                (fill.leg1_price_ticks, fill.leg2_price_ticks),
+            );
+            self.push_combo_private_fill(
+                fill.order_id,
+                fill.owner,
+                fill.side,
+                ComboFillTerms {
+                    pair_id: fill.pair_id,
+                    quantity: fill.quantity,
+                    spread_price: fill.spread_price,
+                    leg1_price_ticks: fill.leg1_price_ticks,
+                    leg2_price_ticks: fill.leg2_price_ticks,
                 },
-            });
+            );
+            events.push(ComboEvent::ImpliedFilled { fill });
         }
         events
+    }
+
+    /// Applies both leg sides of one Combo Fill to the owner's leg positions
+    /// and records the actual trade-price margin on each leg.
+    ///
+    /// The Combo Pair has no position of its own. A buy spread opens long leg1
+    /// and short leg2; a sell spread opens short leg1 and long leg2. Each leg
+    /// Contract receives the owner's side exactly once.
+    fn apply_combo_owner_fill(
+        &mut self,
+        pair: &ComboPair,
+        account_id: u64,
+        side: Side,
+        quantity: u64,
+        leg_prices: (u64, u64),
+    ) {
+        let (leg1_side, leg2_side) = leg_sides(side);
+        self.instruments
+            .get_mut(&u64::from(pair.leg1_instrument_id))
+            .expect("a registered Combo Pair names a registered first leg")
+            .apply_combo_fill_position(account_id, leg1_side, quantity);
+        self.instruments
+            .get_mut(&u64::from(pair.leg2_instrument_id))
+            .expect("a registered Combo Pair names a registered second leg")
+            .apply_combo_fill_position(account_id, leg2_side, quantity);
+        self.margin.record_actual(
+            account_id,
+            pair.leg1_instrument_id,
+            leg1_side,
+            leg_prices.0,
+            LegMarginRate {
+                multiplier: pair.margin.multiplier,
+                rate_bps: pair.margin.leg1_rate_bps,
+            },
+            quantity,
+        );
+        self.margin.record_actual(
+            account_id,
+            pair.leg2_instrument_id,
+            leg2_side,
+            leg_prices.1,
+            LegMarginRate {
+                multiplier: pair.margin.multiplier,
+                rate_bps: pair.margin.leg2_rate_bps,
+            },
+            quantity,
+        );
+    }
+
+    /// Freezes prior-settlement margin for a newly accepted Combo Order.
+    fn freeze_combo_margin(&mut self, pair: &ComboPair, order: &ComboOrder) {
+        let leg1_prior_settlement = self.prior_settlement(pair.leg1_instrument_id).unwrap_or(0);
+        let leg2_prior_settlement = self.prior_settlement(pair.leg2_instrument_id).unwrap_or(0);
+        self.margin.freeze(
+            pair,
+            order.order_id,
+            order.owner.user_id,
+            order.quantity,
+            leg1_prior_settlement,
+            leg2_prior_settlement,
+        );
+    }
+
+    /// Settles the effects of every direct Combo Fill in `events`.
+    fn settle_direct_fills(
+        &mut self,
+        pair: &ComboPair,
+        events: &[ComboEvent],
+        leg_prices: (u64, u64),
+    ) {
+        for event in events {
+            let ComboEvent::Filled { fill } = event else {
+                continue;
+            };
+            self.settle_direct_fill(pair, fill, leg_prices);
+        }
+    }
+
+    fn settle_direct_fill(&mut self, pair: &ComboPair, fill: &ComboFill, leg_prices: (u64, u64)) {
+        self.margin
+            .release_on_fill(fill.buy_order_id, fill.quantity);
+        self.margin
+            .release_on_fill(fill.sell_order_id, fill.quantity);
+        self.apply_combo_owner_fill(
+            pair,
+            fill.buy_owner.user_id,
+            Side::Buy,
+            fill.quantity,
+            leg_prices,
+        );
+        self.apply_combo_owner_fill(
+            pair,
+            fill.sell_owner.user_id,
+            Side::Sell,
+            fill.quantity,
+            leg_prices,
+        );
+        let terms = ComboFillTerms {
+            pair_id: fill.pair_id,
+            quantity: fill.quantity,
+            spread_price: fill.spread_price,
+            leg1_price_ticks: leg_prices.0,
+            leg2_price_ticks: leg_prices.1,
+        };
+        self.push_combo_private_fill(fill.buy_order_id, fill.buy_owner, Side::Buy, terms);
+        self.push_combo_private_fill(fill.sell_order_id, fill.sell_owner, Side::Sell, terms);
+    }
+
+    /// Returns the leg prices a direct Combo Fill reports.
+    ///
+    /// Direct matching consumes no leg liquidity, so there are no leg execution
+    /// prices. The fill uses the best crossing reference on each leg and falls
+    /// back to prior settlement, then zero, when a leg book has no quote. The
+    /// spread remains the direct execution spread.
+    fn direct_leg_reference(&self, pair: &ComboPair, taker_side: Side) -> (u64, u64) {
+        let (leg1_side, leg2_side) = leg_sides(taker_side);
+        let leg1 = self
+            .best_leg_price(pair.leg1_instrument_id, leg1_side)
+            .or_else(|| self.prior_settlement(pair.leg1_instrument_id))
+            .unwrap_or(0);
+        let leg2 = self
+            .best_leg_price(pair.leg2_instrument_id, leg2_side)
+            .or_else(|| self.prior_settlement(pair.leg2_instrument_id))
+            .unwrap_or(0);
+        (leg1, leg2)
+    }
+
+    fn push_combo_private_fill(
+        &mut self,
+        order_id: u64,
+        owner: ComboOrderOwner,
+        side: Side,
+        terms: ComboFillTerms,
+    ) {
+        let seq = self.next_combo_private_seq;
+        self.next_combo_private_seq = self.next_combo_private_seq.saturating_add(1);
+        self.combo_private_events.push(ComboPrivateFill {
+            seq,
+            pair_id: terms.pair_id,
+            order_id,
+            client_order_id: owner.client_order_id,
+            user_id: owner.user_id,
+            session_id: owner.session_id,
+            side,
+            quantity: terms.quantity,
+            spread_price: terms.spread_price,
+            leg1_price_ticks: terms.leg1_price_ticks,
+            leg2_price_ticks: terms.leg2_price_ticks,
+        });
     }
 
     /// Returns the best price a combo taker would pay or receive on one leg.
@@ -484,11 +723,14 @@ impl InstrumentRegistry {
         if command.cancel_order_id == 0 {
             return Err(ComboCommandError::MissingCancelOrderId);
         }
-        let book = self
-            .combo_books
-            .get_mut(&u64::from(pair_id))
-            .ok_or(ComboCommandError::UnknownPair { pair_id })?;
-        let order = book.cancel_for(u64::from(command.user_id), command.cancel_order_id)?;
+        let order = {
+            let book = self
+                .combo_books
+                .get_mut(&u64::from(pair_id))
+                .ok_or(ComboCommandError::UnknownPair { pair_id })?;
+            book.cancel_for(u64::from(command.user_id), command.cancel_order_id)?
+        };
+        self.margin.release_all(order.order_id);
         Ok(vec![ComboEvent::Canceled { order }])
     }
 
@@ -582,6 +824,27 @@ impl InstrumentRegistry {
             }
         }
         Ok(())
+    }
+}
+
+/// Price, quantity, and leg-price terms shared by the private fills of one
+/// atomic Combo Fill.
+#[derive(Clone, Copy)]
+struct ComboFillTerms {
+    pair_id: u32,
+    quantity: u64,
+    spread_price: i64,
+    leg1_price_ticks: u64,
+    leg2_price_ticks: u64,
+}
+
+/// Returns the leg sides a Combo Order owner takes for one spread direction.
+///
+/// A buy spread buys leg1 and sells leg2; a sell spread does the opposite.
+fn leg_sides(combo_side: Side) -> (Side, Side) {
+    match combo_side {
+        Side::Buy => (Side::Buy, Side::Sell),
+        Side::Sell => (Side::Sell, Side::Buy),
     }
 }
 

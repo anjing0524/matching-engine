@@ -2,6 +2,7 @@
 
 pub mod auction;
 pub mod combo_book;
+pub mod combo_margin;
 pub mod combo_pair;
 pub mod kernel;
 pub mod leg_liquidity;
@@ -15,8 +16,9 @@ pub mod schedule;
 
 pub use self::combo_book::{
     ComboBook, ComboBookError, ComboCommandError, ComboEvent, ComboFill, ComboOrder,
-    ComboOrderOwner, ImpliedComboFill,
+    ComboOrderOwner, ComboPrivateFill, ImpliedComboFill,
 };
+pub use self::combo_margin::{ComboMarginFreeze, LegMargin};
 pub use self::combo_pair::{ComboLeg, ComboPair, ComboPairError, ComboPairMargin};
 pub use self::kernel::{CoreEvent, CoreSnapshot, TradingCore};
 pub use self::leg_liquidity::{
