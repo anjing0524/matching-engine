@@ -42,6 +42,13 @@ an unknown pair rather than silently treated as an ordinary order.
 settlements, and explicit account margin balances. See
 [`deploy/combo-venue.example.json`](../deploy/combo-venue.example.json).
 
+Every Contract named as a Combo Pair leg must declare `product` and `month`
+(`YYMM`) metadata. Startup validation rejects a pair leg without usable
+metadata and enforces the pair kind: `cross_term` legs must share a product and
+have different months, while `cross_product` legs must have different products
+and share a month. Contracts used only by ordinary commands may omit both
+fields.
+
 Fail-closed rules:
 
 - a config with Combo Pairs and no margin balances is rejected at startup;

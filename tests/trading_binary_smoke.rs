@@ -134,8 +134,8 @@ fn trading_binary_combo_config_completes_combo_trade() {
         r#"
 {
   "instruments": [
-    {"instrument_id": 1, "symbol": "IF2501", "tick_size": 1, "min_price": 30000, "max_price": 70000},
-    {"instrument_id": 2, "symbol": "IF2502", "tick_size": 1, "min_price": 30000, "max_price": 70000}
+    {"instrument_id": 1, "symbol": "IF2501", "tick_size": 1, "min_price": 30000, "max_price": 70000, "product": "IF", "month": 2501},
+    {"instrument_id": 2, "symbol": "IF2502", "tick_size": 1, "min_price": 30000, "max_price": 70000, "product": "IF", "month": 2502}
   ],
   "pairs": [
     {"pair_id": 10, "leg1_instrument_id": 1, "leg2_instrument_id": 2, "kind": "cross_term", "spread_tick": 1,
@@ -268,8 +268,8 @@ fn trading_binary_rejects_combo_config_without_margin_balances() {
         r#"
 {
   "instruments": [
-    {"instrument_id": 1, "symbol": "IF2501", "tick_size": 1, "min_price": 30000, "max_price": 70000},
-    {"instrument_id": 2, "symbol": "IF2502", "tick_size": 1, "min_price": 30000, "max_price": 70000}
+    {"instrument_id": 1, "symbol": "IF2501", "tick_size": 1, "min_price": 30000, "max_price": 70000, "product": "IF", "month": 2501},
+    {"instrument_id": 2, "symbol": "IF2502", "tick_size": 1, "min_price": 30000, "max_price": 70000, "product": "IF", "month": 2502}
   ],
   "pairs": [
     {"pair_id": 10, "leg1_instrument_id": 1, "leg2_instrument_id": 2, "kind": "cross_term", "spread_tick": 1,
@@ -318,8 +318,8 @@ fn trading_binary_resting_combo_fills_when_a_leg_order_arrives() {
         r#"
 {
   "instruments": [
-    {"instrument_id": 1, "symbol": "IF2501", "tick_size": 1, "min_price": 30000, "max_price": 70000},
-    {"instrument_id": 2, "symbol": "IF2502", "tick_size": 1, "min_price": 30000, "max_price": 70000}
+    {"instrument_id": 1, "symbol": "IF2501", "tick_size": 1, "min_price": 30000, "max_price": 70000, "product": "IF", "month": 2501},
+    {"instrument_id": 2, "symbol": "IF2502", "tick_size": 1, "min_price": 30000, "max_price": 70000, "product": "IF", "month": 2502}
   ],
   "pairs": [
     {"pair_id": 10, "leg1_instrument_id": 1, "leg2_instrument_id": 2, "kind": "cross_term", "spread_tick": 1,
