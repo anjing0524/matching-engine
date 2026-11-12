@@ -50,7 +50,7 @@ M1 supports:
 - spread limit GFD and cancel
 - direct combo matching
 - implied-in
-- explicit rejection of market/GIS; FOK/FAK supported through IOC-All/IOC-Any
+- FOK/FAK supported through IOC-All/IOC-Any; Market combo supported at resting spread; AdvancedMarket/GIS rejected
 - leg-level margin and single-side largest
 - leg fills and combo fills
 - combo price statistics and leg public trades
@@ -72,7 +72,7 @@ M2 adds:
 
 - implied-out: combo + leg → other leg
 - FOK/FAK
-- market arbitrage with protection price
+- AdvancedMarket protection-price behavior
 - more complete exchange priority and cascade rules
 - margin/reload operations
 
@@ -268,7 +268,7 @@ M1 tests must cover:
 - a resting combo order triggered by later ordinary leg liquidity
 - margin freeze/release/actual and single-side largest
 - snapshot/reconnect replay
-- unsupported market/GIS orders rejected; FOK/FAK behavior covered
+- unsupported AdvancedMarket/GIS orders rejected; FOK/FAK/Market behavior covered
 - no implied orders in public market data
 
 Performance is measured after correctness; the current 500k/s ingress baseline is
