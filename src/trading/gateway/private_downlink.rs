@@ -1,26 +1,24 @@
 //! Private-event downlink: sequencing, replay retention, session routing, and
-//! batched frame delivery for core and combo private events.
+//! batched frame delivery for core and combo private effects.
+//!
+//! The downlink owns the one per-user private sequence. Core events and Combo
+//! Private Fills are stamped from the same counter in the order the runtime
+//! produced them, retained in one per-user replay log, and delivered to the
+//! session that owns each account.
 
 use crate::shared::collections::U64MixMap;
 use crate::trading::core::combo_book::ComboPrivateFill;
-use crate::trading::core::private_events::PrivateEvent;
+use crate::trading::core::private_events::{PrivateEffect, PrivateEvent};
 use crate::trading::gateway::frame::GatewayFrame;
-use crate::trading::gateway::private_replay::{
-    ComboPrivateReplayBuffer, PrivateReplayBuffer, ReplayEvent,
-};
+use crate::trading::gateway::private_replay::{PrivateDownlinkSnapshot, ReplayBuffer};
 use crate::trading::gateway::server::GatewayServerHandle;
 use crate::trading::transport::session::SessionRegistry;
+use std::collections::HashSet;
 
-enum DownlinkEvent {
-    Core(PrivateEvent),
-    Combo(ComboPrivateFill),
-}
-
-/// Owns the private sequence space and replay buffers; routes encoded frames to
-/// the session that owns each account.
+/// Owns the private sequence space and replay log; routes encoded frames to the
+/// session that owns each account.
 pub struct PrivateDownlink {
-    private_replay: PrivateReplayBuffer,
-    combo_replay: ComboPrivateReplayBuffer,
+    replay: ReplayBuffer,
     next_private_seq: U64MixMap<u64>,
     unrouted: u64,
     send_errors: u64,
@@ -30,31 +28,17 @@ impl PrivateDownlink {
     #[must_use]
     pub fn new(replay_capacity: usize) -> Self {
         Self {
-            private_replay: PrivateReplayBuffer::new(replay_capacity),
-            combo_replay: ComboPrivateReplayBuffer::new(replay_capacity),
+            replay: ReplayBuffer::new(replay_capacity),
             next_private_seq: U64MixMap::default(),
             unrouted: 0,
             send_errors: 0,
         }
     }
 
-    /// Returns replay events newer than `last_private_seq`, ordered by seq.
+    /// Returns replay effects newer than `last_private_seq`, ordered by seq.
     #[must_use]
-    pub fn replay_for(&self, user_id: u64, last_private_seq: u64) -> Vec<ReplayEvent> {
-        let mut replay: Vec<ReplayEvent> = self
-            .private_replay
-            .replay(user_id, last_private_seq)
-            .into_iter()
-            .map(ReplayEvent::Core)
-            .collect();
-        replay.extend(
-            self.combo_replay
-                .replay(user_id, last_private_seq)
-                .into_iter()
-                .map(ReplayEvent::Combo),
-        );
-        replay.sort_by_key(ReplayEvent::seq);
-        replay
+    pub fn replay_for(&self, user_id: u64, last_private_seq: u64) -> Vec<PrivateEffect> {
+        self.replay.replay(user_id, last_private_seq)
     }
 
     /// Routes core private events to the session owning each account.
@@ -67,7 +51,7 @@ impl PrivateDownlink {
         self.dispatch_events(
             sessions,
             server,
-            events.into_iter().map(DownlinkEvent::Core),
+            events.into_iter().map(PrivateEffect::Core),
         )
     }
 
@@ -81,35 +65,31 @@ impl PrivateDownlink {
         self.dispatch_events(
             sessions,
             server,
-            fills.into_iter().map(DownlinkEvent::Combo),
+            fills.into_iter().map(PrivateEffect::Combo),
         )
     }
 
-    fn dispatch_events(
+    /// Routes an ordered core/combo effect stream through one sequence space.
+    pub fn dispatch_events(
         &mut self,
         sessions: &SessionRegistry,
         server: &GatewayServerHandle,
-        events: impl IntoIterator<Item = DownlinkEvent>,
+        events: impl IntoIterator<Item = PrivateEffect>,
     ) -> usize {
         let mut batches: U64MixMap<(Vec<u8>, usize)> = U64MixMap::default();
-        for event in events {
-            let (user_id, frame) = match event {
-                DownlinkEvent::Core(mut event) => {
-                    event.seq = self.assign_private_seq(event.account_id);
-                    self.private_replay.push(event.account_id, event.clone());
-                    (event.account_id, GatewayFrame::PrivateEvent(event))
-                }
-                DownlinkEvent::Combo(mut fill) => {
-                    fill.seq = self.assign_private_seq(fill.user_id);
-                    self.combo_replay.push(fill.user_id, fill);
-                    (fill.user_id, GatewayFrame::ComboPrivate(fill))
-                }
+        for mut effect in events {
+            let user_id = effect.user_id();
+            effect.set_seq(self.assign_private_seq(user_id));
+            let frame = match &effect {
+                PrivateEffect::Core(event) => GatewayFrame::PrivateEvent(event.clone()),
+                PrivateEffect::Combo(fill) => GatewayFrame::ComboPrivate(*fill),
             };
-            let Ok(user_id) = u32::try_from(user_id) else {
+            self.replay.push(user_id, effect);
+            let Ok(session_user) = u32::try_from(user_id) else {
                 self.unrouted += 1;
                 continue;
             };
-            let Some(session) = sessions.find_active_by_user(user_id) else {
+            let Some(session) = sessions.find_active_by_user(session_user) else {
                 self.unrouted += 1;
                 continue;
             };
@@ -132,6 +112,87 @@ impl PrivateDownlink {
         let seq = *next;
         *next += 1;
         seq
+    }
+
+    /// Captures the per-user sequence and replay log.
+    #[must_use]
+    pub fn snapshot(&self) -> PrivateDownlinkSnapshot {
+        let mut next_private_seq: Vec<(u64, u64)> = self
+            .next_private_seq
+            .iter()
+            .map(|(user_id, next)| (*user_id, *next))
+            .collect();
+        next_private_seq.sort_unstable_by_key(|(user_id, _)| *user_id);
+        PrivateDownlinkSnapshot {
+            next_private_seq,
+            replay: self.replay.snapshot(),
+        }
+    }
+
+    /// Validates a snapshot without mutating the downlink.
+    ///
+    /// # Errors
+    /// Returns a reason when the snapshot repeats a user, carries a replay
+    /// effect that does not belong to its user, has a non-advancing sequence,
+    /// or retains more events than this downlink's replay capacity.
+    pub fn validate_snapshot(&self, snapshot: &PrivateDownlinkSnapshot) -> Result<(), String> {
+        let mut next_by_user: U64MixMap<u64> = U64MixMap::default();
+        for &(user_id, next) in &snapshot.next_private_seq {
+            if next == 0 {
+                return Err(format!("user {user_id} has a zero next private sequence"));
+            }
+            if next_by_user.insert(user_id, next).is_some() {
+                return Err(format!(
+                    "snapshot repeats private sequence state for user {user_id}"
+                ));
+            }
+        }
+        let mut seen_users = HashSet::new();
+        for (user_id, events) in &snapshot.replay {
+            if !seen_users.insert(*user_id) {
+                return Err(format!("snapshot repeats replay state for user {user_id}"));
+            }
+            let Some(&next) = next_by_user.get(user_id) else {
+                return Err(format!(
+                    "snapshot has replay for user {user_id} without a sequence"
+                ));
+            };
+            if events.len() > self.replay.capacity() {
+                return Err(format!(
+                    "user {user_id} has {} replay events but capacity is {}",
+                    events.len(),
+                    self.replay.capacity()
+                ));
+            }
+            let mut previous = 0;
+            for effect in events {
+                let seq = effect.seq();
+                if seq == 0 || seq <= previous {
+                    return Err(format!(
+                        "user {user_id} replay sequence {seq} is not strictly increasing"
+                    ));
+                }
+                if effect.user_id() != *user_id {
+                    return Err(format!(
+                        "user {user_id} replay carries an effect for user {}",
+                        effect.user_id()
+                    ));
+                }
+                previous = seq;
+            }
+            if previous >= next {
+                return Err(format!(
+                    "user {user_id} replay sequence {previous} does not advance past next {next}"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Replaces the per-user sequence and replay log with a validated snapshot.
+    pub fn restore_snapshot(&mut self, snapshot: PrivateDownlinkSnapshot) {
+        self.next_private_seq = snapshot.next_private_seq.into_iter().collect();
+        self.replay.restore(snapshot.replay);
     }
 
     #[must_use]

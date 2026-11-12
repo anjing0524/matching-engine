@@ -6,6 +6,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 use trading_system_engine::domain::orderbook::ContractSpec;
 use trading_system_engine::trading::core::plugins::NoPlugins;
+use trading_system_engine::trading::core::private_events::{PrivateEffect, PrivateStatus};
 use trading_system_engine::trading::core::protocol::{
     Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
     VolumeCondition,
@@ -126,6 +127,44 @@ fn read_combo_private(
         std::thread::sleep(Duration::from_millis(2));
     }
     panic!("combo private fill did not reach the member");
+}
+
+fn leg_order(
+    user_id: u32,
+    client_order_id: u64,
+    side: Side,
+    instrument_id: u32,
+    price_ticks: i64,
+) -> Command {
+    let mut command = combo_order(user_id, client_order_id, 1, side, price_ticks, 1);
+    command.combo_id = 0;
+    command.instrument_id = instrument_id;
+    command
+}
+
+fn read_private_effects(
+    runtime: &mut TradingRuntime<NoPlugins>,
+    stream: &mut TcpStream,
+    count: usize,
+) -> Vec<PrivateEffect> {
+    let mut effects = Vec::new();
+    for _ in 0..500 {
+        if effects.len() == count {
+            return effects;
+        }
+        runtime.tick();
+        let mut frame = [0u8; GATEWAY_FRAME_SIZE];
+        if stream.read_exact(&mut frame).is_err() {
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
+        }
+        match GatewayFrame::decode(&frame).unwrap() {
+            GatewayFrame::PrivateEvent(event) => effects.push(PrivateEffect::Core(event)),
+            GatewayFrame::ComboPrivate(fill) => effects.push(PrivateEffect::Combo(fill)),
+            other => panic!("unexpected private frame: {other:?}"),
+        }
+    }
+    panic!("only {} of {count} private effects arrived", effects.len());
 }
 
 #[test]
@@ -258,4 +297,93 @@ fn runtime_snapshot_roundtrip_restores_registry_combo_state() {
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(snapshot_path);
     let _ = std::fs::remove_file(temp_path("snapshot-ring"));
+}
+
+#[test]
+fn restart_and_reconnect_preserve_combo_then_core_private_order() {
+    let path = temp_path("restart-order-ring");
+    let mut registry = registry_with_pair();
+    // A resting sell spread owned by user 1; user 2 will take it.
+    registry
+        .execute_combo(combo_order(1, 1, 1, Side::Sell, 100, 1))
+        .unwrap();
+    let (mut runtime, address) = runtime_with_registry(registry, &path);
+
+    let mut member = TcpStream::connect(&address).unwrap();
+    member
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    login(&mut member, 2, 0);
+    member
+        .write_all(&GatewayFrame::Command(combo_order(2, 2, 1, Side::Buy, 100, 1)).encode())
+        .unwrap();
+    let combo_fill = read_combo_private(&mut runtime, &mut member);
+    assert_eq!(combo_fill.seq, 2);
+
+    // Rest an ordinary leg order owned by user 2, so a later leg trade gives
+    // this user a core private effect after the restart.
+    member
+        .write_all(&GatewayFrame::Command(leg_order(2, 3, Side::Sell, 1, 50_000)).encode())
+        .unwrap();
+    let accepted = read_private_effects(&mut runtime, &mut member, 1);
+    let PrivateEffect::Core(accepted) = &accepted[0] else {
+        panic!("expected a core private effect");
+    };
+    assert_eq!(accepted.account_id, 2);
+    assert_eq!(accepted.seq, 3);
+
+    let snapshot = runtime.snapshot();
+
+    // Restart into a fresh runtime that restores the same venue state.
+    let restored_path = temp_path("restart-order-restored-ring");
+    let (mut restored, restored_address) =
+        runtime_with_registry(registry_with_pair(), &restored_path);
+    restored.restore_snapshot(snapshot).unwrap();
+
+    // User 2 reconnects without acknowledging the pre-restart effects. Replay
+    // must preserve the single sequence across core and combo producers.
+    let mut member = TcpStream::connect(&restored_address).unwrap();
+    member
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    login(&mut member, 2, 0);
+    let replay = read_private_effects(&mut restored, &mut member, 3);
+    assert_eq!(
+        replay.iter().map(PrivateEffect::seq).collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert!(matches!(replay[0], PrivateEffect::Core(_)));
+    assert!(matches!(replay[1], PrivateEffect::Combo(_)));
+    assert!(matches!(replay[2], PrivateEffect::Core(_)));
+
+    // A new core fill after restart continues the same per-user sequence
+    // instead of restarting from 1.
+    let mut taker = TcpStream::connect(&restored_address).unwrap();
+    login(&mut taker, 3, 0);
+    taker
+        .write_all(&GatewayFrame::Command(leg_order(3, 4, Side::Buy, 1, 50_000)).encode())
+        .unwrap();
+    let live = read_private_effects(&mut restored, &mut member, 1);
+    let PrivateEffect::Core(event) = &live[0] else {
+        panic!("expected a core fill for the resting leg order");
+    };
+    assert_eq!(event.account_id, 2);
+    assert_eq!(event.seq, 4);
+    assert_ne!(event.status, PrivateStatus::Accepted);
+
+    // A later reconnect replays the merged stream in sequence order.
+    let mut again = TcpStream::connect(&restored_address).unwrap();
+    again
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    login(&mut again, 2, 0);
+    let replay = read_private_effects(&mut restored, &mut again, 4);
+    assert_eq!(
+        replay.iter().map(PrivateEffect::seq).collect::<Vec<_>>(),
+        vec![1, 2, 3, 4]
+    );
+    assert!(matches!(replay[1], PrivateEffect::Combo(_)));
+
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(restored_path);
 }
