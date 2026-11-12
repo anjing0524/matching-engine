@@ -1064,7 +1064,14 @@ impl InstrumentRegistry {
             });
         }
 
-        let is_market = command.price_type == crate::trading::core::protocol::PriceType::Market;
+        let is_market = matches!(
+            command.price_type,
+            crate::trading::core::protocol::PriceType::Market
+                | crate::trading::core::protocol::PriceType::AdvancedMarket
+        );
+        let protection = (command.price_type
+            == crate::trading::core::protocol::PriceType::AdvancedMarket)
+            .then_some(command.price_ticks);
         let is_ioc = is_market
             || command.time_condition == crate::trading::core::protocol::TimeCondition::Ioc;
         let is_fok = is_ioc
@@ -1093,7 +1100,7 @@ impl InstrumentRegistry {
             .combo_books
             .get_mut(&u64::from(pair_id))
             .ok_or(ComboCommandError::UnknownPair { pair_id })?
-            .match_taker(&mut order, is_market)?;
+            .match_taker(&mut order, is_market, protection)?;
         self.settle_direct_fills(&pair, &events, direct_leg_prices, command.trading_ts_ns);
         if order.remaining > 0 {
             events.extend(self.match_implied_in(
@@ -1101,6 +1108,7 @@ impl InstrumentRegistry {
                 &mut order,
                 command.trading_ts_ns,
                 is_market,
+                protection,
             ));
         }
         if order.remaining > 0 && !is_ioc {
@@ -1142,6 +1150,7 @@ impl InstrumentRegistry {
         order: &mut ComboOrder,
         trading_ts_ns: u64,
         market: bool,
+        protection: Option<i64>,
     ) -> Vec<ComboEvent> {
         let mut events = Vec::new();
         while order.remaining > 0 {
@@ -1156,7 +1165,12 @@ impl InstrumentRegistry {
                 break;
             };
             let spread_price = leg_spread_price(leg1_price, leg2_price);
-            if !market && !spread_within_limit(order.side, order.spread_price, spread_price) {
+            let within = match protection {
+                Some(limit) => spread_within_limit(order.side, limit, spread_price),
+                None if market => true,
+                None => spread_within_limit(order.side, order.spread_price, spread_price),
+            };
+            if !within {
                 break;
             }
             let leg1_available = self.leg_available_at(
@@ -1296,7 +1310,7 @@ impl InstrumentRegistry {
             };
             let before = current.remaining;
             let mut order = current;
-            self.match_implied_in(pair, &mut order, trading_ts_ns, false);
+            self.match_implied_in(pair, &mut order, trading_ts_ns, false, None);
             let filled = before - order.remaining;
             if filled == 0 {
                 continue;

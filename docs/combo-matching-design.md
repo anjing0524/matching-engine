@@ -72,7 +72,7 @@ M2 adds:
 
 - implied-out: combo + leg → other leg
 - FOK/FAK
-- AdvancedMarket protection-price behavior
+- AdvancedMarket protection-price behavior is supported: market matching is bounded by the protection spread
 - more complete exchange priority and cascade rules
 - margin/reload operations
 
@@ -268,7 +268,7 @@ M1 tests must cover:
 - a resting combo order triggered by later ordinary leg liquidity
 - margin freeze/release/actual and single-side largest
 - snapshot/reconnect replay
-- unsupported AdvancedMarket/GIS orders rejected; FOK/FAK/Market behavior covered
+- unsupported GIS orders rejected; FOK/FAK/Market/AdvancedMarket behavior covered
 - no implied orders in public market data
 
 Performance is measured after correctness; the current 500k/s ingress baseline is

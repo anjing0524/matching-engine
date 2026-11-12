@@ -419,7 +419,7 @@ impl ComboBook {
     /// in that case.
     pub fn submit(&mut self, mut order: ComboOrder) -> Result<Vec<ComboEvent>, ComboBookError> {
         self.validate_order(&order)?;
-        let mut events = self.match_taker_unchecked(&mut order, false);
+        let mut events = self.match_taker_unchecked(&mut order, false, None);
         if order.remaining > 0 {
             events.push(ComboEvent::Rested {
                 order: self.insert(order),
@@ -443,19 +443,30 @@ impl ComboBook {
         &mut self,
         order: &mut ComboOrder,
         market: bool,
+        protection: Option<i64>,
     ) -> Result<Vec<ComboEvent>, ComboBookError> {
         self.validate_order(order)?;
-        Ok(self.match_taker_unchecked(order, market))
+        Ok(self.match_taker_unchecked(order, market, protection))
     }
 
-    fn match_taker_unchecked(&mut self, order: &mut ComboOrder, market: bool) -> Vec<ComboEvent> {
+    fn match_taker_unchecked(
+        &mut self,
+        order: &mut ComboOrder,
+        market: bool,
+        protection: Option<i64>,
+    ) -> Vec<ComboEvent> {
         let mut events = Vec::new();
         let resting_side = order.side.opposite();
         while order.remaining > 0 {
             let Some(resting) = self.best_order(resting_side).copied() else {
                 break;
             };
-            if !market && !crosses(order.side, order.spread_price, resting.spread_price) {
+            let crosses_price = match protection {
+                Some(limit) => crosses(order.side, limit, resting.spread_price),
+                None if market => true,
+                None => crosses(order.side, order.spread_price, resting.spread_price),
+            };
+            if !crosses_price {
                 break;
             }
             let quantity = order.remaining.min(resting.remaining);
@@ -1079,7 +1090,10 @@ impl From<ComboMarginError> for ComboCommandError {
 /// This is deliberately explicit: a market, FOK/FAK, stop, or close-offset
 /// combo request never degrades into an opening GFD limit order.
 pub(crate) fn validate_new_combo_order(command: &Command) -> Result<(), ComboCommandError> {
-    if !matches!(command.price_type, PriceType::Limit | PriceType::Market) {
+    if !matches!(
+        command.price_type,
+        PriceType::Limit | PriceType::Market | PriceType::AdvancedMarket
+    ) {
         return Err(ComboCommandError::UnsupportedPriceType {
             price_type: command.price_type,
         });

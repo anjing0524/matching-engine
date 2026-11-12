@@ -265,12 +265,7 @@ fn market_fak_fok_and_stop_orders_are_rejected_explicitly() {
 
     let mut advanced = combo_order(702, 1, 11, Side::Buy, 10, 5);
     advanced.price_type = PriceType::AdvancedMarket;
-    assert_eq!(
-        registry.execute_combo(advanced).unwrap_err(),
-        ComboCommandError::UnsupportedPriceType {
-            price_type: PriceType::AdvancedMarket,
-        }
-    );
+    assert!(registry.execute_combo(advanced).unwrap().is_empty());
 
     let mut fak = combo_order(703, 1, 11, Side::Buy, 10, 5);
     fak.time_condition = TimeCondition::Ioc;
@@ -561,4 +556,29 @@ fn market_combo_fills_at_resting_spread_without_resting() {
     let events = registry.execute_combo(market).unwrap();
     assert!(events.iter().any(|event| matches!(event, ComboEvent::Filled { fill } if fill.spread_price == 100 && fill.quantity == 1)));
     assert_eq!(registry.combo_book(10).unwrap().best_ask(), Some(100));
+}
+
+#[test]
+fn advanced_market_fills_within_protection_and_not_beyond() {
+    let mut registry = registry_with_pair();
+    registry
+        .execute_combo(combo_order(1, 1, 11, Side::Sell, 100, 1))
+        .unwrap();
+    let mut inside = combo_order(2, 2, 12, Side::Buy, 100, 1);
+    inside.price_type = PriceType::AdvancedMarket;
+    let events = registry.execute_combo(inside).unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ComboEvent::Filled { fill } if fill.spread_price == 100))
+    );
+    assert_eq!(registry.combo_book(10).unwrap().len(), 0);
+
+    registry
+        .execute_combo(combo_order(3, 1, 13, Side::Sell, 100, 1))
+        .unwrap();
+    let mut outside = combo_order(4, 2, 14, Side::Buy, 90, 1);
+    outside.price_type = PriceType::AdvancedMarket;
+    assert!(registry.execute_combo(outside).unwrap().is_empty());
+    assert_eq!(registry.combo_book(10).unwrap().len(), 1);
 }

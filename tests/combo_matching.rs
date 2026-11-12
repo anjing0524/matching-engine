@@ -316,11 +316,11 @@ fn failed_plans_leave_both_resting_combo_orders_unchanged() {
     let resting_order_id = rested_order_id(&rested);
 
     let mut market = combo_order(802, 2, 22, Side::Buy, 110, 5);
-    market.price_type = PriceType::AdvancedMarket;
+    market.time_condition = TimeCondition::Gis;
     assert_eq!(
         registry.execute_combo(market).unwrap_err(),
-        ComboCommandError::UnsupportedPriceType {
-            price_type: PriceType::AdvancedMarket,
+        ComboCommandError::UnsupportedTimeCondition {
+            time_condition: TimeCondition::Gis,
         }
     );
 
