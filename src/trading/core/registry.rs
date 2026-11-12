@@ -88,6 +88,11 @@ impl Error for RegistryError {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RegistrySnapshotError {
+    /// Snapshot carries an unknown trading phase code.
+    InvalidPhase {
+        /// Invalid phase code.
+        phase: u8,
+    },
     /// The snapshot listed one instrument id twice.
     DuplicateInstrument {
         /// Repeated instrument id.
@@ -303,6 +308,9 @@ impl Display for RegistrySnapshotError {
                 formatter,
                 "snapshot margin reservation {order_id} does not match its resting order"
             ),
+            Self::InvalidPhase { phase } => {
+                write!(formatter, "snapshot has invalid trading phase {phase}")
+            }
         }
     }
 }
@@ -350,6 +358,8 @@ pub struct RegistrySnapshot {
     /// Ordinary Contract events and Combo trades share this one monotonic
     /// domain; it advances when the registry drains public events.
     pub next_public_seq: u64,
+    /// Venue trading phase at snapshot time.
+    pub phase: u8,
 }
 
 /// Owns one ordinary Contract core per instrument id, the static Combo Pairs,
@@ -371,6 +381,7 @@ pub struct InstrumentRegistry {
     next_combo_order_id: u64,
     next_combo_private_seq: u64,
     next_public_seq: u64,
+    phase: crate::trading::core::public_events::TradingPhase,
 }
 
 impl InstrumentRegistry {
@@ -390,7 +401,13 @@ impl InstrumentRegistry {
             next_combo_order_id: 1,
             next_combo_private_seq: 1,
             next_public_seq: 1,
+            phase: crate::trading::core::public_events::TradingPhase::Continuous,
         }
+    }
+
+    /// Sets the venue trading phase used by combo admission.
+    pub fn set_phase(&mut self, phase: crate::trading::core::public_events::TradingPhase) {
+        self.phase = phase;
     }
 
     /// Registers one ordinary Contract with its book specification.
@@ -691,6 +708,7 @@ impl InstrumentRegistry {
             next_combo_order_id: self.next_combo_order_id,
             next_combo_private_seq: self.next_combo_private_seq,
             next_public_seq: self.next_public_seq,
+            phase: self.phase.code(),
         }
     }
 
@@ -718,6 +736,7 @@ impl InstrumentRegistry {
             next_combo_order_id,
             next_combo_private_seq,
             next_public_seq,
+            phase,
         } = snapshot;
 
         let mut instruments: U64MixMap<TradingCore> = U64MixMap::default();
@@ -889,6 +908,8 @@ impl InstrumentRegistry {
         self.next_combo_order_id = next_combo_order_id;
         self.next_combo_private_seq = next_combo_private_seq;
         self.next_public_seq = next_public_seq;
+        self.phase = crate::trading::core::public_events::TradingPhase::from_code(phase)
+            .ok_or(RegistrySnapshotError::InvalidPhase { phase })?;
         Ok(())
     }
 
@@ -1022,14 +1043,8 @@ impl InstrumentRegistry {
     }
 
     fn ensure_continuous_trading(&self) -> Result<(), ComboCommandError> {
-        let phase = self
-            .instruments
-            .values()
-            .next()
-            .map(TradingCore::phase)
-            .unwrap_or(crate::trading::core::public_events::TradingPhase::Continuous);
-        if phase != crate::trading::core::public_events::TradingPhase::Continuous {
-            return Err(ComboCommandError::OutsideContinuousTrading { phase });
+        if self.phase != crate::trading::core::public_events::TradingPhase::Continuous {
+            return Err(ComboCommandError::OutsideContinuousTrading { phase: self.phase });
         }
         Ok(())
     }
@@ -1672,6 +1687,12 @@ impl InstrumentRegistry {
                 }
             }
             CommandType::TimeTick | CommandType::Control => {
+                if command.command_type == CommandType::Control
+                    && let Some(phase) =
+                        crate::trading::core::public_events::TradingPhase::from_code(command.flags)
+                {
+                    self.phase = phase;
+                }
                 for core in self.instruments.values_mut() {
                     core.execute_with_plugins_into(command, plugin, out);
                 }

@@ -420,10 +420,7 @@ fn cancel_by_another_owner_is_rejected_without_mutating_book() {
 fn combo_new_order_is_rejected_outside_continuous_trading() {
     use trading_system_engine::trading::core::public_events::TradingPhase;
     let mut registry = registry_with_pair();
-    registry
-        .core_mut(1)
-        .unwrap()
-        .set_phase(TradingPhase::Break, 1);
+    registry.set_phase(TradingPhase::Break);
     let error = registry
         .execute_combo(combo_order(990, 1, 11, Side::Buy, 10, 5))
         .unwrap_err();
@@ -447,10 +444,7 @@ fn combo_cancel_is_rejected_outside_continuous_trading() {
         [ComboEvent::Rested { order }] => order.order_id,
         other => panic!("expected rested order, got {other:?}"),
     };
-    registry
-        .core_mut(1)
-        .unwrap()
-        .set_phase(TradingPhase::Break, 1);
+    registry.set_phase(TradingPhase::Break);
     let error = registry
         .execute_combo(cancel_order(order_id, 1))
         .unwrap_err();
