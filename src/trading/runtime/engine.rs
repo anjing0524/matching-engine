@@ -36,9 +36,12 @@ pub struct TradingSnapshot {
     pub combo: Option<ComboRuntimeSnapshot>,
     /// Registry-backed combo state for the single-process production path.
     pub registry: Option<RegistrySnapshot>,
+    /// Per-user private sequence and replay log.
+    #[serde(default)]
+    pub private: Option<crate::trading::gateway::private_replay::PrivateDownlinkSnapshot>,
 }
 
-const TRADING_SNAPSHOT_VERSION: u32 = 7;
+const TRADING_SNAPSHOT_VERSION: u32 = 8;
 
 impl TradingSnapshot {
     /// Writes a versioned, checksummed snapshot with atomic replacement.
@@ -253,11 +256,13 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
                 core: Some(runner.core().snapshot()),
                 combo: self.combo.as_ref().map(ComboRuntime::snapshot),
                 registry: None,
+                private: Some(self.gateway.private_snapshot()),
             },
             RuntimeCore::Registry(runner) => TradingSnapshot {
                 core: None,
                 combo: None,
                 registry: Some(runner.registry().snapshot()),
+                private: Some(self.gateway.private_snapshot()),
             },
         }
     }
@@ -279,7 +284,11 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
             core,
             combo,
             registry,
+            private,
         } = snapshot;
+        if let Some(private) = &private {
+            self.gateway.validate_private_snapshot(private)?;
+        }
         match &mut self.core {
             RuntimeCore::Core(runner) => {
                 let core = core.ok_or_else(|| "snapshot has no core state".to_string())?;
@@ -311,7 +320,11 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
                     .restore_snapshot(registry)
                     .map_err(|error| error.to_string())
             }
+        }?;
+        if let Some(private) = private {
+            self.gateway.restore_private_snapshot(private);
         }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -916,6 +929,7 @@ mod tests {
             core: Some(core.snapshot()),
             combo: None,
             registry: None,
+            private: None,
         };
         let path = std::env::temp_dir().join(format!(
             "trading-runtime-snapshot-{}.json",
@@ -1031,6 +1045,7 @@ mod tests {
             core: Some(runtime.core().snapshot()),
             combo: None,
             registry: None,
+            private: None,
         };
         assert!(runtime.restore_snapshot(snapshot).is_err());
         let _ = std::fs::remove_file(&path);
