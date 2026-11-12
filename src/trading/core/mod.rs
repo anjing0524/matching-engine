@@ -2,6 +2,7 @@
 
 pub mod auction;
 pub mod combo_book;
+pub mod combo_journal;
 pub mod combo_margin;
 pub mod combo_pair;
 pub mod kernel;

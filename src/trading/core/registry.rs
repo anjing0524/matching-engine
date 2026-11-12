@@ -376,10 +376,8 @@ pub struct InstrumentRegistry {
     margin_balances: U64MixMap<u64>,
     require_explicit_margin: bool,
     margin: ComboMarginLedger,
-    combo_private_events: Vec<ComboPrivateFill>,
-    combo_public_events: Vec<PublicEvent>,
+    combo_journal: crate::trading::core::combo_journal::ComboEventJournal,
     next_combo_order_id: u64,
-    next_combo_private_seq: u64,
     next_public_seq: u64,
     phase: crate::trading::core::public_events::TradingPhase,
 }
@@ -396,10 +394,8 @@ impl InstrumentRegistry {
             margin_balances: U64MixMap::default(),
             require_explicit_margin: false,
             margin: ComboMarginLedger::default(),
-            combo_private_events: Vec::new(),
-            combo_public_events: Vec::new(),
+            combo_journal: crate::trading::core::combo_journal::ComboEventJournal::new(),
             next_combo_order_id: 1,
-            next_combo_private_seq: 1,
             next_public_seq: 1,
             phase: crate::trading::core::public_events::TradingPhase::Continuous,
         }
@@ -582,19 +578,19 @@ impl InstrumentRegistry {
     /// in their Contract core's private sequence and are delivered separately.
     #[must_use]
     pub fn combo_private_events(&self) -> &[ComboPrivateFill] {
-        &self.combo_private_events
+        self.combo_journal.private()
     }
 
     /// Drains Combo Private Fills produced since the last drain.
     #[must_use]
     pub fn drain_combo_private_events(&mut self) -> Vec<ComboPrivateFill> {
-        std::mem::take(&mut self.combo_private_events)
+        self.combo_journal.drain_private()
     }
 
     /// Returns the Combo Private Fill sequence the next fill will receive.
     #[must_use]
     pub fn next_combo_private_seq(&self) -> u64 {
-        self.next_combo_private_seq
+        self.combo_journal.next_private_seq()
     }
 
     /// Drains ordinary private events from every Contract core.
@@ -630,7 +626,7 @@ impl InstrumentRegistry {
                 events.extend(core.drain_public_events());
             }
         }
-        events.append(&mut self.combo_public_events);
+        events.append(&mut self.combo_journal.drain_public());
         for event in &mut events {
             event.seq = self.next_public_seq;
             if event.event_type == PublicEventType::ComboTrade {
@@ -667,11 +663,7 @@ impl InstrumentRegistry {
     /// this scope.
     #[must_use]
     pub fn replay_combo_private_after(&self, last_private_seq: u64) -> Vec<ComboPrivateFill> {
-        self.combo_private_events
-            .iter()
-            .copied()
-            .filter(|fill| fill.seq > last_private_seq)
-            .collect()
+        self.combo_journal.replay_after(last_private_seq)
     }
 
     /// Captures registry-backed combo state for restart or a new process.
@@ -704,9 +696,9 @@ impl InstrumentRegistry {
             prior_settlements,
             combo_books,
             margin: self.margin.snapshot(),
-            combo_private_events: self.combo_private_events.clone(),
+            combo_private_events: self.combo_journal.private_snapshot().0,
             next_combo_order_id: self.next_combo_order_id,
-            next_combo_private_seq: self.next_combo_private_seq,
+            next_combo_private_seq: self.combo_journal.private_snapshot().1,
             next_public_seq: self.next_public_seq,
             phase: self.phase.code(),
         }
@@ -903,10 +895,9 @@ impl InstrumentRegistry {
         self.combo_books = combo_books;
         self.prior_settlements = prior_settlements;
         self.margin = margin;
-        self.combo_private_events = combo_private_events;
-        self.combo_public_events.clear();
+        self.combo_journal
+            .restore_private(combo_private_events, next_combo_private_seq);
         self.next_combo_order_id = next_combo_order_id;
-        self.next_combo_private_seq = next_combo_private_seq;
         self.next_public_seq = next_public_seq;
         self.phase = crate::trading::core::public_events::TradingPhase::from_code(phase)
             .ok_or(RegistrySnapshotError::InvalidPhase { phase })?;
@@ -1496,10 +1487,8 @@ impl InstrumentRegistry {
         side: Side,
         terms: ComboFillTerms,
     ) {
-        let seq = self.next_combo_private_seq;
-        self.next_combo_private_seq = self.next_combo_private_seq.saturating_add(1);
-        self.combo_private_events.push(ComboPrivateFill {
-            seq,
+        self.combo_journal.push_private(ComboPrivateFill {
+            seq: 0,
             pair_id: terms.pair_id,
             order_id,
             client_order_id: owner.client_order_id,
@@ -1521,7 +1510,7 @@ impl InstrumentRegistry {
     /// sequence when the event is drained, together with every ordinary
     /// Contract event.
     fn push_combo_public_trade(&mut self, terms: ComboTradeTerms, trading_ts_ns: u64) {
-        self.combo_public_events.push(PublicEvent {
+        self.combo_journal.push_public(PublicEvent {
             seq: 0,
             event_type: PublicEventType::ComboTrade,
             trading_ts_ns,
