@@ -206,3 +206,14 @@ fn pair_with_incompatible_leg_ticks_is_rejected() {
         }
     );
 }
+
+#[test]
+fn cross_product_pair_may_have_different_leg_ticks() {
+    let mut registry = InstrumentRegistry::new();
+    registry.register(1, spec("IF2501")).unwrap();
+    registry
+        .register(2, ContractSpec::new("IC2501", 2, 40_000, 70_000))
+        .unwrap();
+    let pair = ComboPair::new(10, 1, 2, 1, margin()).with_kind(ComboPairKind::CrossProduct);
+    registry.register_pair(pair).unwrap();
+}

@@ -19,7 +19,7 @@ use crate::trading::core::combo_margin::{
     ComboEntryMargin, ComboMarginError, ComboMarginFreeze, ComboMarginLedger, ComboMarginSnapshot,
     ComboMarginSnapshotError, LegMargin, LegMarginRate,
 };
-use crate::trading::core::combo_pair::{ComboLeg, ComboPair, ComboPairError};
+use crate::trading::core::combo_pair::{ComboLeg, ComboPair, ComboPairError, ComboPairKind};
 use crate::trading::core::kernel::{CoreEvent, TradingCore};
 use crate::trading::core::leg_liquidity::{
     ComboLegError, ComboLegExecution, LegExecutionContext, LegLiquidityError, LegLiquidityPlan,
@@ -1762,7 +1762,8 @@ fn validate_pair(
     let leg2_tick = instruments
         .get(&u64::from(pair.leg2_instrument_id))
         .map(|core| core.spec().tick_size);
-    if let (Some(leg1_tick), Some(leg2_tick)) = (leg1_tick, leg2_tick)
+    if pair.kind == ComboPairKind::CrossTerm
+        && let (Some(leg1_tick), Some(leg2_tick)) = (leg1_tick, leg2_tick)
         && leg1_tick != leg2_tick
     {
         return Err(ComboPairError::TickMismatch {
