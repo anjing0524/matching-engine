@@ -5,4 +5,6 @@
 //! discovery through [`crate::shared::collections::fast_bitmap::FastBitmap`].
 pub(crate) mod tick_based;
 
-pub use tick_based::{ContractSpec, MatchOutcome, OrderNode, RestingOrder, TickBasedOrderBook};
+pub use tick_based::{
+    ContractSpec, MatchOutcome, OrderNode, RestingFill, RestingOrder, TickBasedOrderBook,
+};

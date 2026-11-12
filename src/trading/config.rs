@@ -4,8 +4,15 @@
 //! Transport-specific objects are still constructed by the caller; this struct
 //! only validates and carries values.
 
+use crate::domain::orderbook::ContractSpec;
+use crate::trading::core::combo_pair::{ComboLeg, ComboPair, ComboPairError, ComboPairKind};
+use crate::trading::core::registry::{InstrumentRegistry, RegistryError};
 use crate::trading::market_data::MarketDataPublisher;
+use std::collections::{HashMap, HashSet};
+use std::error::Error;
+use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::io;
+use std::path::Path;
 use std::time::Duration;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,6 +103,410 @@ impl TradingConfig {
             _ => return Err("multicast_group and multicast_port must be set together"),
         }
         Ok(())
+    }
+}
+
+/// One ordinary Contract declared by the static combo venue configuration.
+///
+/// `product` and `month` are the exchange identifiers used to validate Combo
+/// Pair shape. They are required on every Contract that a pair names as a leg;
+/// a Contract used only by ordinary commands may omit them.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct ComboInstrumentConfig {
+    /// Wire instrument id used by ordinary commands and Combo Pair legs.
+    pub instrument_id: u32,
+    /// Contract symbol interned for public and private events.
+    pub symbol: String,
+    /// Minimum price increment.
+    pub tick_size: u64,
+    /// Lowest representable price.
+    pub min_price: u64,
+    /// Highest representable price.
+    pub max_price: u64,
+    /// Exchange product code shared by Contracts of the same futures product.
+    ///
+    /// Required when this Contract is a Combo Pair leg.
+    #[serde(default)]
+    pub product: Option<String>,
+    /// Contract month in exchange `YYMM` form, for example `2501`.
+    ///
+    /// Required when this Contract is a Combo Pair leg.
+    #[serde(default)]
+    pub month: Option<u32>,
+}
+
+/// Prior settlement price used to freeze leg margin at Combo Order entry.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct ComboSettlementConfig {
+    /// Ordinary Contract whose prior settlement is configured.
+    pub instrument_id: u32,
+    /// Prior settlement in price ticks.
+    pub price_ticks: u64,
+}
+
+/// One account's explicit available margin balance.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct ComboMarginBalance {
+    /// Account the balance belongs to.
+    pub user_id: u64,
+    /// Available margin in leg notional units.
+    pub balance: u64,
+}
+
+/// Static combo venue configuration loaded before the single-process runtime
+/// starts matching.
+///
+/// The configuration is fail-closed: a venue that declares at least one Combo
+/// Pair must also declare explicit account margin balances, and every
+/// unconfigured account is rejected at Combo Order entry instead of being
+/// treated as unlimited.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct ComboVenueConfig {
+    /// Ordinary Contracts in the venue.
+    #[serde(default)]
+    pub instruments: Vec<ComboInstrumentConfig>,
+    /// Static Combo Pairs over those Contracts.
+    #[serde(default)]
+    pub pairs: Vec<ComboPair>,
+    /// Prior settlements used for the combo entry margin estimate.
+    #[serde(default)]
+    pub prior_settlements: Vec<ComboSettlementConfig>,
+    /// Explicit account margin balances.
+    #[serde(default)]
+    pub margin_balances: Vec<ComboMarginBalance>,
+}
+
+impl ComboVenueConfig {
+    /// Parses a JSON configuration.
+    ///
+    /// # Errors
+    /// Returns a JSON or validation error.
+    pub fn from_json(json: &str) -> Result<Self, ComboVenueConfigError> {
+        let config: Self = serde_json::from_str(json).map_err(ComboVenueConfigError::Json)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Loads a JSON configuration from `path`.
+    ///
+    /// # Errors
+    /// Returns an I/O, JSON, or validation error.
+    pub fn load(path: &Path) -> Result<Self, ComboVenueConfigError> {
+        let json = std::fs::read_to_string(path).map_err(ComboVenueConfigError::Io)?;
+        Self::from_json(&json)
+    }
+
+    /// Validates cross-references and fail-closed margin configuration.
+    ///
+    /// # Errors
+    /// Returns the first inconsistency found.
+    pub fn validate(&self) -> Result<(), ComboVenueConfigError> {
+        for instrument in &self.instruments {
+            let reason = if instrument.tick_size == 0 {
+                Some("tick size must be positive")
+            } else if instrument.max_price <= instrument.min_price {
+                Some("max price must be above min price")
+            } else if !(instrument.max_price - instrument.min_price)
+                .is_multiple_of(instrument.tick_size)
+            {
+                Some("price range must be divisible by tick size")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                return Err(ComboVenueConfigError::InvalidInstrument {
+                    instrument_id: instrument.instrument_id,
+                    reason,
+                });
+            }
+        }
+        let mut instrument_ids = HashSet::new();
+        for instrument in &self.instruments {
+            if !instrument_ids.insert(instrument.instrument_id) {
+                return Err(ComboVenueConfigError::DuplicateInstrument {
+                    instrument_id: instrument.instrument_id,
+                });
+            }
+        }
+        let mut pair_ids = HashSet::new();
+        for pair in &self.pairs {
+            if !pair_ids.insert(pair.pair_id) {
+                return Err(ComboVenueConfigError::DuplicatePair {
+                    pair_id: pair.pair_id,
+                });
+            }
+        }
+        let instruments_by_id: HashMap<u32, &ComboInstrumentConfig> = self
+            .instruments
+            .iter()
+            .map(|instrument| (instrument.instrument_id, instrument))
+            .collect();
+        for pair in &self.pairs {
+            let leg1 = pair_leg_metadata(
+                &instruments_by_id,
+                pair.pair_id,
+                ComboLeg::First,
+                pair.leg1_instrument_id,
+            )?;
+            let leg2 = pair_leg_metadata(
+                &instruments_by_id,
+                pair.pair_id,
+                ComboLeg::Second,
+                pair.leg2_instrument_id,
+            )?;
+            let (Some((product1, month1)), Some((product2, month2))) = (leg1, leg2) else {
+                // An unknown leg is rejected when its pair is registered.
+                continue;
+            };
+            let reason = match pair.kind {
+                ComboPairKind::CrossTerm => {
+                    if product1 != product2 {
+                        Some("cross-term legs must belong to the same product")
+                    } else if month1 == month2 {
+                        Some("cross-term legs must have different months")
+                    } else {
+                        None
+                    }
+                }
+                ComboPairKind::CrossProduct => {
+                    if product1 == product2 {
+                        Some("cross-product legs must belong to different products")
+                    } else if month1 != month2 {
+                        Some("cross-product legs must have the same month")
+                    } else {
+                        None
+                    }
+                }
+            };
+            if let Some(reason) = reason {
+                return Err(ComboVenueConfigError::PairKindMismatch {
+                    pair_id: pair.pair_id,
+                    kind: pair.kind,
+                    reason,
+                });
+            }
+        }
+        let mut settlement_ids = HashSet::new();
+        for settlement in &self.prior_settlements {
+            if !settlement_ids.insert(settlement.instrument_id) {
+                return Err(ComboVenueConfigError::DuplicatePriorSettlement {
+                    instrument_id: settlement.instrument_id,
+                });
+            }
+        }
+        let mut balance_users = HashSet::new();
+        for balance in &self.margin_balances {
+            if !balance_users.insert(balance.user_id) {
+                return Err(ComboVenueConfigError::DuplicateMarginBalance {
+                    user_id: balance.user_id,
+                });
+            }
+        }
+        if !self.pairs.is_empty() && self.margin_balances.is_empty() {
+            return Err(ComboVenueConfigError::MissingMarginBalances);
+        }
+        Ok(())
+    }
+
+    /// Builds a registry from this configuration.
+    ///
+    /// Combo-enabled registries require an explicit balance for every account
+    /// that submits a Combo Order. Registrations are all-or-none: an error
+    /// leaves no partially configured registry with the caller.
+    ///
+    /// # Errors
+    /// Returns a validation, pair, or registry error.
+    pub fn build_registry(&self) -> Result<InstrumentRegistry, ComboVenueConfigError> {
+        self.validate()?;
+        let mut registry = InstrumentRegistry::new();
+        for instrument in &self.instruments {
+            let spec = ContractSpec::new(
+                &instrument.symbol,
+                instrument.tick_size,
+                instrument.min_price,
+                instrument.max_price,
+            );
+            registry
+                .register(instrument.instrument_id, spec)
+                .map_err(ComboVenueConfigError::Registry)?;
+        }
+        for pair in &self.pairs {
+            registry
+                .register_pair(*pair)
+                .map_err(ComboVenueConfigError::Pair)?;
+        }
+        for settlement in &self.prior_settlements {
+            registry
+                .set_prior_settlement(settlement.instrument_id, settlement.price_ticks)
+                .map_err(ComboVenueConfigError::Registry)?;
+        }
+        for balance in &self.margin_balances {
+            registry.set_margin_balance(balance.user_id, balance.balance);
+        }
+        registry.set_require_explicit_margin(!self.pairs.is_empty());
+        Ok(registry)
+    }
+}
+
+/// Returns a pair leg's product and month, or `None` when the leg instrument is
+/// not declared so pair registration can report the unknown instrument.
+fn pair_leg_metadata<'a>(
+    instruments: &HashMap<u32, &'a ComboInstrumentConfig>,
+    pair_id: u32,
+    leg: ComboLeg,
+    instrument_id: u32,
+) -> Result<Option<(&'a str, u32)>, ComboVenueConfigError> {
+    let Some(instrument) = instruments.get(&instrument_id) else {
+        return Ok(None);
+    };
+    let Some(product) = instrument
+        .product
+        .as_deref()
+        .filter(|product| !product.is_empty())
+    else {
+        return Err(ComboVenueConfigError::MissingPairLegMetadata {
+            pair_id,
+            leg,
+            instrument_id,
+        });
+    };
+    let Some(month) = instrument.month else {
+        return Err(ComboVenueConfigError::MissingPairLegMetadata {
+            pair_id,
+            leg,
+            instrument_id,
+        });
+    };
+    Ok(Some((product, month)))
+}
+
+/// Why a static combo venue configuration was rejected.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ComboVenueConfigError {
+    /// The configuration file could not be read.
+    Io(io::Error),
+    /// The configuration was not valid JSON or had the wrong shape.
+    Json(serde_json::Error),
+    /// One instrument declares an unusable Contract specification.
+    InvalidInstrument {
+        /// Instrument whose specification is unusable.
+        instrument_id: u32,
+        /// Static reason the specification is unusable.
+        reason: &'static str,
+    },
+    /// One instrument id appears twice.
+    DuplicateInstrument {
+        /// Repeated instrument id.
+        instrument_id: u32,
+    },
+    /// One pair id appears twice.
+    DuplicatePair {
+        /// Repeated pair id.
+        pair_id: u32,
+    },
+    /// A Combo Pair leg has no product or month metadata.
+    MissingPairLegMetadata {
+        /// Pair whose leg metadata is missing.
+        pair_id: u32,
+        /// Which leg lacks metadata.
+        leg: ComboLeg,
+        /// Instrument declared without product or month metadata.
+        instrument_id: u32,
+    },
+    /// A Combo Pair kind disagrees with its legs' product and month metadata.
+    PairKindMismatch {
+        /// Pair being validated.
+        pair_id: u32,
+        /// Declared pair classification.
+        kind: ComboPairKind,
+        /// Human-readable reason the legs do not match the kind.
+        reason: &'static str,
+    },
+    /// One instrument's prior settlement appears twice.
+    DuplicatePriorSettlement {
+        /// Repeated instrument id.
+        instrument_id: u32,
+    },
+    /// One account's margin balance appears twice.
+    DuplicateMarginBalance {
+        /// Repeated account id.
+        user_id: u64,
+    },
+    /// Combo Pairs were declared without any explicit account margin balance.
+    MissingMarginBalances,
+    /// A pair failed static validation when registered.
+    Pair(ComboPairError),
+    /// A registry registration failed.
+    Registry(RegistryError),
+}
+
+impl Display for ComboVenueConfigError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Self::Io(error) => Display::fmt(error, formatter),
+            Self::Json(error) => Display::fmt(error, formatter),
+            Self::InvalidInstrument {
+                instrument_id,
+                reason,
+            } => write!(
+                formatter,
+                "combo config instrument {instrument_id} is invalid: {reason}"
+            ),
+            Self::DuplicateInstrument { instrument_id } => {
+                write!(formatter, "combo config repeats instrument {instrument_id}")
+            }
+            Self::DuplicatePair { pair_id } => {
+                write!(formatter, "combo config repeats pair {pair_id}")
+            }
+            Self::MissingPairLegMetadata {
+                pair_id,
+                leg,
+                instrument_id,
+            } => write!(
+                formatter,
+                "combo config pair {pair_id} {leg} leg instrument {instrument_id} needs product and month metadata"
+            ),
+            Self::PairKindMismatch {
+                pair_id,
+                kind,
+                reason,
+            } => write!(
+                formatter,
+                "combo config pair {pair_id} is not a valid {kind}: {reason}"
+            ),
+            Self::DuplicatePriorSettlement { instrument_id } => write!(
+                formatter,
+                "combo config repeats prior settlement for instrument {instrument_id}"
+            ),
+            Self::DuplicateMarginBalance { user_id } => {
+                write!(
+                    formatter,
+                    "combo config repeats margin balance for user {user_id}"
+                )
+            }
+            Self::MissingMarginBalances => {
+                formatter.write_str("combo config defines pairs without explicit margin balances")
+            }
+            Self::Pair(error) => Display::fmt(error, formatter),
+            Self::Registry(error) => Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl Error for ComboVenueConfigError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Json(error) => Some(error),
+            Self::Pair(error) => Some(error),
+            Self::Registry(error) => Some(error),
+            _ => None,
+        }
     }
 }
 

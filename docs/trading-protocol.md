@@ -118,15 +118,20 @@ trade_id  = (epoch << 48) | trade_seq
 | 64 | 4 | `instrument_id` | 合约 |
 | 68 | 4 | `combo_id` | 组合 |
 | 72 | 4 | `session_id` | SessionSwitch/TimeTick 用 |
-| 76 | 1 | `event_type` | Rested/Canceled/Trade/TimeTick/SessionSwitch/AuctionResult |
+| 76 | 1 | `event_type` | Rested/Canceled/Trade/TimeTick/SessionSwitch/AuctionResult/ComboTrade |
 | 77 | 1 | `side` | 方向/主动方 |
 | 78 | 1 | `phase` | 交易节 |
 | 79 | 1 | `flags` | combo/synthetic 等 |
 | 80 | 2 | `reason_code` | cancel 原因 |
 | 82 | 2 | `reserved0` | 对齐 |
-| 84 | 44 | `reserved` | 对齐到 128B |
+| 88 | 4 | `pair_id` | ComboTrade 组合 pair |
+| 96 | 8 | `spread_price` | ComboTrade 成交价差 |
+| 104 | 8 | `leg1_price_ticks` | ComboTrade 第一腿价 |
+| 112 | 8 | `leg2_price_ticks` | ComboTrade 第二腿价 |
+| 120 | 8 | `reserved` | 对齐到 128B |
 
 - combo 成交发两条普通 leg event：leg1 order/trade，leg2 order/trade；带 `combo_id` 和 leg。
+- combo 成交同时发布一条 `ComboTrade` 价格统计事件：`pair_id`、成交价差、数量、两腿参考价；隐含单不发布订单事件。
 - TimeTick / SessionSwitch 用同一 slot，`instrument_id=0`。
 - 不发订单簿快照；下游自行构建。
 
@@ -190,7 +195,7 @@ health/flags
 gateway_seq      每 gateway 会话本地递增
 global_seq       middleware 全局递增，进入 command log
 private_seq      每 user/session 在 gateway downlink 分配，用于重连重发
-market_data_seq  core public 事件全局递增
+market_data_seq  venue public 事件全局递增（普通 core 事件与 ComboTrade 共用一个域）
 trade_seq        core 成交递增，派生 trade_id
 ```
 
@@ -198,6 +203,8 @@ trade_seq        core 成交递增，派生 trade_id
 - gateway downlink 把 core 与 combo 的 private effects 合并后统一编号；重连时
   `GatewayRuntime` 按同一个 `private_seq` 重发 core + combo 事件。
 - public gap 由 gateway 发 NACK，middleware 按 seq 补发。
+- ComboTrade 与同一 venue 的普通 core public 事件共用 `market_data_seq`，
+  不再单独编号；修复缓冲和 NACK 因此按同一序列补发。
 
 ## 9. 未决项
 

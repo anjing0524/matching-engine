@@ -127,6 +127,14 @@ M2 extends step 4 to implied-out:
 combo + one leg order -> derived other-leg order -> match against leg book
 ```
 
+## Direct combo execution price
+
+Two opposite base Combo Orders execute at the SHFE-style direct trade price:
+the median of the buy limit, the sell limit, and the last combo trade price on
+that pair. Before the first trade, use the midpoint of the two limits, rounded
+toward the resting order's limit (down for a buy taker, up for a sell taker).
+Every direct fill updates the pair's last combo trade price.
+
 ## Atomic fill plan
 
 For each candidate:
@@ -138,18 +146,18 @@ plan_buy_combo:
   available = min over both legs and price constraints
   fill = min(need, available)
   if fill == 0 -> no mutation
-  if M1 FOK-like requirement not present -> only full requested qty accepted
+  M1 GFD: consume `fill`, leave the remainder resting; no single-leg fill
 ```
 
-M1 has no partial fills. If the full requested quantity cannot be executed
-atomically, the combo order remains unchanged. A marketable combo order that
-cannot fully fill is rejected or remains resting according to its order
-semantics; it never partially fills.
+M1 permits partial combo fills over time: each fill consumes the same quantity
+from both legs, and the remainder stays resting. A single-leg fill is never
+produced. FOK-style all-or-none semantics are M2.
 
 On commit:
 
 1. remove/decrement both leg orders at their own prices
-2. update leg positions and frozen margin for leg owners
+2. update leg positions and frozen margin for leg owners, and apply the combo
+   owner's position on both leg Contracts
 3. emit ordinary leg fills
 4. emit one combo fill to the combo owner
 5. update combo price statistics
@@ -184,6 +192,19 @@ Contract:
 - combo has no position; positions and margin remain on leg Contracts
 - if either leg cannot reserve margin, the combo order is rejected atomically
 
+Prior settlement is venue state configured on the registry before matching; it
+is not a wire command. A leg without prior settlement freezes zero estimated
+margin, while actual trade-price margin still applies on fill.
+
+The private Combo Fill reports both leg prices. An implied-in fill reports the
+resting leg prices it consumed. A direct Combo Fill consumes no leg liquidity,
+so it reports the best crossing reference price on each leg, falling back to
+prior settlement and then zero; its spread remains the direct execution spread.
+
+Required margin for one account and leg is `max(long, short)` of the actual
+trade-price margin, never their sum. Frozen estimates are reported separately
+and are released as fills consume the order.
+
 Configuration supplies margin rates and limits; M1 does not auto-reload them at
 runtime.
 
@@ -191,19 +212,43 @@ runtime.
 
 - leg owner: ordinary `PrivateEvent` for its leg fill
 - combo owner: `ComboPrivateFill` with spread, leg prices, quantity
-- private sequence is per user and shared across core and combo effects
+- combo private fills carry a registry-owned private sequence; reconnect replay
+  must merge it with core per-contract sequences (#38)
 - snapshot stores combo orders, leg books/positions, margin reservations, and
   sequence state
 - reconnect replays private events after `last_private_seq`; combo effects are
   replayed only when a combo source exists
+
+## Runtime wiring (M1)
+
+The single-process production binary drives one `InstrumentRegistry` through
+`RegistryRunner`:
+
+- all commands enter the same middleware command ring; `combo_id != 0` is routed
+  to `InstrumentRegistry::execute_combo`, everything else to the ordinary
+  Contract core named by `instrument_id`
+- combo commands never create a second command ring or a second set of leg
+  books; the legacy `ComboEngine`/`ComboRuntime` path is not constructed by the
+  single-process binary
+- startup loads static pairs, prior settlements, and explicit account margin
+  balances from `ComboVenueConfig`; a pair config without balances is rejected
+- core private events and Combo Private Fills share one gateway per-user private
+  sequence, so reconnect replay is ordered across both sources
+- `TradingRuntime::snapshot()` stores `RegistrySnapshot`; restore is rejected
+  when the snapshot shape does not match the runtime command path
+- split deployment remains single-core and does not own combo execution
+  (ADR-0001); `CoreRunner` is retained for that path and for tests
 
 ## Market data
 
 M1:
 
 - public leg trades update leg price/volume/open-interest
-- combo trades update combo price statistics
-- no implied orders in public book
+- every combo trade publishes one `ComboTrade` price statistic carrying the
+  pair id, realized spread, quantity, and both leg reference prices
+- ComboTrade shares the venue public sequence with ordinary Contract events, so
+  a publisher or NACK tracker sees one monotonic stream
+- no implied orders in public book or public events
 - no combo order-book depth publication
 - no combo position
 
@@ -212,11 +257,15 @@ M1:
 M1 tests must cover:
 
 - cross-term and same-month cross-product pair config
+- explicit product/month metadata on every pair leg, with cross-term requiring
+  the same product and different months and cross-product requiring different
+  products in the same month
 - direct combo match
 - implied-in from two leg orders
 - atomic all-or-none failure when one leg is short
 - leg fills to both leg owners and combo fill to combo owner
 - base-order priority over implied at the same price
+- a resting combo order triggered by later ordinary leg liquidity
 - margin freeze/release/actual and single-side largest
 - snapshot/reconnect replay
 - unsupported FOK/FAK/market orders rejected

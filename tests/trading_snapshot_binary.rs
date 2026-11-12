@@ -5,8 +5,7 @@ use std::net::TcpStream;
 use std::process::{Command as ProcessCommand, Stdio};
 use std::time::Duration;
 use trading_system_engine::domain::orderbook::ContractSpec;
-use trading_system_engine::shared::SymbolId;
-use trading_system_engine::trading::core::TradingCore;
+use trading_system_engine::trading::core::InstrumentRegistry;
 use trading_system_engine::trading::core::protocol::{
     Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
     VolumeCondition,
@@ -39,10 +38,10 @@ fn binary_restores_runtime_snapshot() {
     std::fs::create_dir_all(&dir).unwrap();
     let snapshot_path = dir.join("runtime.json");
 
-    let mut core = TradingCore::new(
-        ContractSpec::new("BTCUSDT", 1, 1, 1_000_000),
-        SymbolId::intern("BTCUSDT"),
-    );
+    let mut registry = InstrumentRegistry::new();
+    registry
+        .register(1, ContractSpec::new("BTCUSDT", 1, 1, 1_000_000))
+        .unwrap();
     let mut existing = Command::zeroed();
     existing.command_type = CommandType::NewOrder;
     existing.client_order_id = 99;
@@ -56,10 +55,12 @@ fn binary_restores_runtime_snapshot() {
     existing.hedge = Hedge::Spec;
     existing.price_ticks = 60_000;
     existing.quantity = 1;
-    let _ = core.execute(existing);
+    let _ = registry.execute(existing);
     let snapshot = TradingSnapshot {
-        core: core.snapshot(),
+        core: None,
         combo: None,
+        registry: Some(registry.snapshot()),
+        private: None,
     };
     snapshot.save(&snapshot_path).unwrap();
 

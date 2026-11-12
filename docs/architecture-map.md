@@ -14,10 +14,10 @@ src/
     ├── core/               # kernel, auction, positions, plugins, events, protocol
     ├── gateway/            # frame, runtime, server, proxy, directory, auth, replay
     │                       # private_downlink: seq/replay/routing/batch delivery
-    ├── transport/          # SPSC ring, middleware, runner, session directory, logs
+    ├── transport/          # SPSC ring, middleware, CoreRunner/RegistryRunner, sessions, logs
     ├── market_data/        # publisher, tracker, repair, metrics
-    ├── combo/              # queue, engine, exec, runtime, market_data, margin
-    ├── snapshot/           # snapshot_file, replay
+    ├── combo/              # legacy ComboEngine/queue/exec/runtime, market_data
+    ├── snapshot/           # core and registry snapshot_file, replay
     └── runtime/            # engine composition, event fanout
 ```
 
@@ -32,24 +32,38 @@ GatewayRuntime ── thread-per-member accept/read + per-connection write lock
   │  Command (256B), globally sequenced by MiddlewareSequencer
   ▼
 shared-memory command ring
-  │
-  ▼
-CoreRunner → TradingCore
-  │  private events / public events
-  ▼
+  │  combo_id == 0                    combo_id != 0
+  ▼                                      ▼
+RegistryRunner ────────────────► InstrumentRegistry
+  │  ordinary Contract cores      │  Combo Pair books, shared leg cores,
+  │                               │  leg margin, combo private fills
+  │  private/public events        │
+  ▼                               ▼
 TradingRuntime
-  ├─ GatewayRuntime private downlink
+  ├─ GatewayRuntime private downlink (one per-user sequence for core + combo)
   ├─ EventFanout: result logs, repair buffer/server, market data
-  └─ ComboRuntime (optional)
+  └─ (optional legacy ComboRuntime, not used by the single-process binary)
 ```
 
 Key ownership rules:
 
-- `TradingCore` owns the book, active order metadata, positions, frozen
-  close, and auction staging. Combo queue/leg books live in `ComboEngine`. The
-  kernel has no sockets or file I/O.
-- `CoreRunner` drains commands and calls the kernel. `poll_events()` is the one
-  event projection; transport flushing is internal.
+- `TradingCore` owns one Contract book, active order metadata, positions,
+  frozen close, and auction staging. The kernel has no sockets or file I/O.
+- `InstrumentRegistry` owns one ordinary Contract core per instrument and one
+  base Combo Book per static Combo Pair. Legs are real Contracts, so combo
+  matching consumes the same books as ordinary orders. The registry also owns
+  static pair validation, leg margin reservations, and Combo Private Fills.
+- `RegistryRunner` is the production single-process command seam. It routes
+  `combo_id != 0` commands to `InstrumentRegistry::execute_combo` and all other
+  commands to the ordinary Contract core named by `instrument_id`. The runtime
+  composition root is `TradingRuntime::from_registry`.
+- `CoreRunner` remains the split-deployment (`trading-core`) and test seam over
+  one `TradingCore`. ADR-0001 keeps combo execution out of split deployment.
+  `TradingRuntime::new` and the legacy `ComboRuntime` are compatibility paths;
+  the single-process binary always builds `RegistryRunner`.
+- `poll_events()` is the one event projection for both runners. A registry
+  poll returns core private/public events plus Combo Private Fills; transport
+  flushing is internal.
 - `GatewayRuntime` owns per-connection state (`ConnectionState`). `PrivateDownlink`
   owns the single per-user private sequence, replay retention, session routing,
   and batched delivery for core and combo private effects. `apply_effects()`
@@ -96,7 +110,7 @@ the conditions under which a three-crate workspace would be justified.
 
 ## When adding a feature
 
-1. Keep trading as the only command path; do not reintroduce a second runtime.
+1. Keep one command path per deployment: `RegistryRunner` single-process, `CoreRunner` split; never run both in one process.
 2. Put business state in `TradingCore`; keep it deterministic and I/O-free.
 3. Put output delivery in `EventFanout` or GatewayRuntime.
 4. Add a test at the narrowest interface that can observe the change.

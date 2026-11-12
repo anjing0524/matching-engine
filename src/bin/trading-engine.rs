@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use trading_system_engine::domain::orderbook::ContractSpec;
 use trading_system_engine::shared::SymbolId;
+use trading_system_engine::trading::config::ComboVenueConfig;
+use trading_system_engine::trading::core::InstrumentRegistry;
 use trading_system_engine::trading::core::TradingCore;
 use trading_system_engine::trading::core::plugins::NoPlugins;
 use trading_system_engine::trading::gateway::directory::{GatewayDirectory, HealthMonitor};
@@ -17,10 +19,10 @@ use trading_system_engine::trading::gateway::server::start as start_gateway;
 use trading_system_engine::trading::market_data::MarketDataPublisher;
 use trading_system_engine::trading::market_data::metrics::TradingMetrics;
 use trading_system_engine::trading::market_data::metrics_server;
-use trading_system_engine::trading::runtime::{RuntimeOptions, TradingRuntime};
+use trading_system_engine::trading::runtime::{RuntimeOptions, TradingRuntime, TradingSnapshot};
 use trading_system_engine::trading::transport::create;
 use trading_system_engine::trading::transport::middleware::MiddlewareSequencer;
-use trading_system_engine::trading::transport::runner::CoreRunner;
+use trading_system_engine::trading::transport::runner::{CoreRunner, RegistryRunner};
 
 #[derive(Parser)]
 #[command(name = "trading", version, about = "Trading runtime")]
@@ -80,6 +82,15 @@ struct RunArgs {
     /// Optional full runtime snapshot to restore before serving.
     #[arg(long)]
     snapshot: Option<String>,
+    /// Static combo venue config (JSON); selects the registry runtime.
+    #[arg(long)]
+    combo_config: Option<String>,
+    /// Optional registry snapshot to restore before serving.
+    #[arg(long)]
+    registry_snapshot: Option<String>,
+    /// Write the full runtime snapshot here on exit.
+    #[arg(long)]
+    snapshot_out: Option<String>,
     /// Rotate accepted commands into this directory.
     #[arg(long)]
     command_log_dir: Option<String>,
@@ -99,15 +110,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
     let pid = std::process::id();
     let core_path = std::env::temp_dir().join(format!("trading-command-{pid}.ring"));
-    let combo_path = std::env::temp_dir().join(format!("trading-combo-{pid}.ring"));
-    for path in [&core_path, &combo_path] {
-        let _ = std::fs::remove_file(path);
-    }
+    let _ = std::fs::remove_file(&core_path);
     let (cmd_producer, cmd_consumer) = create(&core_path, 1 << 16)?;
-    let (combo_producer, _combo_consumer) = create(&combo_path, 1 << 12)?;
-
-    let mut middleware =
-        MiddlewareSequencer::new(cmd_producer).with_combo_transport(combo_producer);
+    let mut middleware = MiddlewareSequencer::new(cmd_producer);
     if let Some(path) = &args.command_log {
         middleware = middleware.with_command_log(std::path::Path::new(path))?;
     }
@@ -149,10 +154,6 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
         gateway_runtime = gateway_runtime.with_redirect_target(target);
     }
 
-    let spec = ContractSpec::new("BTCUSDT", 1, 1, 1_000_000);
-    let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
-    let runner = CoreRunner::new(core, cmd_consumer, NoPlugins);
-
     let metrics = Arc::new(Mutex::new(TradingMetrics::new()));
     let mut options = RuntimeOptions {
         metrics_sink: Some(Arc::clone(&metrics)),
@@ -186,11 +187,51 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
             args.multicast_interface.parse()?,
         )?);
     }
-    let mut runtime = TradingRuntime::new(gateway_runtime, runner, gateway).with_options(options);
-    if let Some(path) = &args.snapshot {
-        let snapshot = trading_system_engine::trading::runtime::TradingSnapshot::load(
-            std::path::Path::new(path),
-        )?;
+    let full_snapshot = args
+        .snapshot
+        .as_deref()
+        .map(|path| TradingSnapshot::load(std::path::Path::new(path)))
+        .transpose()?;
+    // The single-process production binary always uses the registry path so a
+    // non-zero combo id can never be treated as an ordinary order. The legacy
+    // single-core runner remains for split deployment and tests only.
+    // Production single-process always routes through the registry: without
+    // this, a non-zero combo id would fall through to the ordinary core.
+    let registry_mode = true;
+    let mut runtime = if registry_mode {
+        let mut registry = if let Some(path) = &args.combo_config {
+            ComboVenueConfig::load(std::path::Path::new(path))?.build_registry()?
+        } else {
+            let mut registry = InstrumentRegistry::new();
+            if args.registry_snapshot.is_none()
+                && !full_snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.registry.is_some())
+            {
+                registry
+                    .register(1, ContractSpec::new("BTCUSDT", 1, 1, 1_000_000))
+                    .expect("the default instrument spec is valid");
+            }
+            registry
+        };
+        if let Some(path) = &args.registry_snapshot {
+            let snapshot = trading_system_engine::trading::snapshot::registry::load(
+                std::path::Path::new(path),
+            )?;
+            registry.restore_snapshot(snapshot)?;
+            registry.set_require_explicit_margin(registry.pair_count() > 0);
+        }
+        let runner = RegistryRunner::new(registry, cmd_consumer, NoPlugins);
+        TradingRuntime::from_registry(gateway_runtime, runner, gateway).with_options(options)
+    } else {
+        let core = TradingCore::new(
+            ContractSpec::new("BTCUSDT", 1, 1, 1_000_000),
+            SymbolId::intern("BTCUSDT"),
+        );
+        let runner = CoreRunner::new(core, cmd_consumer, NoPlugins);
+        TradingRuntime::new(gateway_runtime, runner, gateway).with_options(options)
+    };
+    if let Some(snapshot) = full_snapshot {
         runtime.restore_snapshot(snapshot)?;
     }
 
@@ -215,12 +256,13 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
         std::hint::spin_loop();
     }
+    if let Some(path) = &args.snapshot_out {
+        runtime.snapshot().save(std::path::Path::new(path))?;
+    }
     metrics_server.stop();
     if let Some(monitor) = &mut health_monitor {
         monitor.stop();
     }
-    for path in [&core_path, &combo_path] {
-        let _ = std::fs::remove_file(path);
-    }
+    let _ = std::fs::remove_file(&core_path);
     Ok(())
 }

@@ -4,11 +4,13 @@
 //! through a static pre-trade plugin chain, and exposes the resulting private
 //! and public events. It is deliberately single-threaded and has no networking.
 
-use crate::trading::core::CoreSnapshot;
-use crate::trading::core::TradingCore;
+use crate::trading::core::combo_book::{ComboCommandError, ComboEvent, ComboPrivateFill};
 use crate::trading::core::plugins::PreTradePlugin;
-use crate::trading::core::private_events::PrivateEvent;
+use crate::trading::core::private_events::{PrivateEffect, PrivateEvent, PrivateStatus};
+use crate::trading::core::protocol::{Command, CommandType};
 use crate::trading::core::public_events::PublicEvent;
+use crate::trading::core::registry::{InstrumentRegistry, RegistrySnapshot, RegistrySnapshotError};
+use crate::trading::core::{CoreSnapshot, TradingCore};
 use crate::trading::transport::{
     CommandConsumer, CommandTransportError, PrivateEventProducer, PublicEventProducer,
 };
@@ -55,6 +57,15 @@ pub struct CoreEvents {
     pub private: Vec<PrivateEvent>,
     /// Public events produced by the poll.
     pub public: Vec<PublicEvent>,
+    /// Combo private fills produced by the poll.
+    ///
+    /// A plain [`CoreRunner`] has no combo source, so this is always empty.
+    pub combo_private: Vec<ComboPrivateFill>,
+    /// Ordered core/combo private effects for one per-user sequence.
+    ///
+    /// `RegistryRunner` fills this in command order; `CoreRunner` leaves it
+    /// empty and uses `private`.
+    pub ordered_private: Vec<PrivateEffect>,
 }
 
 /// Drains commands from a `CommandConsumer` and applies them to `TradingCore`.
@@ -163,6 +174,8 @@ impl<P: PreTradePlugin> CoreRunner<P> {
             commands,
             private,
             public,
+            combo_private: Vec::new(),
+            ordered_private: Vec::new(),
         }
     }
 
@@ -184,6 +197,204 @@ impl<P: PreTradePlugin> CoreRunner<P> {
     #[must_use]
     pub fn decode_errors(&self) -> u64 {
         self.decode_errors
+    }
+}
+
+/// Drains commands into an [`InstrumentRegistry`].
+///
+/// This is the single-process production command seam. Commands with a
+/// non-zero `combo_id` are routed to the registry's static Combo Pair book;
+/// every other command is routed to the ordinary Contract core named by
+/// `instrument_id`. Because both routes share one registry, combo matching
+/// consumes the same Contract books as ordinary leg orders and never starts a
+/// second combo engine.
+pub struct RegistryRunner<P> {
+    registry: InstrumentRegistry,
+    consumer: CommandConsumer,
+    plugin: P,
+    decode_errors: u64,
+}
+
+impl<P: PreTradePlugin> RegistryRunner<P> {
+    /// Creates a runner over an already configured registry.
+    ///
+    /// A registry with Combo Pairs fails closed: every account must have an
+    /// explicit margin balance before it can enter a Combo Order.
+    #[must_use]
+    pub fn new(mut registry: InstrumentRegistry, consumer: CommandConsumer, plugin: P) -> Self {
+        registry.set_require_explicit_margin(registry.pair_count() > 0);
+        Self {
+            registry,
+            consumer,
+            plugin,
+            decode_errors: 0,
+        }
+    }
+
+    /// Drains commands and returns core private/public and Combo Private effects.
+    ///
+    /// Combo command failures become ordinary private rejections, so a member
+    /// always learns that an unsupported combo order or cancel was refused.
+    #[must_use]
+    pub fn poll_events(&mut self) -> CoreEvents {
+        let mut commands = 0;
+        let mut ordered_private = Vec::new();
+        let mut core_private = Vec::new();
+        let mut combo_private = Vec::new();
+        while let Some(result) = self.consumer.recv() {
+            match result {
+                Ok(command) => {
+                    commands += 1;
+                    if command.combo_id != 0 {
+                        let mut statuses = Vec::new();
+                        self.execute_combo_command(command, &mut statuses);
+                        for status in statuses {
+                            ordered_private.push(PrivateEffect::Core(status.clone()));
+                            core_private.push(status);
+                        }
+                        for fill in self.registry.drain_combo_private_events() {
+                            ordered_private.push(PrivateEffect::Combo(fill));
+                            combo_private.push(fill);
+                        }
+                    } else {
+                        let _ = self
+                            .registry
+                            .execute_with_plugins_discard(command, &self.plugin);
+                        for event in self.registry.drain_private_events() {
+                            ordered_private.push(PrivateEffect::Core(event.clone()));
+                            core_private.push(event);
+                        }
+                        for fill in self.registry.drain_combo_private_events() {
+                            ordered_private.push(PrivateEffect::Combo(fill));
+                            combo_private.push(fill);
+                        }
+                    }
+                }
+                Err(_) => {
+                    self.decode_errors += 1;
+                }
+            }
+        }
+        if commands == 0 {
+            return CoreEvents {
+                commands,
+                private: Vec::new(),
+                public: Vec::new(),
+                combo_private: Vec::new(),
+                ordered_private: Vec::new(),
+            };
+        }
+        CoreEvents {
+            commands,
+            private: core_private,
+            public: self.registry.drain_public_events(),
+            combo_private,
+            ordered_private,
+        }
+    }
+
+    fn execute_combo_command(&mut self, command: Command, statuses: &mut Vec<PrivateEvent>) {
+        let next_order_id = self.registry.next_combo_order_id();
+        match self.registry.execute_combo(command) {
+            Ok(events) => {
+                if command.command_type == CommandType::Cancel {
+                    if let Some(ComboEvent::Canceled { order }) = events.first() {
+                        statuses.push(PrivateEvent {
+                            seq: 0,
+                            order_id: order.order_id,
+                            client_order_id: order.owner.client_order_id,
+                            account_id: order.owner.user_id,
+                            status: PrivateStatus::Canceled,
+                            filled_delta: 0,
+                            remaining: 0,
+                            reason: None,
+                        });
+                    }
+                    return;
+                }
+                let filled = taker_filled_quantity(next_order_id, &events);
+                statuses.push(PrivateEvent {
+                    seq: 0,
+                    order_id: next_order_id,
+                    client_order_id: command.client_order_id,
+                    account_id: u64::from(command.user_id),
+                    status: PrivateStatus::Accepted,
+                    filled_delta: 0,
+                    remaining: command.quantity.saturating_sub(filled),
+                    reason: None,
+                });
+            }
+            Err(error) => {
+                statuses.push(combo_rejection(command, error));
+            }
+        }
+    }
+
+    /// Restores registry-backed combo state without exposing the registry.
+    ///
+    /// # Errors
+    /// Returns the registry's fail-closed snapshot error.
+    pub fn restore_snapshot(
+        &mut self,
+        snapshot: RegistrySnapshot,
+    ) -> Result<(), RegistrySnapshotError> {
+        self.registry.restore_snapshot(snapshot)?;
+        // A restored venue with Combo Pairs fails closed: balances are
+        // configuration and are not carried by the snapshot, so every account
+        // must be configured explicitly before it can enter a Combo Order.
+        self.registry
+            .set_require_explicit_margin(self.registry.pair_count() > 0);
+        Ok(())
+    }
+
+    /// Looks up the registry for startup configuration and state inspection.
+    #[must_use]
+    pub fn registry(&self) -> &InstrumentRegistry {
+        &self.registry
+    }
+
+    /// Mutable registry access for startup configuration.
+    pub fn registry_mut(&mut self) -> &mut InstrumentRegistry {
+        &mut self.registry
+    }
+
+    /// Returns the number of commands that failed to decode.
+    #[must_use]
+    pub fn decode_errors(&self) -> u64 {
+        self.decode_errors
+    }
+}
+
+fn taker_filled_quantity(order_id: u64, events: &[ComboEvent]) -> u64 {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            ComboEvent::Filled { fill }
+                if fill.buy_order_id == order_id || fill.sell_order_id == order_id =>
+            {
+                Some(fill.quantity)
+            }
+            ComboEvent::ImpliedFilled { fill } if fill.order_id == order_id => Some(fill.quantity),
+            _ => None,
+        })
+        .sum()
+}
+
+fn combo_rejection(command: Command, error: ComboCommandError) -> PrivateEvent {
+    let order_id = if command.command_type == CommandType::Cancel {
+        command.cancel_order_id
+    } else {
+        command.client_order_id
+    };
+    PrivateEvent {
+        seq: 0,
+        order_id,
+        client_order_id: command.client_order_id,
+        account_id: u64::from(command.user_id),
+        status: PrivateStatus::Rejected,
+        filled_delta: 0,
+        remaining: 0,
+        reason: Some(error.to_string()),
     }
 }
 

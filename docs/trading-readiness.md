@@ -61,8 +61,8 @@ Status reflects the current gateway/middleware/core slices in this repository.
 - [x] Core is a single failure domain; no consensus/leader election
 - [x] In-memory core snapshot for continuous book and business state
 - [x] Versioned JSON snapshot with atomic file replacement
-- [x] Snapshot includes auction staging; ComboEngine snapshot covers combo state
-- [x] ComboEngine snapshot covers queue, leg books, positions, and margin
+- [x] Snapshot includes auction staging; RegistrySnapshot covers production combo state
+- [x] RegistrySnapshot covers pairs, combo books, shared leg books/positions, margin, private sequence, and the one venue public sequence
 - [x] Full TradingSnapshot with version/CRC and `trading-engine run --snapshot`
 - [x] CRC32 checksum over snapshot payload
 - [x] Replay-from-snapshot helper and deterministic test

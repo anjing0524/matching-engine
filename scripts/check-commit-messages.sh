@@ -19,12 +19,11 @@ fi
 pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?!?: .+'
 failed=0
 while IFS= read -r subject; do
-  [[ "$subject" == Merge* ]] && continue
   if [[ ! "$subject" =~ $pattern ]]; then
     echo "invalid commit subject: $subject" >&2
     failed=1
   fi
-done < <(git log --format=%s "$range")
+done < <(git log --no-merges --format=%s "$range")
 if (( failed )); then
   echo "commit messages must follow Conventional Commits" >&2
   exit 1

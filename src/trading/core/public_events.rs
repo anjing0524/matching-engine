@@ -12,6 +12,12 @@ pub enum PublicEventType {
     OrderRested,
     OrderCanceled,
     Trade,
+    /// One atomic Combo Fill's price statistics on a Combo Pair.
+    ///
+    /// The event carries the pair id and realized spread instead of a Contract
+    /// instrument. Implied orders are derived matching candidates and never
+    /// receive this or any other public order event.
+    ComboTrade,
     AuctionResult,
     SessionSwitch,
 }
@@ -52,6 +58,11 @@ impl TradingPhase {
 }
 
 /// One public event in market-data sequence order.
+///
+/// Contract-scoped events use [`Self::instrument_id`]; a
+/// [`PublicEventType::ComboTrade`] uses [`Self::pair_id`] and carries the
+/// realized spread plus both leg reference prices. Fields that do not apply to
+/// an event kind are zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PublicEvent {
     pub seq: u64,
@@ -59,6 +70,8 @@ pub struct PublicEvent {
     pub trading_ts_ns: u64,
     pub phase: u8,
     pub instrument_id: u32,
+    /// Combo Pair for [`PublicEventType::ComboTrade`]; zero otherwise.
+    pub pair_id: u32,
     pub order_id: u64,
     pub trade_id: u64,
     pub buy_order_id: u64,
@@ -67,4 +80,10 @@ pub struct PublicEvent {
     pub price_ticks: u64,
     pub quantity: u64,
     pub volume: u64,
+    /// Realized spread of a [`PublicEventType::ComboTrade`]; zero otherwise.
+    pub spread_price: i64,
+    /// First-leg reference price of a Combo trade; zero otherwise.
+    pub leg1_price_ticks: u64,
+    /// Second-leg reference price of a Combo trade; zero otherwise.
+    pub leg2_price_ticks: u64,
 }

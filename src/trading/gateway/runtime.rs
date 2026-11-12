@@ -5,13 +5,14 @@
 //! ring. Private downlink is a later slice.
 
 use crate::shared::collections::{U64MixMap, U64MixSet};
-use crate::trading::combo::engine::ComboPrivateFill;
+use crate::trading::core::combo_book::ComboPrivateFill;
+use crate::trading::core::private_events::PrivateEffect;
 #[cfg(test)]
 use crate::trading::core::private_events::PrivateEvent;
 use crate::trading::gateway::GatewayFrame;
 use crate::trading::gateway::auth::GatewayCredentials;
 use crate::trading::gateway::private_downlink::PrivateDownlink;
-use crate::trading::gateway::private_replay::ReplayEvent;
+use crate::trading::gateway::private_replay::PrivateDownlinkSnapshot;
 use crate::trading::gateway::rate_limit::TokenBucket;
 use crate::trading::gateway::server::{GatewayEvent, GatewayServerHandle};
 use crate::trading::gateway::session_policy::SessionPolicy;
@@ -25,7 +26,7 @@ struct ConnectionState {
     last_seen: Instant,
     bucket: Option<TokenBucket>,
     /// Already seq-ordered core/combo replay queue for this connection.
-    replay: Vec<ReplayEvent>,
+    replay: Vec<PrivateEffect>,
     redirect: Option<String>,
 }
 
@@ -47,7 +48,7 @@ pub(crate) struct GatewayEffects {
     /// Connections that must receive a redirect.
     pub redirects: Vec<(u64, String)>,
     /// Replay batches keyed by connection id.
-    pub replays: Vec<(u64, Vec<ReplayEvent>)>,
+    pub replays: Vec<(u64, Vec<PrivateEffect>)>,
 }
 
 /// Counts returned after one gateway effect application.
@@ -198,8 +199,8 @@ impl GatewayRuntime {
         for (connection_id, events) in effects.replays {
             for event in events {
                 let frame = match event {
-                    ReplayEvent::Core(event) => GatewayFrame::PrivateEvent(event),
-                    ReplayEvent::Combo(fill) => GatewayFrame::ComboPrivate(fill),
+                    PrivateEffect::Core(event) => GatewayFrame::PrivateEvent(event),
+                    PrivateEffect::Combo(fill) => GatewayFrame::ComboPrivate(fill),
                 };
                 if server.send(connection_id, frame).is_ok() {
                     replays += 1;
@@ -361,7 +362,7 @@ impl GatewayRuntime {
 
     /// Drains core and combo replay batches in per-user sequence order.
     #[must_use]
-    pub(crate) fn take_replay_batches(&mut self) -> Vec<(u64, Vec<ReplayEvent>)> {
+    pub(crate) fn take_replay_batches(&mut self) -> Vec<(u64, Vec<PrivateEffect>)> {
         let mut batches = Vec::new();
         for connection_id in self.replay_pending.iter().copied().collect::<Vec<_>>() {
             let Some(state) = self.connections.get_mut(&connection_id) else {
@@ -371,7 +372,7 @@ impl GatewayRuntime {
                 continue;
             }
             let mut events = std::mem::take(&mut state.replay);
-            events.sort_by_key(ReplayEvent::seq);
+            events.sort_by_key(PrivateEffect::seq);
             batches.push((connection_id, events));
         }
         self.replay_pending.clear();
@@ -396,6 +397,43 @@ impl GatewayRuntime {
     ) -> usize {
         self.downlink
             .dispatch_combo_private(self.middleware.sessions(), server, fills)
+    }
+
+    /// Routes an ordered core/combo effect stream through one per-user
+    /// private sequence.
+    pub fn dispatch_private_effects(
+        &mut self,
+        server: &GatewayServerHandle,
+        effects: impl IntoIterator<Item = PrivateEffect>,
+    ) -> usize {
+        self.downlink
+            .dispatch_events(self.middleware.sessions(), server, effects)
+    }
+
+    /// Captures the per-user private sequence and replay log.
+    #[must_use]
+    pub(crate) fn private_snapshot(&self) -> PrivateDownlinkSnapshot {
+        self.downlink.snapshot()
+    }
+
+    /// Validates a private stream snapshot without mutating the gateway.
+    ///
+    /// # Errors
+    /// Returns a reason when the snapshot is internally inconsistent or does not
+    /// fit this gateway's replay capacity.
+    pub(crate) fn validate_private_snapshot(
+        &self,
+        snapshot: &PrivateDownlinkSnapshot,
+    ) -> Result<(), String> {
+        self.downlink.validate_snapshot(snapshot)
+    }
+
+    /// Replaces the per-user private sequence and replay log.
+    ///
+    /// The caller must validate the snapshot first and must not have active
+    /// sessions.
+    pub(crate) fn restore_private_snapshot(&mut self, snapshot: PrivateDownlinkSnapshot) {
+        self.downlink.restore_snapshot(snapshot);
     }
 
     #[must_use]
@@ -467,7 +505,7 @@ mod tests {
 
     #[test]
     fn combo_private_fill_routes_to_logged_in_gateway() {
-        use crate::trading::combo::engine::ComboPrivateFill;
+        use crate::trading::core::combo_book::ComboPrivateFill;
         use crate::trading::core::protocol::Side;
         use std::io::Read;
 
@@ -508,13 +546,16 @@ mod tests {
         }
         let fill = ComboPrivateFill {
             seq: 1,
+            pair_id: 10,
             order_id: 2,
+            client_order_id: 20,
             user_id: 2,
+            session_id: 1,
             side: Side::Buy,
             quantity: 5,
-            leg1_price: 50_000,
-            leg2_price: 100,
-            spread_ticks: 49_900,
+            spread_price: 49_900,
+            leg1_price_ticks: 50_000,
+            leg2_price_ticks: 100,
         };
         assert_eq!(runtime.dispatch_combo_private(&server, [fill]), 1);
         let mut frame = [0u8; crate::trading::gateway::GATEWAY_FRAME_SIZE];
@@ -529,8 +570,7 @@ mod tests {
 
     #[test]
     fn apply_effects_replays_core_and_combo_in_order() {
-        use crate::trading::combo::engine::ComboPrivateFill;
-        use crate::trading::gateway::private_replay::ReplayEvent;
+        use crate::trading::core::combo_book::ComboPrivateFill;
 
         let path = std::env::temp_dir().join(format!(
             "trading-system-engine-gateway-effect-replay-{}",
@@ -579,16 +619,19 @@ mod tests {
         };
         let combo = ComboPrivateFill {
             seq: 2,
+            pair_id: 10,
             order_id: 2,
+            client_order_id: 20,
             user_id: 2,
+            session_id: 1,
             side: Side::Buy,
             quantity: 1,
-            leg1_price: 50_000,
-            leg2_price: 100,
-            spread_ticks: 49_900,
+            spread_price: 49_900,
+            leg1_price_ticks: 50_000,
+            leg2_price_ticks: 100,
         };
         let state = runtime.connections.get_mut(&1).unwrap();
-        state.replay = vec![ReplayEvent::Core(core), ReplayEvent::Combo(combo)];
+        state.replay = vec![PrivateEffect::Core(core), PrivateEffect::Combo(combo)];
         runtime.replay_pending.insert(1);
         let effects = runtime.apply_effects(&server, None);
         assert_eq!(effects.replays, 2);
@@ -612,22 +655,17 @@ mod tests {
     fn replay_capacity_evicts_oldest() {
         // Capacity is exercised through the replay buffer directly; the gateway
         // only wires the value through.
-        let mut buffer = crate::trading::gateway::private_replay::PrivateReplayBuffer::new(1);
-        let event = |seq| PrivateEvent {
-            seq,
-            order_id: seq,
-            client_order_id: seq,
-            account_id: 2,
-            status: crate::trading::core::private_events::PrivateStatus::Accepted,
-            filled_delta: 0,
-            remaining: 1,
-            reason: None,
+        let mut buffer = crate::trading::gateway::private_replay::ReplayBuffer::new(1);
+        let event = |seq| {
+            let mut effect = core_effect(2, seq);
+            effect.seq = seq;
+            PrivateEffect::Core(effect)
         };
         buffer.push(2, event(1));
         buffer.push(2, event(2));
         let replay = buffer.replay(2, 0);
         assert_eq!(replay.len(), 1);
-        assert_eq!(replay[0].seq, 2);
+        assert_eq!(replay[0].seq(), 2);
     }
 
     #[test]
@@ -1124,10 +1162,9 @@ mod tests {
 
     #[test]
     fn replay_merges_core_and_combo_sequences() {
-        use crate::trading::combo::engine::ComboPrivateFill;
+        use crate::trading::core::combo_book::ComboPrivateFill;
         use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
         use crate::trading::core::protocol::Side;
-        use crate::trading::gateway::private_replay::ReplayEvent;
 
         let path = std::env::temp_dir().join(format!(
             "trading-system-engine-gateway-combo-replay-{}",
@@ -1175,13 +1212,16 @@ mod tests {
         };
         let combo = ComboPrivateFill {
             seq: 99,
+            pair_id: 10,
             order_id: 2,
+            client_order_id: 20,
             user_id: 2,
+            session_id: 1,
             side: Side::Buy,
             quantity: 1,
-            leg1_price: 50_000,
-            leg2_price: 100,
-            spread_ticks: 49_900,
+            spread_price: 49_900,
+            leg1_price_ticks: 50_000,
+            leg2_price_ticks: 100,
         };
         assert_eq!(runtime.dispatch_private(&server, [core]), 1);
         assert_eq!(runtime.dispatch_combo_private(&server, [combo]), 1);
@@ -1232,9 +1272,207 @@ mod tests {
         assert_eq!(replay.len(), 2);
         assert_eq!(replay[0].seq(), 1);
         assert_eq!(replay[1].seq(), 2);
-        assert!(matches!(replay[0], ReplayEvent::Core(_)));
-        assert!(matches!(replay[1], ReplayEvent::Combo(_)));
+        assert!(matches!(replay[0], PrivateEffect::Core(_)));
+        assert!(matches!(replay[1], PrivateEffect::Combo(_)));
         server.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn core_effect(
+        account_id: u64,
+        order_id: u64,
+    ) -> crate::trading::core::private_events::PrivateEvent {
+        crate::trading::core::private_events::PrivateEvent {
+            seq: 0,
+            order_id,
+            client_order_id: order_id,
+            account_id,
+            status: crate::trading::core::private_events::PrivateStatus::Accepted,
+            filled_delta: 0,
+            remaining: 1,
+            reason: None,
+        }
+    }
+
+    fn combo_effect(user_id: u64) -> ComboPrivateFill {
+        ComboPrivateFill {
+            seq: 0,
+            pair_id: 10,
+            order_id: 100,
+            client_order_id: 100,
+            user_id,
+            session_id: 1,
+            side: crate::trading::core::protocol::Side::Buy,
+            quantity: 1,
+            spread_price: 49_900,
+            leg1_price_ticks: 50_000,
+            leg2_price_ticks: 100,
+        }
+    }
+
+    fn login_user(runtime: &mut GatewayRuntime, stream: &mut TcpStream, last_private_seq: u64) {
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    auth_token: 0,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.poll();
+            if runtime
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_some()
+            {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        panic!("login did not become active");
+    }
+
+    #[test]
+    fn private_stream_snapshot_restores_sequence_and_replay_order() {
+        use crate::trading::core::private_events::PrivateEffect;
+
+        let path = std::env::temp_dir().join(format!(
+            "trading-system-engine-gateway-private-snapshot-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let mut gateway = GatewayRuntime::new(middleware, events);
+        let mut stream = TcpStream::connect(server.addr()).unwrap();
+        login_user(&mut gateway, &mut stream, 0);
+
+        assert_eq!(
+            gateway.dispatch_private_effects(
+                &server,
+                [
+                    PrivateEffect::Core(core_effect(2, 1)),
+                    PrivateEffect::Combo(combo_effect(2)),
+                ],
+            ),
+            2
+        );
+        let stream_snapshot = gateway.private_snapshot();
+        assert_eq!(stream_snapshot.next_private_seq, vec![(2, 3)]);
+        assert_eq!(stream_snapshot.replay.len(), 1);
+        assert_eq!(stream_snapshot.replay[0].0, 2);
+        assert_eq!(
+            stream_snapshot.replay[0]
+                .1
+                .iter()
+                .map(PrivateEffect::seq)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert!(matches!(
+            stream_snapshot.replay[0].1[0],
+            PrivateEffect::Core(_)
+        ));
+        assert!(matches!(
+            stream_snapshot.replay[0].1[1],
+            PrivateEffect::Combo(_)
+        ));
+        server.stop();
+
+        // A fresh process restores the sequence and the retained replay log.
+        let path = std::env::temp_dir().join(format!(
+            "trading-system-engine-gateway-private-restore-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (mut server, events) = start("127.0.0.1:0").unwrap();
+        let mut restored = GatewayRuntime::new(middleware, events);
+        restored
+            .validate_private_snapshot(&stream_snapshot)
+            .unwrap();
+        restored.restore_private_snapshot(stream_snapshot);
+
+        let mut stream = TcpStream::connect(server.addr()).unwrap();
+        login_user(&mut restored, &mut stream, 1);
+        let replay = restored
+            .take_replay_batches()
+            .into_iter()
+            .next()
+            .map(|(_, events)| events)
+            .expect("restored replay batch");
+        assert_eq!(replay.len(), 1);
+        assert_eq!(replay[0].seq(), 2);
+        assert!(matches!(replay[0], PrivateEffect::Combo(_)));
+
+        assert_eq!(
+            restored.dispatch_private_effects(&server, [PrivateEffect::Core(core_effect(2, 2))]),
+            1
+        );
+        let snapshot = restored.private_snapshot();
+        assert_eq!(snapshot.next_private_seq, vec![(2, 4)]);
+        assert_eq!(
+            snapshot.replay[0]
+                .1
+                .iter()
+                .map(PrivateEffect::seq)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        server.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn private_stream_restore_rejects_inconsistent_snapshot() {
+        use crate::trading::core::private_events::PrivateEffect;
+        use crate::trading::gateway::private_replay::PrivateDownlinkSnapshot;
+
+        let path = std::env::temp_dir().join(format!(
+            "trading-system-engine-gateway-private-invalid-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, _consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (_server, events) = start("127.0.0.1:0").unwrap();
+        let gateway = GatewayRuntime::with_replay_capacity(middleware, events, 1);
+
+        let core_one = || {
+            let mut event = core_effect(2, 1);
+            event.seq = 1;
+            PrivateEffect::Core(event)
+        };
+        let combo_two = || {
+            let mut fill = combo_effect(2);
+            fill.seq = 2;
+            PrivateEffect::Combo(fill)
+        };
+        let mut snapshot = PrivateDownlinkSnapshot {
+            next_private_seq: vec![(2, 3)],
+            replay: vec![(2, vec![core_one(), combo_two()])],
+        };
+        assert!(gateway.validate_private_snapshot(&snapshot).is_err());
+
+        snapshot.replay = vec![(2, vec![core_one()])];
+        snapshot.next_private_seq = vec![(2, 1)];
+        assert!(gateway.validate_private_snapshot(&snapshot).is_err());
+
+        snapshot.next_private_seq = vec![(2, 2), (2, 3)];
+        assert!(gateway.validate_private_snapshot(&snapshot).is_err());
+
+        snapshot.next_private_seq = vec![(2, 2)];
+        snapshot.replay = vec![(3, vec![core_one()])];
+        assert!(gateway.validate_private_snapshot(&snapshot).is_err());
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1523,7 +1761,7 @@ mod tests {
         };
         for id in 1..=64_000u64 {
             if let Some(state) = runtime.connections.get_mut(&id) {
-                state.replay = vec![ReplayEvent::Core(event.clone())];
+                state.replay = vec![PrivateEffect::Core(event.clone())];
             }
             runtime.replay_pending.insert(id);
         }

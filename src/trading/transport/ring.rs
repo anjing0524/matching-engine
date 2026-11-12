@@ -202,6 +202,7 @@ pub(crate) fn encode_public_event(event: &PublicEvent) -> [u8; PUBLIC_EVENT_SLOT
         PublicEventType::Trade => 4,
         PublicEventType::AuctionResult => 5,
         PublicEventType::SessionSwitch => 6,
+        PublicEventType::ComboTrade => 7,
     };
     out[13] = event.phase;
     out[14] = match event.side {
@@ -218,6 +219,10 @@ pub(crate) fn encode_public_event(event: &PublicEvent) -> [u8; PUBLIC_EVENT_SLOT
     out[64..72].copy_from_slice(&event.price_ticks.to_le_bytes());
     out[72..80].copy_from_slice(&event.quantity.to_le_bytes());
     out[80..88].copy_from_slice(&event.volume.to_le_bytes());
+    out[88..92].copy_from_slice(&event.pair_id.to_le_bytes());
+    out[96..104].copy_from_slice(&event.spread_price.to_le_bytes());
+    out[104..112].copy_from_slice(&event.leg1_price_ticks.to_le_bytes());
+    out[112..120].copy_from_slice(&event.leg2_price_ticks.to_le_bytes());
     out
 }
 
@@ -238,6 +243,7 @@ pub(crate) fn decode_public_event(
         4 => PublicEventType::Trade,
         5 => PublicEventType::AuctionResult,
         6 => PublicEventType::SessionSwitch,
+        7 => PublicEventType::ComboTrade,
         value => {
             return Err(ProtocolError {
                 field: "public_event_type",
@@ -270,6 +276,10 @@ pub(crate) fn decode_public_event(
         price_ticks: u64::from_le_bytes(slot[64..72].try_into().expect("8 bytes")),
         quantity: u64::from_le_bytes(slot[72..80].try_into().expect("8 bytes")),
         volume: u64::from_le_bytes(slot[80..88].try_into().expect("8 bytes")),
+        pair_id: u32::from_le_bytes(slot[88..92].try_into().expect("4 bytes")),
+        spread_price: i64::from_le_bytes(slot[96..104].try_into().expect("8 bytes")),
+        leg1_price_ticks: u64::from_le_bytes(slot[104..112].try_into().expect("8 bytes")),
+        leg2_price_ticks: u64::from_le_bytes(slot[112..120].try_into().expect("8 bytes")),
     })
 }
 
@@ -503,6 +513,42 @@ mod tests {
             price_ticks: 50_000,
             quantity: 9,
             volume: 0,
+            pair_id: 0,
+            spread_price: 0,
+            leg1_price_ticks: 0,
+            leg2_price_ticks: 0,
+        };
+        producer.send(&event).unwrap();
+        assert_eq!(consumer.recv().unwrap().unwrap(), event);
+        assert!(consumer.recv().is_none());
+        drop(producer);
+        drop(consumer);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn combo_trade_public_event_roundtrips_negative_spread() {
+        let path = temp_path("combo-public-events");
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create_public_event_transport(&path, 8).unwrap();
+        let event = PublicEvent {
+            seq: 4,
+            event_type: PublicEventType::ComboTrade,
+            trading_ts_ns: 100,
+            phase: 3,
+            instrument_id: 0,
+            pair_id: 10,
+            order_id: 21,
+            trade_id: 4,
+            buy_order_id: 0,
+            sell_order_id: 0,
+            side: Some(Side::Sell),
+            price_ticks: 0,
+            quantity: 3,
+            volume: 0,
+            spread_price: -1_000,
+            leg1_price_ticks: 40_000,
+            leg2_price_ticks: 41_000,
         };
         producer.send(&event).unwrap();
         assert_eq!(consumer.recv().unwrap().unwrap(), event);

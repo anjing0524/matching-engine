@@ -1,0 +1,44 @@
+{
+  "instruments": [
+    {
+      "instrument_id": 1,
+      "symbol": "IF2501",
+      "tick_size": 1,
+      "min_price": 30000,
+      "max_price": 70000,
+      "product": "IF",
+      "month": 2501
+    },
+    {
+      "instrument_id": 2,
+      "symbol": "IF2502",
+      "tick_size": 1,
+      "min_price": 30000,
+      "max_price": 70000,
+      "product": "IF",
+      "month": 2502
+    }
+  ],
+  "pairs": [
+    {
+      "pair_id": 10,
+      "leg1_instrument_id": 1,
+      "leg2_instrument_id": 2,
+      "spread_tick": 1,
+      "kind": "cross_term",
+      "margin": {
+        "multiplier": 300,
+        "leg1_rate_bps": 1200,
+        "leg2_rate_bps": 1000
+      }
+    }
+  ],
+  "prior_settlements": [
+    {"instrument_id": 1, "price_ticks": 45000},
+    {"instrument_id": 2, "price_ticks": 40000}
+  ],
+  "margin_balances": [
+    {"user_id": 1, "balance": 1000000000},
+    {"user_id": 2, "balance": 1000000000}
+  ]
+}

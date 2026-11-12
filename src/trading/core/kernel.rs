@@ -8,11 +8,15 @@
 //! staging/uncross. Combo queues and execution live in `ComboEngine`. The same
 //! command sequence always produces the same private/public projections.
 
-use crate::domain::orderbook::{ContractSpec, TickBasedOrderBook};
+use crate::domain::orderbook::{ContractSpec, RestingOrder, TickBasedOrderBook};
 use crate::shared::SymbolId;
 use crate::shared::collections::identity::U64MixMap;
 use crate::shared::protocol::{NewOrderRequest, OrderType};
 use crate::trading::core::auction::{self, AuctionOrder, AuctionResult};
+use crate::trading::core::leg_liquidity::{
+    LegExecutionContext, LegFill, LegLiquidityError, LegLiquidityExecution, LegLiquidityPlan,
+    PlannedLegFill,
+};
 use crate::trading::core::plugins::NoPlugins;
 use crate::trading::core::plugins::{PreTradePlugin, RiskOrder, ValidationContext};
 use crate::trading::core::positions::{CloseKey, FrozenClose, PositionKey, Positions};
@@ -305,6 +309,16 @@ impl TradingCore {
         &mut self.positions
     }
 
+    /// Applies the combo owner's side of one atomic Combo Fill to this Contract.
+    ///
+    /// Combo orders have no position of their own, so the leg Contract carries
+    /// the owner's open position. M1 combo fills open spec positions and emit
+    /// no ordinary private fill: the combo owner receives a Combo Fill instead.
+    pub(crate) fn apply_combo_fill_position(&mut self, account_id: u64, side: Side, quantity: u64) {
+        let key = PositionKey::new(account_id, side, Hedge::Spec);
+        let _ = self.positions.apply_open(key, quantity);
+    }
+
     #[must_use]
     pub fn pending_open(&self) -> &Positions {
         &self.pending_open
@@ -405,6 +419,10 @@ impl TradingCore {
             price_ticks,
             quantity: 0,
             volume,
+            pair_id: 0,
+            spread_price: 0,
+            leg1_price_ticks: 0,
+            leg2_price_ticks: 0,
         });
     }
 
@@ -449,6 +467,12 @@ impl TradingCore {
         self.last_trading_ts_ns
     }
 
+    /// Returns the contract specification this core was built with.
+    #[must_use]
+    pub fn spec(&self) -> &ContractSpec {
+        self.book.spec()
+    }
+
     /// Switches the trading phase and emits a public SessionSwitch event.
     pub fn set_phase(&mut self, phase: TradingPhase, trading_day: u32) {
         self.phase = phase;
@@ -467,6 +491,10 @@ impl TradingCore {
             price_ticks: 0,
             quantity: 0,
             volume: 0,
+            pair_id: 0,
+            spread_price: 0,
+            leg1_price_ticks: 0,
+            leg2_price_ticks: 0,
         });
     }
 
@@ -688,6 +716,10 @@ impl TradingCore {
                             price_ticks,
                             quantity: canceled_quantity,
                             volume: 0,
+                            pair_id: 0,
+                            spread_price: 0,
+                            leg1_price_ticks: 0,
+                            leg2_price_ticks: 0,
                         });
                     }
                     self.orders.insert(command.order_id, meta);
@@ -938,6 +970,10 @@ impl TradingCore {
                 price_ticks: command.price_ticks as u64,
                 quantity: accepted.remaining,
                 volume: 0,
+                pair_id: 0,
+                spread_price: 0,
+                leg1_price_ticks: 0,
+                leg2_price_ticks: 0,
             });
             if let Some(meta) = self.orders.get_mut(&accepted.order_id) {
                 meta.public = true;
@@ -967,6 +1003,10 @@ impl TradingCore {
                     price_ticks: *price_ticks,
                     quantity: *quantity,
                     volume: 0,
+                    pair_id: 0,
+                    spread_price: 0,
+                    leg1_price_ticks: 0,
+                    leg2_price_ticks: 0,
                 });
             }
         }
@@ -1089,6 +1129,10 @@ impl TradingCore {
                     price_ticks: 0,
                     quantity: 0,
                     volume: 0,
+                    pair_id: 0,
+                    spread_price: 0,
+                    leg1_price_ticks: 0,
+                    leg2_price_ticks: 0,
                 });
                 Vec::new()
             }
@@ -1114,6 +1158,202 @@ impl TradingCore {
     #[must_use]
     pub fn best_ask(&self) -> Option<u64> {
         self.book.best_ask()
+    }
+
+    /// Plans an all-or-none consumption of resting liquidity on this Contract.
+    ///
+    /// The plan walks orders that cross `limit_price_ticks` for `taker_side` in
+    /// price then time priority and selects exactly `quantity`. It never mutates
+    /// the book. A combo matcher uses it to inspect leg liquidity without
+    /// gaining access to the underlying book.
+    ///
+    /// # Errors
+    /// Returns [`LegLiquidityError::ZeroQuantity`] for a zero request and
+    /// [`LegLiquidityError::InsufficientLiquidity`] when the crossing book
+    /// cannot cover the full quantity.
+    pub fn plan_leg_liquidity(
+        &self,
+        taker_side: Side,
+        limit_price_ticks: u64,
+        quantity: u64,
+    ) -> Result<LegLiquidityPlan, LegLiquidityError> {
+        if quantity == 0 {
+            return Err(LegLiquidityError::ZeroQuantity);
+        }
+        let mut fills = Vec::new();
+        let mut remaining = quantity;
+        let mut available = 0_u64;
+        for order in self.crossing_orders(taker_side, limit_price_ticks) {
+            available = available.saturating_add(order.quantity);
+            if remaining == 0 {
+                continue;
+            }
+            let take = remaining.min(order.quantity);
+            fills.push(PlannedLegFill {
+                order_id: order.order_id,
+                account_id: order.user_id,
+                price_ticks: order.price,
+                quantity: take,
+            });
+            remaining -= take;
+        }
+        if remaining > 0 {
+            return Err(LegLiquidityError::InsufficientLiquidity {
+                requested: quantity,
+                available,
+            });
+        }
+        Ok(LegLiquidityPlan {
+            taker_side,
+            limit_price_ticks,
+            quantity,
+            fills,
+        })
+    }
+
+    /// Validates that `plan` still matches the resting book without mutating it.
+    ///
+    /// Consumption re-plans the same request and requires identical order ids,
+    /// prices, and quantities. A stale or tampered plan is rejected, so the
+    /// two-leg registry seam can validate both legs before touching either.
+    ///
+    /// # Errors
+    /// Returns a [`LegLiquidityError`] when the plan is zero-sized, stale, or
+    /// its fills do not sum to its declared quantity.
+    pub fn validate_leg_liquidity(&self, plan: &LegLiquidityPlan) -> Result<(), LegLiquidityError> {
+        let selected = plan
+            .fills
+            .iter()
+            .fold(0_u64, |total, fill| total.saturating_add(fill.quantity));
+        if selected != plan.quantity {
+            return Err(LegLiquidityError::QuantityMismatch {
+                planned: plan.quantity,
+                selected,
+            });
+        }
+        if plan
+            .fills
+            .iter()
+            .any(|fill| !self.orders.contains_key(&fill.order_id))
+        {
+            return Err(LegLiquidityError::StalePlan);
+        }
+        let current =
+            self.plan_leg_liquidity(plan.taker_side, plan.limit_price_ticks, plan.quantity)?;
+        if current.fills != plan.fills {
+            return Err(LegLiquidityError::StalePlan);
+        }
+        Ok(())
+    }
+
+    /// Atomically consumes one validated leg-liquidity plan.
+    ///
+    /// The book is reduced, the resting owner receives the ordinary private
+    /// fill and position/margin update, and one public leg trade is emitted per
+    /// resting order. Nothing mutates when validation rejects the plan.
+    ///
+    /// # Errors
+    /// Returns a [`LegLiquidityError`] when the plan is stale or unusable. In
+    /// that case the book, positions, and event buffers are unchanged.
+    pub fn consume_leg_liquidity(
+        &mut self,
+        plan: &LegLiquidityPlan,
+        context: LegExecutionContext,
+    ) -> Result<LegLiquidityExecution, LegLiquidityError> {
+        self.validate_leg_liquidity(plan)?;
+        Ok(self.commit_leg_liquidity(plan, context))
+    }
+
+    /// Applies a plan that a caller already validated against this book.
+    ///
+    /// The registry uses this after validating both legs, which is what makes a
+    /// two-leg execution atomic. It must only run while the validated book is
+    /// unchanged.
+    pub(crate) fn commit_leg_liquidity(
+        &mut self,
+        plan: &LegLiquidityPlan,
+        context: LegExecutionContext,
+    ) -> LegLiquidityExecution {
+        let mut fills = Vec::with_capacity(plan.fills.len());
+        for planned in &plan.fills {
+            let resting = self
+                .book
+                .fill_resting_order(planned.order_id, planned.quantity)
+                .expect("validated leg-liquidity plan must remain consumable");
+            let resting_side = match resting.side {
+                OrderType::Buy => Side::Buy,
+                OrderType::Sell => Side::Sell,
+            };
+            let trade_id = self.next_trade_id;
+            self.next_trade_id = self.next_trade_id.saturating_add(1);
+            self.apply_fill(resting.order_id, resting.quantity);
+            let (buy_order_id, sell_order_id) = match resting_side {
+                Side::Buy => (resting.order_id, context.taker_order_id),
+                Side::Sell => (context.taker_order_id, resting.order_id),
+            };
+            self.push_public_event(PublicEvent {
+                seq: 0,
+                event_type: PublicEventType::Trade,
+                trading_ts_ns: self.last_trading_ts_ns,
+                phase: self.phase.code(),
+                instrument_id: context.instrument_id,
+                order_id: 0,
+                trade_id,
+                buy_order_id,
+                sell_order_id,
+                side: Some(plan.taker_side),
+                price_ticks: resting.price,
+                quantity: resting.quantity,
+                volume: 0,
+                pair_id: 0,
+                spread_price: 0,
+                leg1_price_ticks: 0,
+                leg2_price_ticks: 0,
+            });
+            fills.push(LegFill {
+                order_id: resting.order_id,
+                account_id: resting.user_id,
+                side: resting_side,
+                price_ticks: resting.price,
+                quantity: resting.quantity,
+                remaining: resting.remaining,
+                trade_id,
+            });
+        }
+        LegLiquidityExecution {
+            instrument_id: context.instrument_id,
+            taker_order_id: context.taker_order_id,
+            taker_side: plan.taker_side,
+            quantity: plan.quantity,
+            fills,
+        }
+    }
+
+    /// Returns crossing orders in best-price, FIFO execution order.
+    fn crossing_orders(&self, taker_side: Side, limit_price_ticks: u64) -> Vec<RestingOrder> {
+        let mut orders = self.book.snapshot_orders();
+        match taker_side {
+            Side::Buy => {
+                orders.retain(|order| {
+                    order.side == OrderType::Sell && order.price <= limit_price_ticks
+                });
+            }
+            Side::Sell => {
+                let mut bids: Vec<(usize, RestingOrder)> = orders
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(_, order)| {
+                        order.side == OrderType::Buy && order.price >= limit_price_ticks
+                    })
+                    .collect();
+                // Snapshot order is ascending price with FIFO inside a level.
+                // Sorting by descending price and the original index keeps the
+                // FIFO sequence inside each price level.
+                bids.sort_by_key(|(index, order)| (std::cmp::Reverse(order.price), *index));
+                orders = bids.into_iter().map(|(_, order)| order).collect();
+            }
+        }
+        orders
     }
 
     fn trade_events_into<E: Extend<CoreEvent>>(

@@ -89,6 +89,10 @@ mod tests {
             price_ticks: 50_000,
             quantity: 1,
             volume: 0,
+            pair_id: 0,
+            spread_price: 0,
+            leg1_price_ticks: 0,
+            leg2_price_ticks: 0,
         }
     }
 

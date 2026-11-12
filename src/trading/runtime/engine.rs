@@ -8,7 +8,9 @@ use crate::trading::combo::runtime::{ComboRuntime, ComboRuntimeSnapshot};
 use crate::trading::core::CoreSnapshot;
 #[cfg(test)]
 use crate::trading::core::TradingCore;
+use crate::trading::core::combo_book::ComboPrivateFill;
 use crate::trading::core::plugins::PreTradePlugin;
+use crate::trading::core::registry::RegistrySnapshot;
 use crate::trading::gateway::runtime::GatewayRuntime;
 use crate::trading::gateway::server::GatewayServerHandle;
 use crate::trading::market_data::MarketDataPublisher;
@@ -16,18 +18,30 @@ use crate::trading::market_data::metrics::TradingMetrics;
 use crate::trading::market_data::repair::RepairServer;
 use crate::trading::runtime::event_fanout::{EventFanout, EventFanoutOptions};
 use crate::trading::transport::result_log::{PrivateResultLog, PublicResultLog};
-use crate::trading::transport::runner::CoreRunner;
+use crate::trading::transport::runner::{CoreRunner, RegistryRunner};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Full runtime snapshot: core state plus optional combo state.
+/// Full runtime snapshot for either command path.
+///
+/// A plain `CoreRunner` runtime fills `core` and may fill `combo` with the
+/// legacy engine state. The production single-process registry runtime fills
+/// `registry` instead; the two shapes are mutually exclusive so a restore can
+/// never silently mix a core path with a registry path.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TradingSnapshot {
-    pub core: CoreSnapshot,
+    /// Legacy single-core state.
+    pub core: Option<CoreSnapshot>,
+    /// Legacy `ComboEngine` state.
     pub combo: Option<ComboRuntimeSnapshot>,
+    /// Registry-backed combo state for the single-process production path.
+    pub registry: Option<RegistrySnapshot>,
+    /// Per-user private sequence and replay log.
+    #[serde(default)]
+    pub private: Option<crate::trading::gateway::private_replay::PrivateDownlinkSnapshot>,
 }
 
-const TRADING_SNAPSHOT_VERSION: u32 = 4;
+const TRADING_SNAPSHOT_VERSION: u32 = 8;
 
 impl TradingSnapshot {
     /// Writes a versioned, checksummed snapshot with atomic replacement.
@@ -54,15 +68,25 @@ pub struct RuntimeOptions {
     pub private_log: Option<PrivateResultLog>,
     pub repair_server: Option<RepairServer>,
     pub market_data: Option<MarketDataPublisher>,
+    /// Legacy `ComboEngine` runtime.
+    ///
+    /// The production single-process runtime uses [`RegistryRunner`] and does
+    /// not set this. Combining it with the registry path is rejected.
     pub combo: Option<ComboRuntime>,
     pub metrics_sink: Option<Arc<Mutex<TradingMetrics>>>,
     pub idle_timeout: Option<Duration>,
 }
 
+/// The command owner for one runtime: legacy single core or instrument registry.
+enum RuntimeCore<P> {
+    Core(Box<CoreRunner<P>>),
+    Registry(Box<RegistryRunner<P>>),
+}
+
 /// Composite gateway/middleware/core runtime for one process.
 pub struct TradingRuntime<P> {
     gateway: GatewayRuntime,
-    core: CoreRunner<P>,
+    core: RuntimeCore<P>,
     server: GatewayServerHandle,
     idle_timeout: Option<Duration>,
     last_expire: Instant,
@@ -77,6 +101,27 @@ pub struct TradingRuntime<P> {
 impl<P: PreTradePlugin> TradingRuntime<P> {
     #[must_use]
     pub fn new(gateway: GatewayRuntime, core: CoreRunner<P>, server: GatewayServerHandle) -> Self {
+        Self::with_core(gateway, RuntimeCore::Core(Box::new(core)), server)
+    }
+
+    /// Builds the production single-process runtime over an [`InstrumentRegistry`].
+    ///
+    /// The registry owns every ordinary Contract book, the static Combo Pairs,
+    /// and Combo Order routing, so combo commands never start a second engine.
+    #[must_use]
+    pub fn from_registry(
+        gateway: GatewayRuntime,
+        core: RegistryRunner<P>,
+        server: GatewayServerHandle,
+    ) -> Self {
+        Self::with_core(gateway, RuntimeCore::Registry(Box::new(core)), server)
+    }
+
+    fn with_core(
+        gateway: GatewayRuntime,
+        core: RuntimeCore<P>,
+        server: GatewayServerHandle,
+    ) -> Self {
         Self {
             gateway,
             core,
@@ -100,6 +145,10 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
             repair_server: options.repair_server,
             market_data: options.market_data,
         });
+        assert!(
+            !matches!(self.core, RuntimeCore::Registry(_)) || options.combo.is_none(),
+            "the registry-backed runtime owns combo execution; legacy ComboRuntime is not allowed"
+        );
         self.combo = options.combo;
         self.metrics_sink = options.metrics_sink;
         self.idle_timeout = options.idle_timeout;
@@ -135,14 +184,27 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         if idle_timeout.is_some() {
             self.last_expire = Instant::now();
         }
-        let events = self.core.poll_events();
+        let events = match &mut self.core {
+            RuntimeCore::Core(runner) => runner.poll_events(),
+            RuntimeCore::Registry(runner) => runner.poll_events(),
+        };
         self.metrics.commands_executed += events.commands as u64;
         self.private_events.extend(events.private);
         self.public_events.extend(events.public);
         self.fanout.emit(&self.private_events, &[]);
-        let sent = self
-            .gateway
-            .dispatch_private(&self.server, self.private_events.drain(..));
+        let sent = if events.ordered_private.is_empty() {
+            let core = self
+                .gateway
+                .dispatch_private(&self.server, self.private_events.drain(..));
+            let combo = self
+                .gateway
+                .dispatch_combo_private(&self.server, events.combo_private);
+            core + combo
+        } else {
+            self.private_events.clear();
+            self.gateway
+                .dispatch_private_effects(&self.server, events.ordered_private)
+        };
         self.metrics.private_events_sent += sent as u64;
         let public_sent = self.fanout.emit(&[], &self.public_events);
         self.metrics.public_events_sent += public_sent;
@@ -160,7 +222,8 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
                 effects
                     .private_fills
                     .iter()
-                    .map(crate::trading::combo::engine::ComboFillEvent::private_fill),
+                    .map(crate::trading::combo::engine::ComboFillEvent::private_fill)
+                    .map(legacy_combo_private_fill),
             );
             self.metrics.private_events_sent += (command_events + fill_events) as u64;
             self.metrics.combo_queue_orders = combo.queue_len() as u64;
@@ -185,38 +248,113 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
     #[must_use]
     #[cfg(test)]
     pub(crate) fn core(&self) -> &TradingCore {
-        self.core.core()
+        match &self.core {
+            RuntimeCore::Core(runner) => runner.core(),
+            RuntimeCore::Registry(_) => {
+                panic!("the registry-backed runtime does not expose one TradingCore")
+            }
+        }
     }
 
     #[must_use]
     pub fn snapshot(&self) -> TradingSnapshot {
-        TradingSnapshot {
-            core: self.core.core().snapshot(),
-            combo: self.combo.as_ref().map(ComboRuntime::snapshot),
+        match &self.core {
+            RuntimeCore::Core(runner) => TradingSnapshot {
+                core: Some(runner.core().snapshot()),
+                combo: self.combo.as_ref().map(ComboRuntime::snapshot),
+                registry: None,
+                private: Some(self.gateway.private_snapshot()),
+            },
+            RuntimeCore::Registry(runner) => TradingSnapshot {
+                core: None,
+                combo: None,
+                registry: Some(runner.registry().snapshot()),
+                private: Some(self.gateway.private_snapshot()),
+            },
         }
     }
 
-    /// Restores core and combo state.
+    /// Restores core, legacy combo, or registry-backed combo state.
+    ///
+    /// The snapshot shape must match the runtime command path: a registry
+    /// runtime rejects a core snapshot and a core runtime rejects registry
+    /// state, so a restore can never silently mix paths.
     ///
     /// # Errors
-    /// Returns an error for invalid core snapshot data or combo runtime mismatch.
+    /// Returns an error when sessions are active, the snapshot shape does not
+    /// match the runtime, or the captured state is inconsistent.
     pub fn restore_snapshot(&mut self, snapshot: TradingSnapshot) -> Result<(), String> {
         if self.gateway.session_counts().0 > 0 {
             return Err("cannot restore a snapshot while sessions are active".to_string());
         }
-        self.core
-            .restore_snapshot(snapshot.core)
-            .map_err(|error| error.to_string())?;
-        match (self.combo.as_mut(), snapshot.combo) {
-            (Some(combo), Some(combo_snapshot)) => combo.restore_snapshot(combo_snapshot),
-            (None, None) => Ok(()),
-            _ => Err("snapshot combo state does not match runtime configuration".to_string()),
+        let TradingSnapshot {
+            core,
+            combo,
+            registry,
+            private,
+        } = snapshot;
+        if let Some(private) = &private {
+            self.gateway.validate_private_snapshot(private)?;
         }
+        match &mut self.core {
+            RuntimeCore::Core(runner) => {
+                let core = core.ok_or_else(|| "snapshot has no core state".to_string())?;
+                if registry.is_some() {
+                    return Err(
+                        "snapshot registry state does not match the core runtime".to_string()
+                    );
+                }
+                runner
+                    .restore_snapshot(core)
+                    .map_err(|error| error.to_string())?;
+                match (self.combo.as_mut(), combo) {
+                    (Some(combo), Some(combo_snapshot)) => combo.restore_snapshot(combo_snapshot),
+                    (None, None) => Ok(()),
+                    _ => {
+                        Err("snapshot combo state does not match runtime configuration".to_string())
+                    }
+                }
+            }
+            RuntimeCore::Registry(runner) => {
+                if core.is_some() || combo.is_some() {
+                    return Err(
+                        "snapshot core state does not match the registry runtime".to_string()
+                    );
+                }
+                let registry =
+                    registry.ok_or_else(|| "snapshot has no registry state".to_string())?;
+                runner
+                    .restore_snapshot(registry)
+                    .map_err(|error| error.to_string())
+            }
+        }?;
+        if let Some(private) = private {
+            self.gateway.restore_private_snapshot(private);
+        }
+        Ok(())
     }
 
     #[cfg(test)]
     pub(crate) fn gateway_mut(&mut self) -> &mut GatewayRuntime {
         &mut self.gateway
+    }
+}
+
+fn legacy_combo_private_fill(
+    fill: crate::trading::combo::engine::ComboPrivateFill,
+) -> ComboPrivateFill {
+    ComboPrivateFill {
+        seq: fill.seq,
+        pair_id: 0,
+        order_id: fill.order_id,
+        client_order_id: fill.order_id,
+        user_id: fill.user_id,
+        session_id: 0,
+        side: fill.side,
+        quantity: fill.quantity,
+        spread_price: fill.spread_ticks,
+        leg1_price_ticks: fill.leg1_price,
+        leg2_price_ticks: fill.leg2_price,
     }
 }
 
@@ -795,8 +933,10 @@ mod tests {
             SymbolId::intern("BTCUSDT"),
         );
         let snapshot = TradingSnapshot {
-            core: core.snapshot(),
+            core: Some(core.snapshot()),
             combo: None,
+            registry: None,
+            private: None,
         };
         let path = std::env::temp_dir().join(format!(
             "trading-runtime-snapshot-{}.json",
@@ -909,8 +1049,10 @@ mod tests {
             })
             .unwrap();
         let snapshot = TradingSnapshot {
-            core: runtime.core().snapshot(),
+            core: Some(runtime.core().snapshot()),
             combo: None,
+            registry: None,
+            private: None,
         };
         assert!(runtime.restore_snapshot(snapshot).is_err());
         let _ = std::fs::remove_file(&path);
