@@ -440,8 +440,8 @@ impl InstrumentRegistry {
     /// Sets the prior settlement price used to freeze leg margin at combo entry.
     ///
     /// Prior settlement is venue state supplied at startup or day roll, not a
-    /// protocol command. An instrument without a prior settlement freezes zero
-    /// estimated margin; actual trade-price margin still applies on fill.
+    /// protocol command. Combo entries for an instrument without a prior
+    /// settlement fail closed with [`ComboMarginError::MissingPriorSettlement`].
     ///
     /// # Errors
     /// Returns [`RegistryError::UnknownInstrument`] when `instrument_id` is not
