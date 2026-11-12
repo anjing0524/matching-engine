@@ -494,3 +494,76 @@ fn trading_binary_resting_combo_fills_when_a_leg_order_arrives() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn trading_binary_rejects_combo_id_without_combo_config() {
+    use trading_system_engine::trading::core::private_events::PrivateStatus;
+
+    let binary = env!("CARGO_BIN_EXE_trading-engine");
+    let mut child = ProcessCommand::new(binary)
+        .args([
+            "run",
+            "--iterations",
+            "1000000",
+            "--listen",
+            "127.0.0.1:0",
+            "--metrics-listen",
+            "127.0.0.1:0",
+        ])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn trading");
+    let stdout = child.stdout.take().unwrap();
+    let mut lines = BufReader::new(stdout).lines();
+    let line = lines.next().unwrap().unwrap();
+    let gateway = line
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .strip_prefix("gateway=")
+        .unwrap()
+        .to_string();
+    let mut stream = TcpStream::connect(&gateway).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream
+        .write_all(
+            &GatewayFrame::Login {
+                member_id: 1,
+                user_id: 1,
+                seat_id: 1,
+                session_epoch: 1,
+                last_private_seq: 0,
+                auth_token: 0,
+            }
+            .encode(),
+        )
+        .unwrap();
+    let mut command = Command::zeroed();
+    command.command_type = CommandType::NewOrder;
+    command.client_order_id = 1;
+    command.user_id = 1;
+    command.instrument_id = 1;
+    command.combo_id = 7;
+    command.price_type = PriceType::Limit;
+    command.time_condition = TimeCondition::Gfd;
+    command.volume_condition = VolumeCondition::Any;
+    command.side = Side::Buy;
+    command.offset = Offset::Open;
+    command.hedge = Hedge::Spec;
+    command.price_ticks = 50_000;
+    command.quantity = 1;
+    command.trigger_type = TriggerType::None;
+    stream
+        .write_all(&GatewayFrame::Command(command).encode())
+        .unwrap();
+    let mut frame = [0u8; trading_system_engine::trading::gateway::GATEWAY_FRAME_SIZE];
+    stream.read_exact(&mut frame).unwrap();
+    let GatewayFrame::PrivateEvent(event) = GatewayFrame::decode(&frame).unwrap() else {
+        panic!("expected private rejection");
+    };
+    assert_eq!(event.status, PrivateStatus::Rejected);
+    let _ = child.kill();
+    let _ = child.wait();
+}
