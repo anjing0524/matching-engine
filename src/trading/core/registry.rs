@@ -371,6 +371,7 @@ pub struct RegistrySnapshot {
 pub struct InstrumentRegistry {
     instruments: U64MixMap<TradingCore>,
     pairs: U64MixMap<ComboPair>,
+    pairs_by_instrument: U64MixMap<Vec<u32>>,
     combo_books: U64MixMap<ComboBook>,
     prior_settlements: U64MixMap<u64>,
     margin_balances: U64MixMap<u64>,
@@ -389,6 +390,7 @@ impl InstrumentRegistry {
         Self {
             instruments: U64MixMap::default(),
             pairs: U64MixMap::default(),
+            pairs_by_instrument: U64MixMap::default(),
             combo_books: U64MixMap::default(),
             prior_settlements: U64MixMap::default(),
             margin_balances: U64MixMap::default(),
@@ -446,6 +448,14 @@ impl InstrumentRegistry {
         validate_pair(&self.instruments, &pair)?;
         let key = u64::from(pair.pair_id);
         self.pairs.insert(key, pair);
+        self.pairs_by_instrument
+            .entry(u64::from(pair.leg1_instrument_id))
+            .or_default()
+            .push(pair.pair_id);
+        self.pairs_by_instrument
+            .entry(u64::from(pair.leg2_instrument_id))
+            .or_default()
+            .push(pair.pair_id);
         self.combo_books.insert(key, ComboBook::new(pair.pair_id));
         Ok(())
     }
@@ -762,6 +772,7 @@ impl InstrumentRegistry {
         }
 
         let mut pairs: U64MixMap<ComboPair> = U64MixMap::default();
+        let mut pairs_by_instrument: U64MixMap<Vec<u32>> = U64MixMap::default();
         for pair in pair_definitions {
             if pairs.contains_key(&u64::from(pair.pair_id)) {
                 return Err(RegistrySnapshotError::DuplicatePair {
@@ -774,6 +785,14 @@ impl InstrumentRegistry {
                     error,
                 }
             })?;
+            pairs_by_instrument
+                .entry(u64::from(pair.leg1_instrument_id))
+                .or_default()
+                .push(pair.pair_id);
+            pairs_by_instrument
+                .entry(u64::from(pair.leg2_instrument_id))
+                .or_default()
+                .push(pair.pair_id);
             pairs.insert(u64::from(pair.pair_id), pair);
         }
 
@@ -892,6 +911,7 @@ impl InstrumentRegistry {
 
         self.instruments = instruments;
         self.pairs = pairs;
+        self.pairs_by_instrument = pairs_by_instrument;
         self.combo_books = combo_books;
         self.prior_settlements = prior_settlements;
         self.margin = margin;
@@ -1273,17 +1293,21 @@ impl InstrumentRegistry {
     /// Resting orders are visited in combined price-time priority, and each
     /// fill is applied to its book exactly once.
     fn revalue_resting_combos(&mut self, instrument_id: u32, trading_ts_ns: u64) {
-        let mut pairs: Vec<ComboPair> = self
-            .pairs
-            .values()
-            .filter(|pair| {
-                pair.leg1_instrument_id == instrument_id || pair.leg2_instrument_id == instrument_id
-            })
-            .copied()
-            .collect();
-        pairs.sort_by_key(|pair| (pair.kind.priority(), pair.pair_id));
-        for pair in pairs {
-            self.match_resting_combos(&pair, trading_ts_ns);
+        let mut pair_ids = self
+            .pairs_by_instrument
+            .get(&u64::from(instrument_id))
+            .cloned()
+            .unwrap_or_default();
+        pair_ids.sort_by_key(|pair_id| {
+            self.pairs
+                .get(&u64::from(*pair_id))
+                .map(|pair| (pair.kind.priority(), pair.pair_id))
+                .unwrap_or((u8::MAX, *pair_id))
+        });
+        for pair_id in pair_ids {
+            if let Some(pair) = self.pairs.get(&u64::from(pair_id)).copied() {
+                self.match_resting_combos(&pair, trading_ts_ns);
+            }
         }
     }
 
