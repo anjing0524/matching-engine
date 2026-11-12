@@ -387,3 +387,34 @@ fn restart_and_reconnect_preserve_combo_then_core_private_order() {
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(restored_path);
 }
+
+#[test]
+fn same_tick_combo_then_leg_commands_keep_producer_order() {
+    use trading_system_engine::trading::core::private_events::PrivateEffect;
+    let path = temp_path("same-tick-order");
+    let mut registry = registry_with_pair();
+    registry
+        .execute_combo(combo_order(1, 1, 1, Side::Sell, 100, 1))
+        .unwrap();
+    let (mut runtime, address) = runtime_with_registry(registry, &path);
+    let mut stream = TcpStream::connect(&address).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    login(&mut stream, 2, 0);
+    stream
+        .write_all(&GatewayFrame::Command(combo_order(2, 2, 1, Side::Buy, 100, 1)).encode())
+        .unwrap();
+    stream
+        .write_all(&GatewayFrame::Command(leg_order(2, 3, Side::Buy, 1, 40_000)).encode())
+        .unwrap();
+
+    let effects = read_private_effects(&mut runtime, &mut stream, 3);
+    assert!(matches!(effects[0], PrivateEffect::Core(_)));
+    assert!(matches!(effects[1], PrivateEffect::Combo(_)));
+    assert!(matches!(effects[2], PrivateEffect::Core(_)));
+    assert_eq!(effects[0].seq(), 1);
+    assert_eq!(effects[1].seq(), 2);
+    assert_eq!(effects[2].seq(), 3);
+    let _ = std::fs::remove_file(path);
+}

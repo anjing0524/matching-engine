@@ -6,7 +6,7 @@
 
 use crate::trading::core::combo_book::{ComboCommandError, ComboEvent, ComboPrivateFill};
 use crate::trading::core::plugins::PreTradePlugin;
-use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
+use crate::trading::core::private_events::{PrivateEffect, PrivateEvent, PrivateStatus};
 use crate::trading::core::protocol::{Command, CommandType};
 use crate::trading::core::public_events::PublicEvent;
 use crate::trading::core::registry::{InstrumentRegistry, RegistrySnapshot, RegistrySnapshotError};
@@ -61,6 +61,11 @@ pub struct CoreEvents {
     ///
     /// A plain [`CoreRunner`] has no combo source, so this is always empty.
     pub combo_private: Vec<ComboPrivateFill>,
+    /// Ordered core/combo private effects for one per-user sequence.
+    ///
+    /// `RegistryRunner` fills this in command order; `CoreRunner` leaves it
+    /// empty and uses `private`.
+    pub ordered_private: Vec<PrivateEffect>,
 }
 
 /// Drains commands from a `CommandConsumer` and applies them to `TradingCore`.
@@ -170,6 +175,7 @@ impl<P: PreTradePlugin> CoreRunner<P> {
             private,
             public,
             combo_private: Vec::new(),
+            ordered_private: Vec::new(),
         }
     }
 
@@ -232,17 +238,36 @@ impl<P: PreTradePlugin> RegistryRunner<P> {
     #[must_use]
     pub fn poll_events(&mut self) -> CoreEvents {
         let mut commands = 0;
-        let mut statuses = Vec::new();
+        let mut ordered_private = Vec::new();
+        let mut core_private = Vec::new();
+        let mut combo_private = Vec::new();
         while let Some(result) = self.consumer.recv() {
             match result {
                 Ok(command) => {
                     commands += 1;
                     if command.combo_id != 0 {
+                        let mut statuses = Vec::new();
                         self.execute_combo_command(command, &mut statuses);
+                        for status in statuses {
+                            ordered_private.push(PrivateEffect::Core(status.clone()));
+                            core_private.push(status);
+                        }
+                        for fill in self.registry.drain_combo_private_events() {
+                            ordered_private.push(PrivateEffect::Combo(fill));
+                            combo_private.push(fill);
+                        }
                     } else {
                         let _ = self
                             .registry
                             .execute_with_plugins_discard(command, &self.plugin);
+                        for event in self.registry.drain_private_events() {
+                            ordered_private.push(PrivateEffect::Core(event.clone()));
+                            core_private.push(event);
+                        }
+                        for fill in self.registry.drain_combo_private_events() {
+                            ordered_private.push(PrivateEffect::Combo(fill));
+                            combo_private.push(fill);
+                        }
                     }
                 }
                 Err(_) => {
@@ -256,15 +281,15 @@ impl<P: PreTradePlugin> RegistryRunner<P> {
                 private: Vec::new(),
                 public: Vec::new(),
                 combo_private: Vec::new(),
+                ordered_private: Vec::new(),
             };
         }
-        let mut private = self.registry.drain_private_events();
-        private.extend(statuses);
         CoreEvents {
             commands,
-            private,
+            private: core_private,
             public: self.registry.drain_public_events(),
-            combo_private: self.registry.drain_combo_private_events(),
+            combo_private,
+            ordered_private,
         }
     }
 

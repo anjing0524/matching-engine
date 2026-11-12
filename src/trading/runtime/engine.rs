@@ -192,13 +192,20 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         self.private_events.extend(events.private);
         self.public_events.extend(events.public);
         self.fanout.emit(&self.private_events, &[]);
-        let sent = self
-            .gateway
-            .dispatch_private(&self.server, self.private_events.drain(..));
-        let combo_sent = self
-            .gateway
-            .dispatch_combo_private(&self.server, events.combo_private);
-        self.metrics.private_events_sent += (sent + combo_sent) as u64;
+        let sent = if events.ordered_private.is_empty() {
+            let core = self
+                .gateway
+                .dispatch_private(&self.server, self.private_events.drain(..));
+            let combo = self
+                .gateway
+                .dispatch_combo_private(&self.server, events.combo_private);
+            core + combo
+        } else {
+            self.private_events.clear();
+            self.gateway
+                .dispatch_private_effects(&self.server, events.ordered_private)
+        };
+        self.metrics.private_events_sent += sent as u64;
         let public_sent = self.fanout.emit(&[], &self.public_events);
         self.metrics.public_events_sent += public_sent;
         // Project each public event once; stale events must not be re-emitted.
