@@ -105,6 +105,16 @@ pub struct ComboPair {
     pub margin: ComboPairMargin,
     /// Cross-term or cross-product classification.
     pub kind: ComboPairKind,
+    /// Inclusive start of the pair's valid trading window, in ns.
+    #[serde(default)]
+    pub valid_from_ns: u64,
+    /// Exclusive end of the pair's valid trading window, in ns.
+    #[serde(default = "default_valid_until")]
+    pub valid_until_ns: u64,
+}
+
+fn default_valid_until() -> u64 {
+    u64::MAX
 }
 
 impl ComboPair {
@@ -124,6 +134,8 @@ impl ComboPair {
             spread_tick,
             margin,
             kind: ComboPairKind::CrossTerm,
+            valid_from_ns: 0,
+            valid_until_ns: u64::MAX,
         }
     }
 
@@ -132,6 +144,20 @@ impl ComboPair {
     pub const fn with_kind(mut self, kind: ComboPairKind) -> Self {
         self.kind = kind;
         self
+    }
+
+    /// Sets the pair's valid trading window.
+    #[must_use]
+    pub const fn with_valid_window(mut self, from_ns: u64, until_ns: u64) -> Self {
+        self.valid_from_ns = from_ns;
+        self.valid_until_ns = until_ns;
+        self
+    }
+
+    /// Returns whether `trading_ts_ns` is inside the pair window.
+    #[must_use]
+    pub const fn is_valid_at(&self, trading_ts_ns: u64) -> bool {
+        self.valid_from_ns <= trading_ts_ns && trading_ts_ns < self.valid_until_ns
     }
 }
 

@@ -1041,6 +1041,12 @@ impl InstrumentRegistry {
             return Err(ComboCommandError::UnknownPair { pair_id });
         };
         validate_new_combo_order(&command)?;
+        if !pair.is_valid_at(command.trading_ts_ns) {
+            return Err(ComboCommandError::OutsidePairWindow {
+                pair_id,
+                trading_ts_ns: command.trading_ts_ns,
+            });
+        }
         if !command
             .price_ticks
             .unsigned_abs()

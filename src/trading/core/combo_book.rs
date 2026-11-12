@@ -955,6 +955,13 @@ pub enum ComboCommandError {
         /// Pair id carried by the rejected command.
         pair_id: u32,
     },
+    /// The command is outside the pair's valid trading window.
+    OutsidePairWindow {
+        /// Pair whose window was violated.
+        pair_id: u32,
+        /// Command trading timestamp.
+        trading_ts_ns: u64,
+    },
     /// The spread price is not on the pair's spread tick.
     OffTickSpreadPrice {
         /// Rejected spread price.
@@ -1011,6 +1018,13 @@ impl Display for ComboCommandError {
             }
             Self::MissingCancelOrderId => formatter.write_str("combo cancel has no order id"),
             Self::Margin(error) => Display::fmt(error, formatter),
+            Self::OutsidePairWindow {
+                pair_id,
+                trading_ts_ns,
+            } => write!(
+                formatter,
+                "combo pair {pair_id} is not valid at {trading_ts_ns}"
+            ),
             Self::OffTickSpreadPrice {
                 price_ticks,
                 spread_tick,

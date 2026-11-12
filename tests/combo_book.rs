@@ -491,3 +491,29 @@ fn off_tick_combo_spread_is_rejected_without_mutation() {
     ));
     assert_eq!(registry.combo_book(10).unwrap().len(), 0);
 }
+
+#[test]
+fn combo_order_outside_pair_window_is_rejected() {
+    let mut registry = InstrumentRegistry::new();
+    registry.register(1, spec("IF2501")).unwrap();
+    registry.register(2, spec("IF2502")).unwrap();
+    registry
+        .register_pair(
+            ComboPair::new(10, 1, 2, 1, ComboPairMargin::new(300, 1_200, 1_000))
+                .with_valid_window(100, 200),
+        )
+        .unwrap();
+    registry.set_prior_settlement(1, 50_000).unwrap();
+    registry.set_prior_settlement(2, 45_000).unwrap();
+    let mut command = combo_order(996, 1, 11, Side::Buy, 10, 5);
+    command.trading_ts_ns = 250;
+    let error = registry.execute_combo(command).unwrap_err();
+    assert!(matches!(
+        error,
+        ComboCommandError::OutsidePairWindow {
+            pair_id: 10,
+            trading_ts_ns: 250
+        }
+    ));
+    assert_eq!(registry.combo_book(10).unwrap().len(), 0);
+}
