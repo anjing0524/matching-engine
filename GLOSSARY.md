@@ -49,8 +49,8 @@ cross-product uses the common tick rule for the two products.
 
 ## Combo Order
 
-An order for a Combo Pair. First version supports limit GFD and cancel; FOK/FAK
-and market orders are deferred. Combo orders do not participate in call auction.
+An order for a Combo Pair. Supports limit GFD, IOC-Any (FAK), IOC-All (FOK),
+and cancel. Market and GIS orders are deferred. Combo orders do not participate in call auction.
 A Combo Order may fill partially over time, but every fill is atomic: both legs
 fill the same quantity together. A single-leg fill is never produced.
 

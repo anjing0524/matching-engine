@@ -50,7 +50,7 @@ M1 supports:
 - spread limit GFD and cancel
 - direct combo matching
 - implied-in
-- explicit rejection of market/FOK/FAK
+- explicit rejection of market/GIS; FOK/FAK supported through IOC-All/IOC-Any
 - leg-level margin and single-side largest
 - leg fills and combo fills
 - combo price statistics and leg public trades
@@ -151,7 +151,7 @@ plan_buy_combo:
 
 M1 permits partial combo fills over time: each fill consumes the same quantity
 from both legs, and the remainder stays resting. A single-leg fill is never
-produced. FOK-style all-or-none semantics are M2.
+produced. IOC-All (FOK) is all-or-none transactionally; IOC-Any (FAK) leaves no residual.
 
 On commit:
 
@@ -268,7 +268,7 @@ M1 tests must cover:
 - a resting combo order triggered by later ordinary leg liquidity
 - margin freeze/release/actual and single-side largest
 - snapshot/reconnect replay
-- unsupported FOK/FAK/market orders rejected
+- unsupported market/GIS orders rejected; FOK/FAK behavior covered
 - no implied orders in public market data
 
 Performance is measured after correctness; the current 500k/s ingress baseline is
