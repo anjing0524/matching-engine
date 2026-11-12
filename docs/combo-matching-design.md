@@ -246,6 +246,8 @@ M1:
 - public leg trades update leg price/volume/open-interest
 - every combo trade publishes one `ComboTrade` price statistic carrying the
   pair id, realized spread, quantity, and both leg reference prices
+- ComboTrade shares the venue public sequence with ordinary Contract events, so
+  a publisher or NACK tracker sees one monotonic stream
 - no implied orders in public book or public events
 - no combo order-book depth publication
 - no combo position

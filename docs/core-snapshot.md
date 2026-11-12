@@ -48,7 +48,7 @@ mutually exclusive shapes:
 `TradingRuntime::restore_snapshot()` rejects a snapshot whose shape does not
 match the runtime command path, so a restore cannot silently mix the legacy
 single-core path with registry-backed combo state. The runtime snapshot schema
-version is 6; older snapshots must be regenerated or replayed from the command
+version is 7; older snapshots must be regenerated or replayed from the command
 log. A registry restore also enables fail-closed combo margin: a restored venue
 with Combo Pairs requires explicit account balances because balances are venue
 configuration and are not part of `RegistrySnapshot`.
@@ -66,7 +66,15 @@ configuration and are not part of `RegistrySnapshot`.
 - the leg margin ledger: per-account/leg frozen and actual margin plus the
   freeze reservation carried by each open Combo Order
 - the registry-owned Combo Private Fill buffer and next private sequence
-- the next public Combo trade price-statistic sequence
+- the venue public sequence shared by every ordinary Contract event and Combo
+  trade
+
+The registry owns one venue public sequence; each ordinary Contract core's own
+`public_seq` is a core-local counter that the registry replaces when it drains
+public events. Ordinary Contract events and Combo trades therefore reach the
+publisher and repair log as one strictly increasing sequence with no duplicate
+or regressing values. The registry snapshot carries that next venue sequence, so
+a restore continues the stream instead of restarting it.
 
 `InstrumentRegistry::restore_snapshot` is fail-closed and all-or-none. It
 validates the whole snapshot before assigning any field and rejects explicit
