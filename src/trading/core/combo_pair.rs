@@ -77,6 +77,15 @@ impl ComboPairKind {
     }
 }
 
+impl Display for ComboPairKind {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Self::CrossTerm => formatter.write_str("cross-term"),
+            Self::CrossProduct => formatter.write_str("cross-product"),
+        }
+    }
+}
+
 /// One static exchange-defined two-leg spread contract.
 ///
 /// M1 pairs have a fixed 1:1 quantity ratio. The spread price is quoted in
@@ -95,7 +104,6 @@ pub struct ComboPair {
     /// Leg-level margin parameters.
     pub margin: ComboPairMargin,
     /// Cross-term or cross-product classification.
-    #[serde(default)]
     pub kind: ComboPairKind,
 }
 

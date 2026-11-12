@@ -5,14 +5,18 @@
       "symbol": "IF2501",
       "tick_size": 1,
       "min_price": 30000,
-      "max_price": 70000
+      "max_price": 70000,
+      "product": "IF",
+      "month": 2501
     },
     {
       "instrument_id": 2,
       "symbol": "IF2502",
       "tick_size": 1,
       "min_price": 30000,
-      "max_price": 70000
+      "max_price": 70000,
+      "product": "IF",
+      "month": 2502
     }
   ],
   "pairs": [

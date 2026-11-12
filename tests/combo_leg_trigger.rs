@@ -14,7 +14,7 @@ use trading_system_engine::trading::core::protocol::{
     VolumeCondition,
 };
 use trading_system_engine::trading::core::{
-    ComboEvent, ComboPair, ComboPairMargin, CoreEvent, InstrumentRegistry,
+    ComboEvent, ComboPair, ComboPairKind, ComboPairMargin, CoreEvent, InstrumentRegistry,
 };
 
 fn spec(symbol: &str) -> ContractSpec {
@@ -36,6 +36,28 @@ fn registry_with_pair() -> InstrumentRegistry {
         .unwrap();
     registry.set_prior_settlement(1, 50_000).unwrap();
     registry.set_prior_settlement(2, 45_000).unwrap();
+    registry
+}
+
+fn registry_with_cross_term_and_cross_product_pairs() -> InstrumentRegistry {
+    let mut registry = InstrumentRegistry::new();
+    registry.register(1, spec("IF2501")).unwrap();
+    registry.register(2, spec("IF2502")).unwrap();
+    registry.register(3, spec("IH2501")).unwrap();
+    let margin = ComboPairMargin::new(300, 1_200, 1_000);
+    // The cross-product pair has the lower pair id, so priority must come from
+    // the explicit kind rather than from registration or id order.
+    registry
+        .register_pair(ComboPair::new(5, 1, 3, 1, margin).with_kind(ComboPairKind::CrossProduct))
+        .unwrap();
+    registry
+        .register_pair(ComboPair::new(10, 1, 2, 1, margin))
+        .unwrap();
+    for instrument_id in [1, 2, 3] {
+        registry
+            .set_prior_settlement(instrument_id, 45_000)
+            .unwrap();
+    }
     registry
 }
 
@@ -61,6 +83,19 @@ fn combo_order(
     command.price_ticks = spread_price;
     command.quantity = quantity;
     command.trigger_type = TriggerType::None;
+    command
+}
+
+fn combo_order_on(
+    pair_id: u32,
+    client_order_id: u64,
+    user_id: u32,
+    side: Side,
+    spread_price: i64,
+    quantity: u64,
+) -> Command {
+    let mut command = combo_order(client_order_id, user_id, side, spread_price, quantity);
+    command.combo_id = pair_id;
     command
 }
 
@@ -360,4 +395,52 @@ fn resting_combos_fill_in_price_time_priority_without_duplicates() {
         1
     );
     assert_eq!(book.best_bid(), Some(10_000));
+}
+
+#[test]
+fn cross_term_resting_combo_fills_before_cross_product_at_the_same_spread() {
+    let mut registry = registry_with_cross_term_and_cross_product_pairs();
+    let cross_product = rested_combo_order(
+        &registry
+            .execute_combo(combo_order_on(5, 600, 3, Side::Buy, 10_000, 1))
+            .unwrap(),
+    );
+    let cross_term = rested_combo_order(
+        &registry
+            .execute_combo(combo_order_on(10, 601, 4, Side::Buy, 10_000, 1))
+            .unwrap(),
+    );
+
+    // Both pairs have their second-leg bid resting before the shared first leg
+    // produces the ask that makes the resting spreads executable.
+    rest_leg(&mut registry, leg_order(20, 2, 2, Side::Buy, 40_000, 1));
+    rest_leg(&mut registry, leg_order(21, 3, 2, Side::Buy, 40_000, 1));
+
+    // One lot of first-leg ask can back only one spread. The cross-term pair
+    // must take it even though the cross-product pair id sorts first.
+    rest_leg(&mut registry, leg_order(22, 1, 1, Side::Sell, 50_000, 1));
+
+    let first = registry.drain_combo_private_events();
+    assert_eq!(first.len(), 1, "one prioritised fill: {first:?}");
+    assert_eq!(first[0].pair_id, 10);
+    assert_eq!(first[0].order_id, cross_term);
+    assert!(registry.combo_book(10).unwrap().is_empty());
+    assert_eq!(
+        registry
+            .combo_book(5)
+            .unwrap()
+            .order(cross_product)
+            .expect("cross-product residual")
+            .remaining,
+        1
+    );
+
+    // A later first-leg ask lets the cross-product pair fill, proving it was
+    // live and only lost the shared liquidity to the cross-term pair.
+    rest_leg(&mut registry, leg_order(23, 1, 1, Side::Sell, 50_000, 1));
+    let second = registry.drain_combo_private_events();
+    assert_eq!(second.len(), 1, "one remaining fill: {second:?}");
+    assert_eq!(second[0].pair_id, 5);
+    assert_eq!(second[0].order_id, cross_product);
+    assert!(registry.combo_book(5).unwrap().is_empty());
 }

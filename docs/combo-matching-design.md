@@ -257,6 +257,9 @@ M1:
 M1 tests must cover:
 
 - cross-term and same-month cross-product pair config
+- explicit product/month metadata on every pair leg, with cross-term requiring
+  the same product and different months and cross-product requiring different
+  products in the same month
 - direct combo match
 - implied-in from two leg orders
 - atomic all-or-none failure when one leg is short

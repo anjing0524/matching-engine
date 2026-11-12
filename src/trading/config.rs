@@ -5,10 +5,10 @@
 //! only validates and carries values.
 
 use crate::domain::orderbook::ContractSpec;
-use crate::trading::core::combo_pair::{ComboPair, ComboPairError};
+use crate::trading::core::combo_pair::{ComboLeg, ComboPair, ComboPairError, ComboPairKind};
 use crate::trading::core::registry::{InstrumentRegistry, RegistryError};
 use crate::trading::market_data::MarketDataPublisher;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::io;
@@ -107,6 +107,10 @@ impl TradingConfig {
 }
 
 /// One ordinary Contract declared by the static combo venue configuration.
+///
+/// `product` and `month` are the exchange identifiers used to validate Combo
+/// Pair shape. They are required on every Contract that a pair names as a leg;
+/// a Contract used only by ordinary commands may omit them.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ComboInstrumentConfig {
@@ -120,6 +124,16 @@ pub struct ComboInstrumentConfig {
     pub min_price: u64,
     /// Highest representable price.
     pub max_price: u64,
+    /// Exchange product code shared by Contracts of the same futures product.
+    ///
+    /// Required when this Contract is a Combo Pair leg.
+    #[serde(default)]
+    pub product: Option<String>,
+    /// Contract month in exchange `YYMM` form, for example `2501`.
+    ///
+    /// Required when this Contract is a Combo Pair leg.
+    #[serde(default)]
+    pub month: Option<u32>,
 }
 
 /// Prior settlement price used to freeze leg margin at Combo Order entry.
@@ -226,6 +240,56 @@ impl ComboVenueConfig {
                 });
             }
         }
+        let instruments_by_id: HashMap<u32, &ComboInstrumentConfig> = self
+            .instruments
+            .iter()
+            .map(|instrument| (instrument.instrument_id, instrument))
+            .collect();
+        for pair in &self.pairs {
+            let leg1 = pair_leg_metadata(
+                &instruments_by_id,
+                pair.pair_id,
+                ComboLeg::First,
+                pair.leg1_instrument_id,
+            )?;
+            let leg2 = pair_leg_metadata(
+                &instruments_by_id,
+                pair.pair_id,
+                ComboLeg::Second,
+                pair.leg2_instrument_id,
+            )?;
+            let (Some((product1, month1)), Some((product2, month2))) = (leg1, leg2) else {
+                // An unknown leg is rejected when its pair is registered.
+                continue;
+            };
+            let reason = match pair.kind {
+                ComboPairKind::CrossTerm => {
+                    if product1 != product2 {
+                        Some("cross-term legs must belong to the same product")
+                    } else if month1 == month2 {
+                        Some("cross-term legs must have different months")
+                    } else {
+                        None
+                    }
+                }
+                ComboPairKind::CrossProduct => {
+                    if product1 == product2 {
+                        Some("cross-product legs must belong to different products")
+                    } else if month1 != month2 {
+                        Some("cross-product legs must have the same month")
+                    } else {
+                        None
+                    }
+                }
+            };
+            if let Some(reason) = reason {
+                return Err(ComboVenueConfigError::PairKindMismatch {
+                    pair_id: pair.pair_id,
+                    kind: pair.kind,
+                    reason,
+                });
+            }
+        }
         let mut settlement_ids = HashSet::new();
         for settlement in &self.prior_settlements {
             if !settlement_ids.insert(settlement.instrument_id) {
@@ -288,6 +352,38 @@ impl ComboVenueConfig {
     }
 }
 
+/// Returns a pair leg's product and month, or `None` when the leg instrument is
+/// not declared so pair registration can report the unknown instrument.
+fn pair_leg_metadata<'a>(
+    instruments: &HashMap<u32, &'a ComboInstrumentConfig>,
+    pair_id: u32,
+    leg: ComboLeg,
+    instrument_id: u32,
+) -> Result<Option<(&'a str, u32)>, ComboVenueConfigError> {
+    let Some(instrument) = instruments.get(&instrument_id) else {
+        return Ok(None);
+    };
+    let Some(product) = instrument
+        .product
+        .as_deref()
+        .filter(|product| !product.is_empty())
+    else {
+        return Err(ComboVenueConfigError::MissingPairLegMetadata {
+            pair_id,
+            leg,
+            instrument_id,
+        });
+    };
+    let Some(month) = instrument.month else {
+        return Err(ComboVenueConfigError::MissingPairLegMetadata {
+            pair_id,
+            leg,
+            instrument_id,
+        });
+    };
+    Ok(Some((product, month)))
+}
+
 /// Why a static combo venue configuration was rejected.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -312,6 +408,24 @@ pub enum ComboVenueConfigError {
     DuplicatePair {
         /// Repeated pair id.
         pair_id: u32,
+    },
+    /// A Combo Pair leg has no product or month metadata.
+    MissingPairLegMetadata {
+        /// Pair whose leg metadata is missing.
+        pair_id: u32,
+        /// Which leg lacks metadata.
+        leg: ComboLeg,
+        /// Instrument declared without product or month metadata.
+        instrument_id: u32,
+    },
+    /// A Combo Pair kind disagrees with its legs' product and month metadata.
+    PairKindMismatch {
+        /// Pair being validated.
+        pair_id: u32,
+        /// Declared pair classification.
+        kind: ComboPairKind,
+        /// Human-readable reason the legs do not match the kind.
+        reason: &'static str,
     },
     /// One instrument's prior settlement appears twice.
     DuplicatePriorSettlement {
@@ -349,6 +463,22 @@ impl Display for ComboVenueConfigError {
             Self::DuplicatePair { pair_id } => {
                 write!(formatter, "combo config repeats pair {pair_id}")
             }
+            Self::MissingPairLegMetadata {
+                pair_id,
+                leg,
+                instrument_id,
+            } => write!(
+                formatter,
+                "combo config pair {pair_id} {leg} leg instrument {instrument_id} needs product and month metadata"
+            ),
+            Self::PairKindMismatch {
+                pair_id,
+                kind,
+                reason,
+            } => write!(
+                formatter,
+                "combo config pair {pair_id} is not a valid {kind}: {reason}"
+            ),
             Self::DuplicatePriorSettlement { instrument_id } => write!(
                 formatter,
                 "combo config repeats prior settlement for instrument {instrument_id}"
