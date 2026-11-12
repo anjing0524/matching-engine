@@ -435,3 +435,30 @@ fn combo_new_order_is_rejected_outside_continuous_trading() {
     ));
     assert_eq!(registry.combo_book(10).unwrap().len(), 0);
 }
+
+#[test]
+fn combo_cancel_is_rejected_outside_continuous_trading() {
+    use trading_system_engine::trading::core::public_events::TradingPhase;
+    let mut registry = registry_with_pair();
+    let order = registry
+        .execute_combo(combo_order(991, 1, 11, Side::Buy, 10, 5))
+        .unwrap();
+    let order_id = match order.as_slice() {
+        [ComboEvent::Rested { order }] => order.order_id,
+        other => panic!("expected rested order, got {other:?}"),
+    };
+    registry
+        .core_mut(1)
+        .unwrap()
+        .set_phase(TradingPhase::Break, 1);
+    let error = registry
+        .execute_combo(cancel_order(order_id, 1))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ComboCommandError::OutsideContinuousTrading {
+            phase: TradingPhase::Break
+        }
+    ));
+    assert!(registry.combo_book(10).unwrap().order(order_id).is_some());
+}

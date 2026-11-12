@@ -402,3 +402,17 @@ fn partial_fill_releases_exactly_the_filled_estimate() {
         .unwrap();
     assert_eq!(registry.available_margin(1), Some(balance - 6_000_000));
 }
+
+#[test]
+fn combo_entry_without_prior_settlement_fails_closed() {
+    let mut registry = registry_with_pair();
+    registry.set_margin_balance(1, BOTH_LEGS_ESTIMATE * 2);
+    let error = registry
+        .execute_combo(combo_order(1, 1, 1, Side::Buy, 100, QUANTITY))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ComboCommandError::Margin(ComboMarginError::MissingPriorSettlement { instrument_id: 1 })
+    ));
+    assert_eq!(registry.combo_book(10).unwrap().len(), 0);
+}

@@ -1021,7 +1021,7 @@ impl InstrumentRegistry {
         }
     }
 
-    fn rest_combo_order(&mut self, command: Command) -> Result<Vec<ComboEvent>, ComboCommandError> {
+    fn ensure_continuous_trading(&self) -> Result<(), ComboCommandError> {
         let phase = self
             .instruments
             .values()
@@ -1031,6 +1031,11 @@ impl InstrumentRegistry {
         if phase != crate::trading::core::public_events::TradingPhase::Continuous {
             return Err(ComboCommandError::OutsideContinuousTrading { phase });
         }
+        Ok(())
+    }
+
+    fn rest_combo_order(&mut self, command: Command) -> Result<Vec<ComboEvent>, ComboCommandError> {
+        self.ensure_continuous_trading()?;
         let pair_id = command.combo_id;
         let Some(pair) = self.pairs.get(&u64::from(pair_id)).copied() else {
             return Err(ComboCommandError::UnknownPair { pair_id });
@@ -1526,6 +1531,7 @@ impl InstrumentRegistry {
         &mut self,
         command: Command,
     ) -> Result<Vec<ComboEvent>, ComboCommandError> {
+        self.ensure_continuous_trading()?;
         let pair_id = command.combo_id;
         if command.cancel_order_id == 0 {
             return Err(ComboCommandError::MissingCancelOrderId);
