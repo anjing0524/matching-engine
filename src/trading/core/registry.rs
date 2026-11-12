@@ -1041,6 +1041,16 @@ impl InstrumentRegistry {
             return Err(ComboCommandError::UnknownPair { pair_id });
         };
         validate_new_combo_order(&command)?;
+        if !command
+            .price_ticks
+            .unsigned_abs()
+            .is_multiple_of(pair.spread_tick)
+        {
+            return Err(ComboCommandError::OffTickSpreadPrice {
+                price_ticks: command.price_ticks,
+                spread_tick: pair.spread_tick,
+            });
+        }
 
         let order_id = self.next_combo_order_id;
         let owner = ComboOrderOwner::new(

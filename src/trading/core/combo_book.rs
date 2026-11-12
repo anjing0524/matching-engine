@@ -955,6 +955,13 @@ pub enum ComboCommandError {
         /// Pair id carried by the rejected command.
         pair_id: u32,
     },
+    /// The spread price is not on the pair's spread tick.
+    OffTickSpreadPrice {
+        /// Rejected spread price.
+        price_ticks: i64,
+        /// Pair spread tick.
+        spread_tick: u64,
+    },
     /// Cancel did not carry an exchange order id.
     MissingCancelOrderId,
     /// The account cannot back both legs' estimated margin.
@@ -1004,6 +1011,13 @@ impl Display for ComboCommandError {
             }
             Self::MissingCancelOrderId => formatter.write_str("combo cancel has no order id"),
             Self::Margin(error) => Display::fmt(error, formatter),
+            Self::OffTickSpreadPrice {
+                price_ticks,
+                spread_tick,
+            } => write!(
+                formatter,
+                "spread price {price_ticks} is not a multiple of tick {spread_tick}"
+            ),
             Self::Book(error) => Display::fmt(error, formatter),
         }
     }

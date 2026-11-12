@@ -462,3 +462,32 @@ fn combo_cancel_is_rejected_outside_continuous_trading() {
     ));
     assert!(registry.combo_book(10).unwrap().order(order_id).is_some());
 }
+
+#[test]
+fn off_tick_combo_spread_is_rejected_without_mutation() {
+    let mut registry = InstrumentRegistry::new();
+    registry.register(1, spec("IF2501")).unwrap();
+    registry.register(2, spec("IF2502")).unwrap();
+    registry
+        .register_pair(ComboPair::new(
+            10,
+            1,
+            2,
+            2,
+            ComboPairMargin::new(300, 1_200, 1_000),
+        ))
+        .unwrap();
+    registry.set_prior_settlement(1, 50_000).unwrap();
+    registry.set_prior_settlement(2, 45_000).unwrap();
+    let error = registry
+        .execute_combo(combo_order(995, 1, 11, Side::Buy, 3, 5))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ComboCommandError::OffTickSpreadPrice {
+            price_ticks: 3,
+            spread_tick: 2
+        }
+    ));
+    assert_eq!(registry.combo_book(10).unwrap().len(), 0);
+}
