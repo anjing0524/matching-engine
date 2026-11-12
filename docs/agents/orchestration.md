@@ -37,3 +37,27 @@ Remove worktrees and ticket branches after merging:
 git worktree remove --force .worktrees/t<N>
 git branch -D ticket/<N>
 ```
+
+## Subagent failure contract
+
+A child that cannot finish must still leave a takeoverable state:
+
+1. commit the work-in-progress, even if tests fail;
+2. report the commit hash and the failing test/command;
+3. never leave uncommitted edits and exit silently.
+
+The Lead must inspect `git -C .worktrees/<name> status` and `git log` before
+assuming a child did nothing. Take over the existing worktree instead of
+re-implementing it.
+
+## Worktree base
+
+Create a worktree from the current integration branch after `git fetch`, not
+from a stale local base. Before merging a completed ticket branch, merge the
+latest integration branch into it and rerun tests.
+
+## Spec consistency
+
+When a child ticket changes a decision in its parent spec, update the parent
+spec in the same change. Do not let implementation and parent acceptance
+criteria disagree; that forces a review-time rewrite.

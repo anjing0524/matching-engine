@@ -48,3 +48,10 @@ Keep merge commits out of the mechanical check.
 
 - Removing or renaming a public interface requires updating all docs in the same change.
 - Record architecture assumptions as ADRs under `docs/adr/`.
+
+## Async tests
+
+Tests for logs, sockets, child processes, and runtime fanout must wait for a
+condition with a bounded deadline. Do not `sleep` for a fixed time and then
+assert. Use a `wait_until`/poll helper and make the failure message report what
+never arrived.
