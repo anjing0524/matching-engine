@@ -97,6 +97,7 @@ impl ReplayBuffer {
 /// log, so a restarted gateway continues the same stream and can answer a
 /// reconnect from a client that had not acknowledged its last events.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct PrivateDownlinkSnapshot {
     /// Next private sequence per user, sorted by user id.
     pub next_private_seq: Vec<(u64, u64)>,

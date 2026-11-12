@@ -33,6 +33,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 
 /// Why the registry refused an instrument or a command.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RegistryError {
     /// The command named an instrument id that is not registered.
     UnknownInstrument {
