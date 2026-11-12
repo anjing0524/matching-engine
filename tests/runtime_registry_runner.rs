@@ -189,7 +189,7 @@ fn unsupported_combo_order_is_rejected_without_mutating_state() {
     let mut runner = RegistryRunner::new(registry_with_pair(), consumer, NoPlugins);
 
     let mut command = combo_order(1, 1, Side::Buy, 100);
-    command.time_condition = TimeCondition::Ioc;
+    command.time_condition = TimeCondition::Gis;
     producer.send(&command).unwrap();
     let events = runner.poll_events();
 

@@ -930,12 +930,12 @@ pub enum ComboCommandError {
         /// Rejected price type.
         price_type: PriceType,
     },
-    /// M1 combo orders are GFD only.
+    /// Combo orders support GFD, IOC-Any (FAK), and IOC-All (FOK).
     UnsupportedTimeCondition {
         /// Rejected time condition.
         time_condition: TimeCondition,
     },
-    /// M1 combo orders use any-quantity volume semantics only.
+    /// GFD combos use Any quantity; IOC combos use Any or All.
     UnsupportedVolumeCondition {
         /// Rejected volume condition.
         volume_condition: VolumeCondition,
@@ -968,6 +968,13 @@ pub enum ComboCommandError {
         price_ticks: i64,
         /// Pair spread tick.
         spread_tick: u64,
+    },
+    /// A FOK combo order cannot fill its full quantity.
+    FokUnfillable {
+        /// Pair id carried by the rejected command.
+        pair_id: u32,
+        /// Requested quantity.
+        quantity: u64,
     },
     /// Cancel did not carry an exchange order id.
     MissingCancelOrderId,
@@ -1032,6 +1039,10 @@ impl Display for ComboCommandError {
                 formatter,
                 "spread price {price_ticks} is not a multiple of tick {spread_tick}"
             ),
+            Self::FokUnfillable { pair_id, quantity } => write!(
+                formatter,
+                "combo pair {pair_id} cannot fill FOK quantity {quantity}"
+            ),
             Self::Book(error) => Display::fmt(error, formatter),
         }
     }
@@ -1069,12 +1080,23 @@ pub(crate) fn validate_new_combo_order(command: &Command) -> Result<(), ComboCom
             price_type: command.price_type,
         });
     }
-    if command.time_condition != TimeCondition::Gfd {
+    if !matches!(
+        command.time_condition,
+        TimeCondition::Gfd | TimeCondition::Ioc
+    ) {
         return Err(ComboCommandError::UnsupportedTimeCondition {
             time_condition: command.time_condition,
         });
     }
-    if command.volume_condition != VolumeCondition::Any {
+    let valid_volume = matches!(
+        (command.time_condition, command.volume_condition),
+        (TimeCondition::Gfd, VolumeCondition::Any)
+            | (
+                TimeCondition::Ioc,
+                VolumeCondition::Any | VolumeCondition::All
+            )
+    );
+    if !valid_volume {
         return Err(ComboCommandError::UnsupportedVolumeCondition {
             volume_condition: command.volume_condition,
         });

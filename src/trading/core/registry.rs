@@ -1073,6 +1073,10 @@ impl InstrumentRegistry {
             });
         }
 
+        let is_ioc = command.time_condition == crate::trading::core::protocol::TimeCondition::Ioc;
+        let is_fok = is_ioc
+            && command.volume_condition == crate::trading::core::protocol::VolumeCondition::All;
+        let rollback = is_fok.then(|| self.snapshot());
         let order_id = self.next_combo_order_id;
         let owner = ComboOrderOwner::new(
             u64::from(command.user_id),
@@ -1101,13 +1105,26 @@ impl InstrumentRegistry {
         if order.remaining > 0 {
             events.extend(self.match_implied_in(&pair, &mut order, command.trading_ts_ns));
         }
-        if order.remaining > 0 {
+        if order.remaining > 0 && !is_ioc {
             let rested = self
                 .combo_books
                 .get_mut(&u64::from(pair_id))
                 .ok_or(ComboCommandError::UnknownPair { pair_id })?
                 .rest(order)?;
             events.push(ComboEvent::Rested { order: rested });
+        }
+        if is_ioc && order.remaining > 0 {
+            self.margin.release_all(order_id);
+        }
+        if is_fok && order.remaining > 0 {
+            if let Some(snapshot) = rollback {
+                self.restore_snapshot(snapshot)
+                    .expect("a just-captured registry snapshot must restore");
+            }
+            return Err(ComboCommandError::FokUnfillable {
+                pair_id,
+                quantity: command.quantity,
+            });
         }
         self.next_combo_order_id = self.next_combo_order_id.saturating_add(1);
         Ok(events)

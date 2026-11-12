@@ -279,12 +279,8 @@ fn market_fak_fok_and_stop_orders_are_rejected_explicitly() {
 
     let mut fak = combo_order(703, 1, 11, Side::Buy, 10, 5);
     fak.time_condition = TimeCondition::Ioc;
-    assert_eq!(
-        registry.execute_combo(fak).unwrap_err(),
-        ComboCommandError::UnsupportedTimeCondition {
-            time_condition: TimeCondition::Ioc,
-        }
-    );
+    assert!(registry.execute_combo(fak).unwrap().is_empty());
+    assert_eq!(registry.combo_book(10).unwrap().len(), 0);
 
     let mut gis = combo_order(704, 1, 11, Side::Buy, 10, 5);
     gis.time_condition = TimeCondition::Gis;
@@ -303,6 +299,18 @@ fn market_fak_fok_and_stop_orders_are_rejected_explicitly() {
             volume_condition: VolumeCondition::All,
         }
     );
+
+    let mut fok = combo_order(707, 1, 11, Side::Buy, 10, 5);
+    fok.time_condition = TimeCondition::Ioc;
+    fok.volume_condition = VolumeCondition::All;
+    assert_eq!(
+        registry.execute_combo(fok).unwrap_err(),
+        ComboCommandError::FokUnfillable {
+            pair_id: 10,
+            quantity: 5,
+        }
+    );
+    assert_eq!(registry.combo_book(10).unwrap().len(), 0);
 
     let mut minimum = combo_order(706, 1, 11, Side::Buy, 10, 5);
     minimum.volume_condition = VolumeCondition::Minimum;
@@ -510,4 +518,39 @@ fn combo_order_outside_pair_window_is_rejected() {
         }
     ));
     assert_eq!(registry.combo_book(10).unwrap().len(), 0);
+}
+
+#[test]
+fn fak_fills_available_and_does_not_rest_residual() {
+    let mut registry = registry_with_pair();
+    registry
+        .execute_combo(combo_order(1, 1, 11, Side::Sell, 100, 2))
+        .unwrap();
+    let mut fak = combo_order(2, 2, 12, Side::Buy, 100, 3);
+    fak.time_condition = TimeCondition::Ioc;
+    let events = registry.execute_combo(fak).unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ComboEvent::Filled { fill } if fill.quantity == 2))
+    );
+    assert_eq!(registry.combo_book(10).unwrap().len(), 0);
+}
+
+#[test]
+fn fok_rejects_and_rolls_back_when_full_quantity_is_unavailable() {
+    let mut registry = registry_with_pair();
+    registry
+        .execute_combo(combo_order(1, 1, 11, Side::Sell, 100, 2))
+        .unwrap();
+    let mut fok = combo_order(2, 2, 12, Side::Buy, 100, 3);
+    fok.time_condition = TimeCondition::Ioc;
+    fok.volume_condition = VolumeCondition::All;
+    let error = registry.execute_combo(fok).unwrap_err();
+    assert!(matches!(
+        error,
+        ComboCommandError::FokUnfillable { quantity: 3, .. }
+    ));
+    assert_eq!(registry.combo_book(10).unwrap().len(), 1);
+    assert_eq!(registry.combo_book(10).unwrap().best_ask(), Some(100));
 }
