@@ -60,6 +60,7 @@ fn binary_restores_runtime_snapshot() {
         core: None,
         combo: None,
         registry: Some(registry.snapshot()),
+        private: None,
     };
     snapshot.save(&snapshot_path).unwrap();
 
