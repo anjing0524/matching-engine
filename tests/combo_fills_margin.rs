@@ -517,13 +517,13 @@ fn unsupported_combo_entry_freezes_nothing_and_does_not_mutate() {
     registry.set_prior_settlement(1, 50_000).unwrap();
     registry.set_prior_settlement(2, 40_000).unwrap();
     let mut market = combo_order(801, 1, 11, Side::Buy, 100, 5);
-    market.price_type = PriceType::Market;
+    market.price_type = PriceType::AdvancedMarket;
 
     let error = registry.execute_combo(market).unwrap_err();
     assert_eq!(
         error,
         ComboCommandError::UnsupportedPriceType {
-            price_type: PriceType::Market
+            price_type: PriceType::AdvancedMarket
         }
     );
     assert!(registry.combo_book(10).unwrap().is_empty());

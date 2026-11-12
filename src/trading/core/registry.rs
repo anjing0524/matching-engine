@@ -1073,7 +1073,9 @@ impl InstrumentRegistry {
             });
         }
 
-        let is_ioc = command.time_condition == crate::trading::core::protocol::TimeCondition::Ioc;
+        let is_market = command.price_type == crate::trading::core::protocol::PriceType::Market;
+        let is_ioc = is_market
+            || command.time_condition == crate::trading::core::protocol::TimeCondition::Ioc;
         let is_fok = is_ioc
             && command.volume_condition == crate::trading::core::protocol::VolumeCondition::All;
         let rollback = is_fok.then(|| self.snapshot());
@@ -1100,10 +1102,15 @@ impl InstrumentRegistry {
             .combo_books
             .get_mut(&u64::from(pair_id))
             .ok_or(ComboCommandError::UnknownPair { pair_id })?
-            .match_taker(&mut order)?;
+            .match_taker(&mut order, is_market)?;
         self.settle_direct_fills(&pair, &events, direct_leg_prices, command.trading_ts_ns);
         if order.remaining > 0 {
-            events.extend(self.match_implied_in(&pair, &mut order, command.trading_ts_ns));
+            events.extend(self.match_implied_in(
+                &pair,
+                &mut order,
+                command.trading_ts_ns,
+                is_market,
+            ));
         }
         if order.remaining > 0 && !is_ioc {
             let rested = self
@@ -1143,6 +1150,7 @@ impl InstrumentRegistry {
         pair: &ComboPair,
         order: &mut ComboOrder,
         trading_ts_ns: u64,
+        market: bool,
     ) -> Vec<ComboEvent> {
         let mut events = Vec::new();
         while order.remaining > 0 {
@@ -1157,7 +1165,7 @@ impl InstrumentRegistry {
                 break;
             };
             let spread_price = leg_spread_price(leg1_price, leg2_price);
-            if !spread_within_limit(order.side, order.spread_price, spread_price) {
+            if !market && !spread_within_limit(order.side, order.spread_price, spread_price) {
                 break;
             }
             let leg1_available = self.leg_available_at(
@@ -1297,7 +1305,7 @@ impl InstrumentRegistry {
             };
             let before = current.remaining;
             let mut order = current;
-            self.match_implied_in(pair, &mut order, trading_ts_ns);
+            self.match_implied_in(pair, &mut order, trading_ts_ns, false);
             let filled = before - order.remaining;
             if filled == 0 {
                 continue;
