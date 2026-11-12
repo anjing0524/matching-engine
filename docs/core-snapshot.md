@@ -48,10 +48,21 @@ mutually exclusive shapes:
 `TradingRuntime::restore_snapshot()` rejects a snapshot whose shape does not
 match the runtime command path, so a restore cannot silently mix the legacy
 single-core path with registry-backed combo state. The runtime snapshot schema
-version is 7; older snapshots must be regenerated or replayed from the command
+version is 8; older snapshots must be regenerated or replayed from the command
 log. A registry restore also enables fail-closed combo margin: a restored venue
 with Combo Pairs requires explicit account balances because balances are venue
 configuration and are not part of `RegistrySnapshot`.
+
+## Snapshot compatibility
+
+| Snapshot | Version | Source |
+|---|---:|---|
+| `CoreSnapshot` | 7 | `trading/snapshot/mod.rs` |
+| `RegistrySnapshot` | 4 | `trading/snapshot/mod.rs` |
+| `TradingSnapshot` | 8 | `trading/runtime/engine.rs` |
+
+These versions move independently; a change to any schema must update this
+table and the corresponding reject-old-version tests.
 
 ## Registry-backed combo snapshots
 
