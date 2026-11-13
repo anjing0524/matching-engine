@@ -41,8 +41,8 @@ harness = false
 # Performance profile
 [profile.release]
 opt-level = 3           # maximum performance
-lto = "thin"            # thin LTO (balances compile time and performance)
-codegen-units = 16      # parallel codegen units
+lto = "fat"             # full LTO: one codegen unit, best optimization
+codegen-units = 1       # one codegen unit: best optimization, slower build
 strip = false           # keep symbols for debugging (set to true in production)
 
 # Binary-size profile (optional, for deployment)
