@@ -50,7 +50,7 @@ pub enum TradingSnapshotData {
     },
 }
 
-const TRADING_SNAPSHOT_VERSION: u32 = 10;
+const TRADING_SNAPSHOT_VERSION: u32 = crate::trading::snapshot::schema::TRADING.version;
 
 impl TradingSnapshot {
     /// Returns the core shape, if present.
