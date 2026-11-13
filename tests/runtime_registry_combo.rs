@@ -197,7 +197,6 @@ fn combo_command_reaches_registry_and_private_fill_through_runtime() {
     // The runtime is the registry path, not the legacy combo engine.
     let snapshot = runtime.snapshot();
     assert!(snapshot.registry.is_some());
-    assert!(snapshot.combo.is_none());
     assert!(snapshot.core.is_none());
     let _ = std::fs::remove_file(path);
 }

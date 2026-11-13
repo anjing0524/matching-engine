@@ -5,7 +5,7 @@
 //! wall clock, or background work; snapshots are explicit method calls.
 //!
 //! Supported command shapes include limit/market/FAK/FOK, cancel, and auction
-//! staging/uncross. Combo queues and execution live in `ComboEngine`. The same
+//! staging/uncross. Combo execution lives in the registry combo path. The same
 //! command sequence always produces the same private/public projections.
 
 use crate::domain::orderbook::{ContractSpec, RestingOrder, TickBasedOrderBook};

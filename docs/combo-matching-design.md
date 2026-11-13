@@ -228,7 +228,7 @@ The single-process production binary drives one `InstrumentRegistry` through
   to `InstrumentRegistry::execute_combo`, everything else to the ordinary
   Contract core named by `instrument_id`
 - combo commands never create a second command ring or a second set of leg
-  books; the legacy `ComboEngine`/`ComboRuntime` path is not constructed by the
+  books; the production runtime uses only this registry-backed path;
   single-process binary
 - startup loads static pairs, prior settlements, and explicit account margin
   balances from `ComboVenueConfig`; a pair config without balances is rejected

@@ -16,16 +16,14 @@
 It does **not** capture:
 
 - call-auction staging (`auction_orders`, `auction_meta`)
-- combo queues and shared leg books (captured by `RegistrySnapshot` for the
-  registry seam; the legacy `ComboEngine` runtime uses `ComboEngineSnapshot`)
+- combo queues and shared leg books (captured by `RegistrySnapshot`)
 - ephemeral private/public event buffers
 
 Auction staging (`auction_orders`, `auction_meta`, auction sequence) is included
 in the core snapshot and round-tripped. Registry-backed combo state lives in
 `RegistrySnapshot`, which covers the ordinary Contract cores (books and
 positions), static pairs, base Combo Order books, leg margin reservations, and
-the Combo Private sequence. The legacy `ComboEngineSnapshot` covers only the
-`ComboEngine` queue, synthetic leg books, and its margin state.
+the Combo Private sequence.
 `save_snapshot` writes the complete state without a separate drain step.
 
 ## Restore
@@ -40,8 +38,7 @@ snapshot in tests.
 `TradingRuntime::snapshot()` writes a versioned `TradingSnapshot` with two
 mutually exclusive shapes:
 
-- legacy/core runtime: `core = Some(CoreSnapshot)` and optional `combo`
-  (`ComboEngineSnapshot`)
+- core runtime: `core = Some(CoreSnapshot)`, no combo state
 - production single-process registry runtime: `registry =
   Some(RegistrySnapshot)`, with `core = None` and `combo = None`
 

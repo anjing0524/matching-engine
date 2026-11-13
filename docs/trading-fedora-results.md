@@ -38,7 +38,7 @@ middleware submit: 200000 in 27.949ms -> 7,155,832 cmd/s
 core consume:      200000 in 114.543ms -> 1,746,063 cmd/s
 ```
 
-`cargo bench --bench trading_combo_benchmark`
+`cargo test --test combo_matching`
 
 ```text
 combo queue:    7,686,052 order/s

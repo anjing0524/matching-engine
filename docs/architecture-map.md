@@ -16,7 +16,6 @@ src/
     │                       # private_downlink: seq/replay/routing/batch delivery
     ├── transport/          # SPSC ring, middleware, CoreRunner/RegistryRunner, sessions, logs
     ├── market_data/        # publisher, tracker, repair, metrics
-    ├── combo/              # legacy ComboEngine/queue/exec/runtime, market_data
     ├── snapshot/           # core and registry snapshot_file, replay
     └── runtime/            # engine composition, event fanout
 ```
@@ -42,7 +41,7 @@ RegistryRunner ────────────────► InstrumentReg
 TradingRuntime
   ├─ GatewayRuntime private downlink (one per-user sequence for core + combo)
   ├─ EventFanout: result logs, repair buffer/server, market data
-  └─ (optional legacy ComboRuntime, not used by the single-process binary)
+  └─ registry combo path (single-process production)
 ```
 
 Key ownership rules:
@@ -59,7 +58,7 @@ Key ownership rules:
   composition root is `TradingRuntime::from_registry`.
 - `CoreRunner` remains the split-deployment (`trading-core`) and test seam over
   one `TradingCore`. ADR-0001 keeps combo execution out of split deployment.
-  `TradingRuntime::new` and the legacy `ComboRuntime` are compatibility paths;
+  `TradingRuntime::new` is the split/CoreRunner path;
   the single-process binary always builds `RegistryRunner`.
 - `poll_events()` is the one event projection for both runners. A registry
   poll returns core private/public events plus Combo Private Fills; transport
