@@ -81,3 +81,112 @@ mod tests {
         assert_eq!(EventSequence::new(u64::MAX).next().get(), u64::MAX);
     }
 }
+
+/// Exchange-assigned order id.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct OrderId(u64);
+
+/// Client-assigned order id.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct ClientOrderId(u64);
+
+/// Trading account id.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct AccountId(u64);
+
+/// Gateway session id.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct SessionId(u64);
+
+macro_rules! id_newtype {
+    ($name:ident) => {
+        impl $name {
+            /// Creates the id from its wire representation.
+            #[must_use]
+            pub const fn new(value: u64) -> Self {
+                Self(value)
+            }
+
+            /// Returns the wire representation.
+            #[must_use]
+            pub const fn get(self) -> u64 {
+                self.0
+            }
+        }
+
+        impl From<u64> for $name {
+            fn from(value: u64) -> Self {
+                Self(value)
+            }
+        }
+
+        impl From<$name> for u64 {
+            fn from(value: $name) -> Self {
+                value.0
+            }
+        }
+
+        impl PartialEq<u64> for $name {
+            fn eq(&self, other: &u64) -> bool {
+                self.0 == *other
+            }
+        }
+    };
+}
+
+id_newtype!(OrderId);
+id_newtype!(ClientOrderId);
+id_newtype!(AccountId);
+id_newtype!(SessionId);

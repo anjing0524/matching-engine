@@ -298,7 +298,7 @@ fn partial_or_incompatible_snapshots_are_rejected() {
             snapshot
                 .combo_private_events
                 .iter()
-                .map(|fill| fill.order_id),
+                .map(|fill| fill.order_id.get()),
         )
         .max()
         .unwrap();

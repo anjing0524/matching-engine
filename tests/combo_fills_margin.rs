@@ -334,7 +334,7 @@ fn private_sequence_stays_ordered_across_direct_and_implied_effects() {
     let fills = registry.drain_combo_private_events();
     let sequence: Vec<(u64, u64, u64)> = fills
         .iter()
-        .map(|fill| (fill.seq, fill.user_id, fill.quantity))
+        .map(|fill| (fill.seq, fill.user_id.get(), fill.quantity))
         .collect();
     assert_eq!(sequence, vec![(1, 9, 2), (2, 1, 2), (3, 9, 3)]);
 }

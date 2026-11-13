@@ -62,7 +62,7 @@ impl PrivateEffect {
     pub fn user_id(&self) -> u64 {
         match self {
             Self::Core(event) => event.account_id,
-            Self::Combo(fill) => fill.user_id,
+            Self::Combo(fill) => fill.user_id.get(),
         }
     }
 

@@ -136,7 +136,7 @@ fn direct_combo_fill_returns_one_private_fill_per_owner() {
     let mut users: Vec<u64> = events
         .combo_private
         .iter()
-        .map(|fill| fill.user_id)
+        .map(|fill| fill.user_id.get())
         .collect();
     users.sort_unstable();
     assert_eq!(users, vec![1, 2]);

@@ -378,7 +378,7 @@ fn resting_combos_fill_in_price_time_priority_without_duplicates() {
     let fills = registry.drain_combo_private_events();
     let summary: Vec<(u64, u64, i64)> = fills
         .iter()
-        .map(|fill| (fill.order_id, fill.quantity, fill.spread_price))
+        .map(|fill| (fill.order_id.get(), fill.quantity, fill.spread_price))
         .collect();
     assert_eq!(
         summary,

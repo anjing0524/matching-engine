@@ -826,7 +826,7 @@ impl InstrumentRegistry {
         let max_assigned_order_id = resting_orders
             .iter()
             .map(|order| order.order_id)
-            .chain(combo_private_events.iter().map(|fill| fill.order_id))
+            .chain(combo_private_events.iter().map(|fill| fill.order_id.get()))
             .max()
             .unwrap_or(0);
         if next_combo_order_id == 0 || next_combo_order_id <= max_assigned_order_id {
@@ -1501,10 +1501,12 @@ impl InstrumentRegistry {
         self.combo_journal.push_private(ComboPrivateFill {
             seq: 0,
             pair_id: terms.pair_id,
-            order_id,
-            client_order_id: owner.client_order_id,
-            user_id: owner.user_id,
-            session_id: owner.session_id,
+            order_id: crate::trading::core::domain_ids::OrderId::new(order_id),
+            client_order_id: crate::trading::core::domain_ids::ClientOrderId::new(
+                owner.client_order_id,
+            ),
+            user_id: crate::trading::core::domain_ids::AccountId::new(owner.user_id),
+            session_id: crate::trading::core::domain_ids::SessionId::new(owner.session_id),
             side,
             quantity: terms.quantity,
             spread_price: terms.spread_price,
