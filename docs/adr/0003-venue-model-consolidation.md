@@ -27,7 +27,7 @@ Venue
 
 Consolidate by strangler migration, never a big-bang rewrite:
 
-1. domain newtypes + one `VenueEvent` envelope
+1. domain newtypes + per-stream canonical events (ADR-0004)
 2. one generic `PriceLevelBook` for core and combo
 3. one `VenueRunner` for single and split deployment
 4. split `Venue` / `ComboVenue` / `RiskState` / `EventProjector`
