@@ -825,7 +825,7 @@ impl InstrumentRegistry {
         resting_orders.sort_by_key(|order| order.order_id);
         let max_assigned_order_id = resting_orders
             .iter()
-            .map(|order| order.order_id)
+            .map(|order| order.order_id.get())
             .chain(combo_private_events.iter().map(|fill| fill.order_id.get()))
             .max()
             .unwrap_or(0);
@@ -838,11 +838,11 @@ impl InstrumentRegistry {
         let mut resting_order_ids: U64MixMap<u32> = U64MixMap::default();
         for order in &resting_orders {
             if resting_order_ids
-                .insert(order.order_id, order.pair_id)
+                .insert(order.order_id.get(), order.pair_id)
                 .is_some()
             {
                 return Err(RegistrySnapshotError::DuplicateComboOrderId {
-                    order_id: order.order_id,
+                    order_id: order.order_id.get(),
                 });
             }
         }
@@ -889,9 +889,9 @@ impl InstrumentRegistry {
             .map_err(RegistrySnapshotError::Margin)?;
 
         for order in &resting_orders {
-            let Some(freeze) = margin.freeze_for(order.order_id) else {
+            let Some(freeze) = margin.freeze_for(order.order_id.get()) else {
                 return Err(RegistrySnapshotError::MissingMarginReservation {
-                    order_id: order.order_id,
+                    order_id: order.order_id.get(),
                 });
             };
             if freeze.pair_id != order.pair_id
@@ -899,7 +899,7 @@ impl InstrumentRegistry {
                 || freeze.remaining != order.remaining
             {
                 return Err(RegistrySnapshotError::MarginReservationMismatch {
-                    order_id: order.order_id,
+                    order_id: order.order_id.get(),
                 });
             }
         }
@@ -1196,7 +1196,7 @@ impl InstrumentRegistry {
                 .consume_combo_legs(
                     pair.leg1_instrument_id,
                     pair.leg2_instrument_id,
-                    order.order_id,
+                    order.order_id.get(),
                     &leg1_plan,
                     &leg2_plan,
                 )
@@ -1220,7 +1220,8 @@ impl InstrumentRegistry {
                 leg1_price_ticks: leg1_price,
                 leg2_price_ticks: leg2_price,
             };
-            self.margin.release_on_fill(fill.order_id, fill.quantity);
+            self.margin
+                .release_on_fill(fill.order_id.get(), fill.quantity);
             self.apply_combo_owner_fill(
                 pair,
                 fill.owner.user_id.get(),
@@ -1232,8 +1233,8 @@ impl InstrumentRegistry {
                 pair_id: fill.pair_id,
                 order_id: fill.order_id,
                 side: Some(fill.side),
-                buy_order_id: 0,
-                sell_order_id: 0,
+                buy_order_id: crate::trading::core::domain_ids::OrderId::default(),
+                sell_order_id: crate::trading::core::domain_ids::OrderId::default(),
                 quantity: fill.quantity,
                 spread_price: fill.spread_price,
                 leg1_price_ticks: fill.leg1_price_ticks,
@@ -1300,7 +1301,7 @@ impl InstrumentRegistry {
             let Some(current) = self
                 .combo_books
                 .get(&key)
-                .and_then(|book| book.order(candidate.order_id))
+                .and_then(|book| book.order(candidate.order_id.get()))
                 .copied()
             else {
                 continue;
@@ -1314,7 +1315,7 @@ impl InstrumentRegistry {
             }
             if let Some(book) = self.combo_books.get_mut(&key) {
                 let _filled_order = book
-                    .apply_implied_fill(order.order_id, filled)
+                    .apply_implied_fill(order.order_id.get(), filled)
                     .expect("a matched resting combo order must still be resting");
             }
         }
@@ -1397,7 +1398,7 @@ impl InstrumentRegistry {
         self.margin.try_freeze(
             pair,
             ComboEntryMargin {
-                order_id: order.order_id,
+                order_id: order.order_id.get(),
                 account_id: order.owner.user_id.get(),
                 quantity: order.quantity,
                 leg1_prior_settlement,
@@ -1432,9 +1433,9 @@ impl InstrumentRegistry {
         trading_ts_ns: u64,
     ) {
         self.margin
-            .release_on_fill(fill.buy_order_id, fill.quantity);
+            .release_on_fill(fill.buy_order_id.get(), fill.quantity);
         self.margin
-            .release_on_fill(fill.sell_order_id, fill.quantity);
+            .release_on_fill(fill.sell_order_id.get(), fill.quantity);
         self.apply_combo_owner_fill(
             pair,
             fill.buy_owner.user_id.get(),
@@ -1460,7 +1461,7 @@ impl InstrumentRegistry {
         self.push_combo_private_fill(fill.sell_order_id, fill.sell_owner, Side::Sell, terms);
         let trade = ComboTradeTerms {
             pair_id: fill.pair_id,
-            order_id: 0,
+            order_id: crate::trading::core::domain_ids::OrderId::default(),
             side: None,
             buy_order_id: fill.buy_order_id,
             sell_order_id: fill.sell_order_id,
@@ -1493,7 +1494,7 @@ impl InstrumentRegistry {
 
     fn push_combo_private_fill(
         &mut self,
-        order_id: u64,
+        order_id: crate::trading::core::domain_ids::OrderId,
         owner: ComboOrderOwner,
         side: Side,
         terms: ComboFillTerms,
@@ -1501,7 +1502,7 @@ impl InstrumentRegistry {
         self.combo_journal.push_private(ComboPrivateFill {
             seq: 0,
             pair_id: terms.pair_id,
-            order_id: crate::trading::core::domain_ids::OrderId::new(order_id),
+            order_id,
             client_order_id: owner.client_order_id,
             user_id: owner.user_id,
             session_id: owner.session_id,
@@ -1528,10 +1529,10 @@ impl InstrumentRegistry {
             phase: 0,
             instrument_id: 0,
             pair_id: terms.pair_id,
-            order_id: terms.order_id,
+            order_id: terms.order_id.get(),
             trade_id: 0,
-            buy_order_id: terms.buy_order_id,
-            sell_order_id: terms.sell_order_id,
+            buy_order_id: terms.buy_order_id.get(),
+            sell_order_id: terms.sell_order_id.get(),
             side: terms.side,
             price_ticks: 0,
             quantity: terms.quantity,
@@ -1599,7 +1600,7 @@ impl InstrumentRegistry {
                 .ok_or(ComboCommandError::UnknownPair { pair_id })?;
             book.cancel_for(u64::from(command.user_id), command.cancel_order_id)?
         };
-        self.margin.release_all(order.order_id);
+        self.margin.release_all(order.order_id.get());
         Ok(vec![ComboEvent::Canceled { order }])
     }
 
@@ -1731,10 +1732,10 @@ impl InstrumentRegistry {
 #[derive(Clone, Copy)]
 struct ComboTradeTerms {
     pair_id: u32,
-    order_id: u64,
+    order_id: crate::trading::core::domain_ids::OrderId,
     side: Option<Side>,
-    buy_order_id: u64,
-    sell_order_id: u64,
+    buy_order_id: crate::trading::core::domain_ids::OrderId,
+    sell_order_id: crate::trading::core::domain_ids::OrderId,
     quantity: u64,
     spread_price: i64,
     leg1_price_ticks: u64,

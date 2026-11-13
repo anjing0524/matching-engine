@@ -301,7 +301,7 @@ impl<P: PreTradePlugin> RegistryRunner<P> {
                     if let Some(ComboEvent::Canceled { order }) = events.first() {
                         statuses.push(PrivateEvent {
                             seq: 0,
-                            order_id: order.order_id,
+                            order_id: order.order_id.get(),
                             client_order_id: order.owner.client_order_id.get(),
                             account_id: order.owner.user_id.get(),
                             status: PrivateStatus::Canceled,

@@ -267,7 +267,10 @@ fn runtime_snapshot_roundtrip_restores_registry_combo_state() {
     let (runtime, _address) = runtime_with_registry(registry, &path);
     let snapshot = runtime.snapshot();
     let registry_snapshot = snapshot.registry.clone().expect("registry snapshot");
-    assert_eq!(registry_snapshot.next_combo_order_id, resting_order_id + 1);
+    assert_eq!(
+        registry_snapshot.next_combo_order_id,
+        resting_order_id.get() + 1
+    );
     snapshot.save(&snapshot_path).unwrap();
     let loaded = TradingSnapshot::load(&snapshot_path).unwrap();
     assert_eq!(loaded.registry.as_ref(), Some(&registry_snapshot));

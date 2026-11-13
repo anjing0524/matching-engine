@@ -134,7 +134,7 @@ fn rest_leg(registry: &mut InstrumentRegistry, command: Command) -> u64 {
 
 fn rested_combo_order(events: &[ComboEvent]) -> u64 {
     match events {
-        [ComboEvent::Rested { order }] => order.order_id,
+        [ComboEvent::Rested { order }] => order.order_id.get(),
         other => panic!("expected one rested combo order, got {other:?}"),
     }
 }
