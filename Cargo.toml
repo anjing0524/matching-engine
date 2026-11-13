@@ -38,10 +38,6 @@ harness = false
 name = "trading_middleware_benchmark"
 harness = false
 
-[[bench]]
-name = "trading_combo_benchmark"
-harness = false
-
 # Performance profile
 [profile.release]
 opt-level = 3           # maximum performance

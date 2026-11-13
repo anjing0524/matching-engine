@@ -5,7 +5,7 @@
 
 ## Context
 
-The single-process `TradingRuntime` composes a `ComboRuntime` beside the core.
+The single-process `TradingRuntime` composes combo execution through `InstrumentRegistry`.
 The split deployment (`trading-middleware` + `trading-core`) has command,
 public-event, and private-event rings for the core only. It has no combo
 command ring and no combo private-event producer.

@@ -10,7 +10,7 @@ optimizations; thermal/background load causes visible run-to-run variance.
 ```text
 cargo bench --bench trading_core_benchmark
 cargo bench --bench trading_middleware_benchmark
-cargo bench --bench trading_combo_benchmark
+cargo test --test combo_matching
 cargo test --release --test trading_soak
 cargo test --release --test trading_combo_soak
 ```

@@ -4,11 +4,9 @@
 //! core command consumer, then routes core private events back to the matching
 //! gateway session.
 
-use crate::trading::combo::runtime::{ComboRuntime, ComboRuntimeSnapshot};
 use crate::trading::core::CoreSnapshot;
 #[cfg(test)]
 use crate::trading::core::TradingCore;
-use crate::trading::core::combo_book::ComboPrivateFill;
 use crate::trading::core::plugins::PreTradePlugin;
 use crate::trading::core::registry::RegistrySnapshot;
 use crate::trading::gateway::runtime::GatewayRuntime;
@@ -32,8 +30,6 @@ use std::time::{Duration, Instant};
 pub struct TradingSnapshot {
     /// Legacy single-core state.
     pub core: Option<CoreSnapshot>,
-    /// Legacy `ComboEngine` state.
-    pub combo: Option<ComboRuntimeSnapshot>,
     /// Registry-backed combo state for the single-process production path.
     pub registry: Option<RegistrySnapshot>,
     /// Per-user private sequence and replay log.
@@ -41,7 +37,7 @@ pub struct TradingSnapshot {
     pub private: Option<crate::trading::gateway::private_replay::PrivateDownlinkSnapshot>,
 }
 
-const TRADING_SNAPSHOT_VERSION: u32 = 8;
+const TRADING_SNAPSHOT_VERSION: u32 = 9;
 
 impl TradingSnapshot {
     /// Writes a versioned, checksummed snapshot with atomic replacement.
@@ -68,11 +64,6 @@ pub struct RuntimeOptions {
     pub private_log: Option<PrivateResultLog>,
     pub repair_server: Option<RepairServer>,
     pub market_data: Option<MarketDataPublisher>,
-    /// Legacy `ComboEngine` runtime.
-    ///
-    /// The production single-process runtime uses [`RegistryRunner`] and does
-    /// not set this. Combining it with the registry path is rejected.
-    pub combo: Option<ComboRuntime>,
     pub metrics_sink: Option<Arc<Mutex<TradingMetrics>>>,
     pub idle_timeout: Option<Duration>,
 }
@@ -90,7 +81,6 @@ pub struct TradingRuntime<P> {
     server: GatewayServerHandle,
     idle_timeout: Option<Duration>,
     last_expire: Instant,
-    combo: Option<ComboRuntime>,
     fanout: EventFanout,
     metrics: TradingMetrics,
     metrics_sink: Option<Arc<Mutex<TradingMetrics>>>,
@@ -128,7 +118,6 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
             server,
             idle_timeout: None,
             last_expire: Instant::now(),
-            combo: None,
             fanout: EventFanout::new(),
             metrics: TradingMetrics::new(),
             metrics_sink: None,
@@ -145,19 +134,9 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
             repair_server: options.repair_server,
             market_data: options.market_data,
         });
-        assert!(
-            !matches!(self.core, RuntimeCore::Registry(_)) || options.combo.is_none(),
-            "the registry-backed runtime owns combo execution; legacy ComboRuntime is not allowed"
-        );
-        self.combo = options.combo;
         self.metrics_sink = options.metrics_sink;
         self.idle_timeout = options.idle_timeout;
         self
-    }
-
-    #[cfg(test)]
-    pub(crate) fn combo_mut(&mut self) -> Option<&mut ComboRuntime> {
-        self.combo.as_mut()
     }
 
     #[must_use]
@@ -210,24 +189,6 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         self.metrics.public_events_sent += public_sent;
         // Project each public event once; stale events must not be re-emitted.
         self.public_events.clear();
-        if let Some(combo) = &mut self.combo {
-            combo.poll_commands();
-            let effects = combo.tick_effects();
-            self.metrics.public_events_sent += effects.public_sent as u64;
-            let command_events = self
-                .gateway
-                .dispatch_private(&self.server, effects.private_commands);
-            let fill_events = self.gateway.dispatch_combo_private(
-                &self.server,
-                effects
-                    .private_fills
-                    .iter()
-                    .map(crate::trading::combo::engine::ComboFillEvent::private_fill)
-                    .map(legacy_combo_private_fill),
-            );
-            self.metrics.private_events_sent += (command_events + fill_events) as u64;
-            self.metrics.combo_queue_orders = combo.queue_len() as u64;
-        }
         let repaired = self.fanout.poll_repair();
         self.metrics.repair_events_sent += repaired;
         self.metrics.fanout_errors = self.fanout.sink_errors();
@@ -261,13 +222,11 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         match &self.core {
             RuntimeCore::Core(runner) => TradingSnapshot {
                 core: Some(runner.core().snapshot()),
-                combo: self.combo.as_ref().map(ComboRuntime::snapshot),
                 registry: None,
                 private: Some(self.gateway.private_snapshot()),
             },
             RuntimeCore::Registry(runner) => TradingSnapshot {
                 core: None,
-                combo: None,
                 registry: Some(runner.registry().snapshot()),
                 private: Some(self.gateway.private_snapshot()),
             },
@@ -289,7 +248,6 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         }
         let TradingSnapshot {
             core,
-            combo,
             registry,
             private,
         } = snapshot;
@@ -307,16 +265,10 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
                 runner
                     .restore_snapshot(core)
                     .map_err(|error| error.to_string())?;
-                match (self.combo.as_mut(), combo) {
-                    (Some(combo), Some(combo_snapshot)) => combo.restore_snapshot(combo_snapshot),
-                    (None, None) => Ok(()),
-                    _ => {
-                        Err("snapshot combo state does not match runtime configuration".to_string())
-                    }
-                }
+                Ok(())
             }
             RuntimeCore::Registry(runner) => {
-                if core.is_some() || combo.is_some() {
+                if core.is_some() {
                     return Err(
                         "snapshot core state does not match the registry runtime".to_string()
                     );
@@ -337,24 +289,6 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
     #[cfg(test)]
     pub(crate) fn gateway_mut(&mut self) -> &mut GatewayRuntime {
         &mut self.gateway
-    }
-}
-
-fn legacy_combo_private_fill(
-    fill: crate::trading::combo::engine::ComboPrivateFill,
-) -> ComboPrivateFill {
-    ComboPrivateFill {
-        seq: fill.seq,
-        pair_id: 0,
-        order_id: fill.order_id,
-        client_order_id: fill.order_id,
-        user_id: fill.user_id,
-        session_id: 0,
-        side: fill.side,
-        quantity: fill.quantity,
-        spread_price: fill.spread_ticks,
-        leg1_price_ticks: fill.leg1_price,
-        leg2_price_ticks: fill.leg2_price,
     }
 }
 
@@ -487,174 +421,6 @@ mod tests {
             subscriber.recv().unwrap();
         }
         drop(streams);
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn combo_order_flows_gateway_to_public_transport() {
-        use crate::shared::protocol::OrderType;
-        use crate::trading::combo::engine::ComboEngine;
-        use crate::trading::combo::market_data::{
-            ComboMarketDataPublisher, ComboMarketDataSubscriber,
-        };
-        use crate::trading::combo::runtime::ComboRuntime;
-        use crate::trading::core::protocol::{Command, CommandType, Hedge, Offset, Side};
-        use std::io::Read;
-
-        let core_path = std::env::temp_dir().join(format!(
-            "trading-system-engine-combo-e2e-core-{}",
-            std::process::id()
-        ));
-        let combo_path = std::env::temp_dir().join(format!(
-            "trading-system-engine-combo-e2e-ring-{}",
-            std::process::id()
-        ));
-        for path in [&core_path, &combo_path] {
-            let _ = std::fs::remove_file(path);
-        }
-        let (core_producer, core_consumer) = create(&core_path, 16).unwrap();
-        let (combo_producer, combo_consumer) = create(&combo_path, 16).unwrap();
-        let middleware =
-            MiddlewareSequencer::new(core_producer).with_combo_transport(combo_producer);
-        let (server, events) = start("127.0.0.1:0").unwrap();
-        let addr = server.addr();
-        let gateway = GatewayRuntime::new(middleware, events);
-        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
-        let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
-        let runner = CoreRunner::new(core, core_consumer, NoPlugins);
-
-        let mut engine = ComboEngine::new(
-            ContractSpec::new("LEG1", 1, 1_000, 100_000),
-            ContractSpec::new("LEG2", 1, 1, 100_000),
-        );
-        engine
-            .executor_mut()
-            .leg1
-            .insert_resting_order(2, OrderType::Sell, 50_000, 5, 5, 1)
-            .unwrap();
-        engine
-            .executor_mut()
-            .leg2
-            .insert_resting_order(3, OrderType::Buy, 100, 5, 5, 2)
-            .unwrap();
-        let subscriber = ComboMarketDataSubscriber::bind("127.0.0.1:0").unwrap();
-        let publisher =
-            ComboMarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap())
-                .unwrap();
-        let combo = ComboRuntime::new(engine)
-            .with_command_consumer(combo_consumer)
-            .with_publisher(publisher);
-        let mut runtime =
-            TradingRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
-                combo: Some(combo),
-                ..Default::default()
-            });
-
-        let mut stream = TcpStream::connect(addr).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        stream
-            .write_all(
-                &GatewayFrame::Login {
-                    member_id: 10,
-                    auth_token: 0,
-                    user_id: 2,
-                    seat_id: 3,
-                    session_epoch: 1,
-                    last_private_seq: 0,
-                }
-                .encode(),
-            )
-            .unwrap();
-        let mut combo_command = Command::zeroed();
-        combo_command.command_type = CommandType::NewOrder;
-        combo_command.combo_id = 7;
-        combo_command.client_order_id = 42;
-        combo_command.user_id = 2;
-        combo_command.side = Side::Buy;
-        combo_command.price_ticks = 49_900;
-        combo_command.quantity = 5;
-        combo_command.offset = Offset::Open;
-        combo_command.hedge = Hedge::Spec;
-        stream
-            .write_all(&GatewayFrame::Command(combo_command).encode())
-            .unwrap();
-
-        let mut private = None;
-        for _ in 0..500 {
-            runtime.tick();
-            let mut frame = [0u8; crate::trading::gateway::GATEWAY_FRAME_SIZE];
-            if stream.read_exact(&mut frame).is_ok() {
-                private = Some(GatewayFrame::decode(&frame).unwrap());
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        assert!(matches!(
-            private,
-            Some(GatewayFrame::PrivateEvent(event)) if event.status == crate::trading::core::private_events::PrivateStatus::Accepted
-        ));
-        let fill = subscriber.recv().unwrap();
-        assert_eq!(fill.quantity, 5);
-        assert_eq!(fill.spread_ticks, 49_900);
-        for path in [&core_path, &combo_path] {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-
-    #[test]
-    fn combo_runtime_tick_is_driven_by_runtime() {
-        use crate::shared::protocol::OrderType;
-        use crate::trading::combo::engine::ComboEngine;
-        use crate::trading::combo::market_data::{
-            ComboMarketDataPublisher, ComboMarketDataSubscriber,
-        };
-        use crate::trading::combo::runtime::ComboRuntime;
-        use crate::trading::core::protocol::{Hedge, Offset, Side};
-
-        let path = std::env::temp_dir().join(format!(
-            "trading-system-engine-trading-runtime-combo-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        let (producer, consumer) = create(&path, 8).unwrap();
-        let middleware = MiddlewareSequencer::new(producer);
-        let (server, events) = start("127.0.0.1:0").unwrap();
-        let gateway = GatewayRuntime::new(middleware, events);
-        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
-        let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
-        let runner = CoreRunner::new(core, consumer, NoPlugins);
-
-        let mut engine = ComboEngine::new(
-            ContractSpec::new("LEG1", 1, 1_000, 100_000),
-            ContractSpec::new("LEG2", 1, 1, 100_000),
-        );
-        engine
-            .executor_mut()
-            .leg1
-            .insert_resting_order(2, OrderType::Sell, 50_000, 5, 5, 1)
-            .unwrap();
-        engine
-            .executor_mut()
-            .leg2
-            .insert_resting_order(3, OrderType::Buy, 100, 5, 5, 2)
-            .unwrap();
-        assert!(engine.queue(10, 1, Side::Buy, 49_900, 5, Offset::Open, Hedge::Spec));
-        assert!(engine.try_execute_best(Side::Buy).unwrap().is_ok());
-        let subscriber = ComboMarketDataSubscriber::bind("127.0.0.1:0").unwrap();
-        let publisher =
-            ComboMarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap())
-                .unwrap();
-        let combo = ComboRuntime::new(engine).with_publisher(publisher);
-        let mut runtime =
-            TradingRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
-                combo: Some(combo),
-                ..Default::default()
-            });
-        runtime.tick();
-        let fill = subscriber.recv().unwrap();
-        assert_eq!(fill.quantity, 5);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -934,7 +700,6 @@ mod tests {
         );
         let snapshot = TradingSnapshot {
             core: Some(core.snapshot()),
-            combo: None,
             registry: None,
             private: None,
         };
@@ -945,7 +710,6 @@ mod tests {
         snapshot.save(&path).unwrap();
         let loaded = TradingSnapshot::load(&path).unwrap();
         assert_eq!(loaded.core, snapshot.core);
-        assert!(loaded.combo.is_none());
 
         let corrupted = std::fs::read(&path).unwrap();
         let mut corrupted = corrupted;
@@ -954,68 +718,6 @@ mod tests {
         assert!(TradingSnapshot::load(&path).is_err());
 
         let _ = std::fs::remove_file(path);
-    }
-    #[test]
-    fn full_snapshot_restores_combo_runtime() {
-        use crate::trading::combo::engine::ComboEngine;
-        use crate::trading::combo::runtime::ComboRuntime;
-
-        let core_path =
-            std::env::temp_dir().join(format!("trading-full-snapshot-core-{}", std::process::id()));
-        let combo_path = std::env::temp_dir().join(format!(
-            "trading-full-snapshot-combo-{}",
-            std::process::id()
-        ));
-        for path in [&core_path, &combo_path] {
-            let _ = std::fs::remove_file(path);
-        }
-        let (core_producer, core_consumer) = create(&core_path, 16).unwrap();
-        let (combo_producer, _combo_consumer) = create(&combo_path, 16).unwrap();
-        let middleware =
-            MiddlewareSequencer::new(core_producer).with_combo_transport(combo_producer);
-        let (server, events) = start("127.0.0.1:0").unwrap();
-        let gateway = GatewayRuntime::new(middleware, events);
-        let core = TradingCore::new(
-            ContractSpec::new("BTCUSDT", 1, 1, 1_000_000),
-            SymbolId::intern("BTCUSDT"),
-        );
-        let runner = CoreRunner::new(core, core_consumer, NoPlugins);
-        let engine = ComboEngine::new(
-            ContractSpec::new("LEG1", 1, 1, 100_000),
-            ContractSpec::new("LEG2", 1, 1, 100_000),
-        );
-        let mut runtime =
-            TradingRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
-                combo: Some(ComboRuntime::new(engine)),
-                ..Default::default()
-            });
-
-        let mut command = Command::zeroed();
-        command.command_type = CommandType::NewOrder;
-        command.combo_id = 7;
-        command.client_order_id = 42;
-        command.user_id = 1;
-        command.side = Side::Buy;
-        command.price_ticks = 49_900;
-        command.quantity = 5;
-        command.offset = Offset::Open;
-        command.hedge = Hedge::Spec;
-        assert!(runtime.combo_mut().unwrap().submit_command(&command));
-        let snapshot = runtime.snapshot();
-
-        let mut cancel = Command::zeroed();
-        cancel.command_type = CommandType::Cancel;
-        cancel.combo_id = 7;
-        cancel.cancel_order_id = 42;
-        assert!(runtime.combo_mut().unwrap().submit_command(&cancel));
-        assert_eq!(runtime.combo_mut().unwrap().queue_len(), 0);
-
-        let json = serde_json::to_string(&snapshot).unwrap();
-        let snapshot: TradingSnapshot = serde_json::from_str(&json).unwrap();
-        runtime.restore_snapshot(snapshot).unwrap();
-        assert_eq!(runtime.combo_mut().unwrap().queue_len(), 1);
-        let _ = std::fs::remove_file(&core_path);
-        let _ = std::fs::remove_file(&combo_path);
     }
     #[test]
     fn restore_is_rejected_with_active_sessions() {
@@ -1050,7 +752,6 @@ mod tests {
             .unwrap();
         let snapshot = TradingSnapshot {
             core: Some(runtime.core().snapshot()),
-            combo: None,
             registry: None,
             private: None,
         };

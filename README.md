@@ -21,7 +21,7 @@ RegistryRunner ────────────────► InstrumentReg
 TradingRuntime
   ├─ GatewayRuntime private downlink（core + combo 统一 private_seq）
   ├─ EventFanout: result logs, repair, market data
-  └─ legacy ComboRuntime（仅兼容/测试，生产单进程不构造）
+  └─ RegistryRunner combo (production single-process)
 ```
 
 单进程 `trading` 二进制始终使用 `RegistryRunner`；`CoreRunner → TradingCore`
