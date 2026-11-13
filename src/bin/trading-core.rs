@@ -7,7 +7,7 @@ use trading_system_engine::domain::orderbook::ContractSpec;
 use trading_system_engine::shared::SymbolId;
 use trading_system_engine::trading::core::TradingCore;
 use trading_system_engine::trading::core::plugins::NoPlugins;
-use trading_system_engine::trading::transport::runner::CoreRunner;
+use trading_system_engine::trading::transport::runner::{CoreRunner, VenueRunner};
 use trading_system_engine::trading::transport::{
     open_command_consumer, open_private_event_producer, open_public_event_producer,
 };
@@ -50,8 +50,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let spec = ContractSpec::new(&args.instrument, 1, 1, 1_000_000);
         TradingCore::new(spec, SymbolId::intern(&args.instrument))
     };
-    let mut runner =
-        CoreRunner::new(core, consumer, NoPlugins).with_event_transports(public, private);
+    let mut runner = VenueRunner::core(
+        CoreRunner::new(core, consumer, NoPlugins).with_event_transports(public, private),
+    );
 
     let mut ticks = 0u64;
     let mut commands = 0u64;
