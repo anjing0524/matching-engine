@@ -1,6 +1,7 @@
 //! Deterministic trading state: book, orders, positions, auction, and risk plugins.
 
 pub mod auction;
+pub mod combo_admission;
 pub mod combo_book;
 pub mod combo_journal;
 pub mod combo_margin;

@@ -18,7 +18,7 @@
 use crate::shared::collections::U64MixMap;
 use crate::trading::core::combo_margin::ComboMarginError;
 use crate::trading::core::protocol::{
-    Command, CommandType, Offset, PriceType, Side, TimeCondition, TriggerType, VolumeCondition,
+    CommandType, Offset, PriceType, Side, TimeCondition, TriggerType, VolumeCondition,
 };
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::error::Error;
@@ -1083,63 +1083,6 @@ impl From<ComboMarginError> for ComboCommandError {
     fn from(error: ComboMarginError) -> Self {
         Self::Margin(error)
     }
-}
-
-/// Rejects command shapes M1 combo trading does not support.
-///
-/// This is deliberately explicit: a market, FOK/FAK, stop, or close-offset
-/// combo request never degrades into an opening GFD limit order.
-pub(crate) fn validate_new_combo_order(command: &Command) -> Result<(), ComboCommandError> {
-    if !matches!(
-        command.price_type,
-        PriceType::Limit | PriceType::Market | PriceType::AdvancedMarket
-    ) {
-        return Err(ComboCommandError::UnsupportedPriceType {
-            price_type: command.price_type,
-        });
-    }
-    if !matches!(
-        command.time_condition,
-        TimeCondition::Gfd | TimeCondition::Ioc
-    ) {
-        return Err(ComboCommandError::UnsupportedTimeCondition {
-            time_condition: command.time_condition,
-        });
-    }
-    let valid_volume = matches!(
-        (command.time_condition, command.volume_condition),
-        (TimeCondition::Gfd, VolumeCondition::Any)
-            | (
-                TimeCondition::Ioc,
-                VolumeCondition::Any | VolumeCondition::All
-            )
-    );
-    if !valid_volume {
-        return Err(ComboCommandError::UnsupportedVolumeCondition {
-            volume_condition: command.volume_condition,
-        });
-    }
-    if command.trigger_type != TriggerType::None {
-        return Err(ComboCommandError::UnsupportedTriggerType {
-            trigger_type: command.trigger_type,
-        });
-    }
-    if command.offset != Offset::Open {
-        return Err(ComboCommandError::UnsupportedOffset {
-            offset: command.offset,
-        });
-    }
-    if command.leg2_offset != Offset::Open {
-        return Err(ComboCommandError::UnsupportedOffset {
-            offset: command.leg2_offset,
-        });
-    }
-    if command.quantity == 0 {
-        return Err(ComboCommandError::ZeroQuantity {
-            pair_id: command.combo_id,
-        });
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@ use crate::shared::SymbolId;
 use crate::shared::collections::identity::U64MixMap;
 use crate::trading::core::combo_book::{
     ComboBook, ComboBookSnapshot, ComboCommandError, ComboEvent, ComboFill, ComboOrder,
-    ComboOrderOwner, ComboPrivateFill, ImpliedComboFill, validate_new_combo_order,
+    ComboOrderOwner, ComboPrivateFill, ImpliedComboFill,
 };
 use crate::trading::core::combo_margin::{
     ComboEntryMargin, ComboMarginError, ComboMarginFreeze, ComboMarginLedger, ComboMarginSnapshot,
@@ -1054,10 +1054,7 @@ impl InstrumentRegistry {
     }
 
     fn ensure_continuous_trading(&self) -> Result<(), ComboCommandError> {
-        if self.phase != crate::trading::core::public_events::TradingPhase::Continuous {
-            return Err(ComboCommandError::OutsideContinuousTrading { phase: self.phase });
-        }
-        Ok(())
+        crate::trading::core::combo_admission::admit_cancel(self.phase)
     }
 
     fn rest_combo_order(&mut self, command: Command) -> Result<Vec<ComboEvent>, ComboCommandError> {
@@ -1066,36 +1063,12 @@ impl InstrumentRegistry {
         let Some(pair) = self.pairs.get(&u64::from(pair_id)).copied() else {
             return Err(ComboCommandError::UnknownPair { pair_id });
         };
-        validate_new_combo_order(&command)?;
-        if !pair.is_valid_at(command.trading_ts_ns) {
-            return Err(ComboCommandError::OutsidePairWindow {
-                pair_id,
-                trading_ts_ns: command.trading_ts_ns,
-            });
-        }
-        if !command
-            .price_ticks
-            .unsigned_abs()
-            .is_multiple_of(pair.spread_tick)
-        {
-            return Err(ComboCommandError::OffTickSpreadPrice {
-                price_ticks: command.price_ticks,
-                spread_tick: pair.spread_tick,
-            });
-        }
-
-        let is_market = matches!(
-            command.price_type,
-            crate::trading::core::protocol::PriceType::Market
-                | crate::trading::core::protocol::PriceType::AdvancedMarket
-        );
-        let protection = (command.price_type
-            == crate::trading::core::protocol::PriceType::AdvancedMarket)
-            .then_some(command.price_ticks);
-        let is_ioc = is_market
-            || command.time_condition == crate::trading::core::protocol::TimeCondition::Ioc;
-        let is_fok = is_ioc
-            && command.volume_condition == crate::trading::core::protocol::VolumeCondition::All;
+        let admission =
+            crate::trading::core::combo_admission::admit_new(&command, &pair, self.phase)?;
+        let is_market = admission.market;
+        let protection = admission.protection;
+        let is_ioc = admission.ioc;
+        let is_fok = admission.fok;
         let rollback = is_fok.then(|| self.snapshot());
         let order_id = self.next_combo_order_id;
         let owner = ComboOrderOwner::new(
