@@ -92,10 +92,6 @@ pub struct CoreRunner<P> {
     consumer: CommandConsumer,
     plugin: P,
     decode_errors: u64,
-    public_producer: Option<PublicEventProducer>,
-    private_producer: Option<PrivateEventProducer>,
-    pending_public: VecDeque<PublicEvent>,
-    pending_private: VecDeque<PrivateEvent>,
 }
 
 impl<P: PreTradePlugin> CoreRunner<P> {
@@ -106,58 +102,7 @@ impl<P: PreTradePlugin> CoreRunner<P> {
             consumer,
             plugin,
             decode_errors: 0,
-            public_producer: None,
-            private_producer: None,
-            pending_public: VecDeque::new(),
-            pending_private: VecDeque::new(),
         }
-    }
-
-    /// Attaches shared-memory public/private event producers.
-    #[must_use]
-    pub fn with_event_transports(
-        mut self,
-        public: PublicEventProducer,
-        private: PrivateEventProducer,
-    ) -> Self {
-        self.public_producer = Some(public);
-        self.private_producer = Some(private);
-        self
-    }
-
-    fn flush_public(&mut self) {
-        let Some(producer) = &self.public_producer else {
-            return;
-        };
-        let events = self.core.drain_public_events();
-        flush_queue(
-            |event| producer.send(event),
-            &mut self.pending_public,
-            events,
-        );
-    }
-
-    fn flush_private(&mut self) {
-        let Some(producer) = &self.private_producer else {
-            return;
-        };
-        let events = self.core.drain_private_events();
-        flush_queue(
-            |event| producer.send(event),
-            &mut self.pending_private,
-            events,
-        );
-    }
-
-    #[cfg(test)]
-    pub(crate) fn flush_pending(&mut self) {
-        self.flush_public();
-        self.flush_private();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn pending_event_count(&self) -> usize {
-        self.pending_public.len() + self.pending_private.len()
     }
 
     /// Drains commands and returns the resulting events through one seam.
@@ -170,22 +115,10 @@ impl<P: PreTradePlugin> CoreRunner<P> {
         let commands = drain_commands(consumer, decode_errors, |command| {
             core.execute_with_plugins_discard(command, plugin);
         });
-        let private = if self.private_producer.is_some() {
-            self.flush_private();
-            Vec::new()
-        } else {
-            self.core.drain_private_events()
-        };
-        let public = if self.public_producer.is_some() {
-            self.flush_public();
-            Vec::new()
-        } else {
-            self.core.drain_public_events()
-        };
         CoreEvents {
             commands,
-            private,
-            public,
+            private: self.core.drain_private_events(),
+            public: self.core.drain_public_events(),
             combo_private: Vec::new(),
             ordered_private: Vec::new(),
         }
@@ -408,16 +341,75 @@ fn combo_rejection(command: Command, error: ComboCommandError) -> PrivateEvent {
     }
 }
 
+/// Shared output transports for a runner.
+#[derive(Default)]
+struct RunnerOutput {
+    public_producer: Option<PublicEventProducer>,
+    private_producer: Option<PrivateEventProducer>,
+    pending_public: VecDeque<PublicEvent>,
+    pending_private: VecDeque<PrivateEvent>,
+}
+
+impl RunnerOutput {
+    fn with_event_transports(
+        mut self,
+        public: PublicEventProducer,
+        private: PrivateEventProducer,
+    ) -> Self {
+        self.public_producer = Some(public);
+        self.private_producer = Some(private);
+        self
+    }
+
+    fn flush(&mut self, events: &mut CoreEvents) {
+        if let Some(producer) = &self.public_producer {
+            flush_queue(
+                |event| producer.send(event),
+                &mut self.pending_public,
+                std::mem::take(&mut events.public),
+            );
+        }
+        if let Some(producer) = &self.private_producer {
+            flush_queue(
+                |event| producer.send(event),
+                &mut self.pending_private,
+                std::mem::take(&mut events.private),
+            );
+        }
+    }
+
+    #[cfg(test)]
+    fn flush_pending(&mut self) {
+        if let Some(producer) = &self.public_producer {
+            flush_queue(
+                |event| producer.send(event),
+                &mut self.pending_public,
+                Vec::new(),
+            );
+        }
+        if let Some(producer) = &self.private_producer {
+            flush_queue(
+                |event| producer.send(event),
+                &mut self.pending_private,
+                Vec::new(),
+            );
+        }
+    }
+}
+
 /// The one runner seam for a runtime.
 ///
 /// The target is still one of two execution bodies while Phase 3 is in
 /// progress, but callers own a `VenueRunner`, not a runtime-local enum. This
 /// lets the target implementations collapse without changing the runtime
 /// composition root again.
-pub enum VenueRunner<P> {
-    /// Single Contract core, used by split deployment and focused tests.
+pub struct VenueRunner<P> {
+    target: VenueTarget<P>,
+    output: RunnerOutput,
+}
+
+enum VenueTarget<P> {
     Core(Box<CoreRunner<P>>),
-    /// Registry-backed venue, used by single-process production.
     Registry(Box<RegistryRunner<P>>),
 }
 
@@ -425,55 +417,86 @@ impl<P: PreTradePlugin> VenueRunner<P> {
     /// Wraps a single-core runner.
     #[must_use]
     pub fn core(runner: CoreRunner<P>) -> Self {
-        Self::Core(Box::new(runner))
+        Self {
+            target: VenueTarget::Core(Box::new(runner)),
+            output: RunnerOutput::default(),
+        }
     }
 
     /// Wraps a registry-backed runner.
     #[must_use]
     pub fn registry(runner: RegistryRunner<P>) -> Self {
-        Self::Registry(Box::new(runner))
+        Self {
+            target: VenueTarget::Registry(Box::new(runner)),
+            output: RunnerOutput::default(),
+        }
+    }
+
+    /// Attaches shared-memory public/private event producers.
+    #[must_use]
+    pub fn with_event_transports(
+        mut self,
+        public: PublicEventProducer,
+        private: PrivateEventProducer,
+    ) -> Self {
+        self.output = self.output.with_event_transports(public, private);
+        self
     }
 
     /// Drains one poll's commands and events.
     #[must_use]
     pub fn poll_events(&mut self) -> CoreEvents {
-        match self {
-            Self::Core(runner) => runner.poll_events(),
-            Self::Registry(runner) => runner.poll_events(),
-        }
+        let mut events = match &mut self.target {
+            VenueTarget::Core(runner) => runner.poll_events(),
+            VenueTarget::Registry(runner) => runner.poll_events(),
+        };
+        self.output.flush(&mut events);
+        events
+    }
+
+    /// Flushes pending producer writes; tests use this after a full ring.
+    #[cfg(test)]
+    pub(crate) fn flush_pending(&mut self) {
+        self.output.flush_pending();
+    }
+
+    /// Number of producer events still blocked by a full ring.
+    #[cfg(test)]
+    pub(crate) fn pending_event_count(&self) -> usize {
+        self.output.pending_public.len() + self.output.pending_private.len()
     }
 
     /// Returns the single core, if this is the core target.
     #[must_use]
     pub fn as_core(&self) -> Option<&TradingCore> {
-        match self {
-            Self::Core(runner) => Some(runner.core()),
-            Self::Registry(_) => None,
+        match &self.target {
+            VenueTarget::Core(runner) => Some(runner.core()),
+            VenueTarget::Registry(_) => None,
         }
     }
 
     /// Returns the single core mutably, if this is the core target.
     pub fn as_core_mut(&mut self) -> Option<&mut TradingCore> {
-        match self {
-            Self::Core(runner) => Some(runner.core_mut()),
-            Self::Registry(_) => None,
+        match &mut self.target {
+            VenueTarget::Core(runner) => Some(runner.core_mut()),
+            VenueTarget::Registry(_) => None,
         }
     }
 
     /// Returns the registry, if this is the registry target.
     #[must_use]
     pub fn as_registry(&self) -> Option<&InstrumentRegistry> {
-        match self {
-            Self::Core(_) => None,
-            Self::Registry(runner) => Some(runner.registry()),
+        match &self.target {
+            VenueTarget::Core(_) => None,
+            VenueTarget::Registry(runner) => Some(runner.registry()),
         }
     }
 
     /// Returns the registry mutably, if this is the registry target.
     pub fn as_registry_mut(&mut self) -> Option<&mut InstrumentRegistry> {
-        match self {
-            Self::Core(_) => None,
-            Self::Registry(runner) => Some(runner.registry_mut()),
+        match &mut self.target {
+            VenueTarget::Core(_) => None,
+            VenueTarget::Registry(runner) => Some(runner.registry_mut()),
         }
     }
 }
@@ -549,7 +572,7 @@ mod tests {
             create_private_event_transport(&private_path, 8).unwrap();
         let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
         let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
-        let mut runner = CoreRunner::new(core, consumer, NoPlugins)
+        let mut runner = VenueRunner::core(CoreRunner::new(core, consumer, NoPlugins))
             .with_event_transports(public_producer, private_producer);
 
         producer.send(&command(1, Side::Buy, 50_000, 5)).unwrap();
@@ -585,7 +608,7 @@ mod tests {
             create_private_event_transport(&private_path, 8).unwrap();
         let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
         let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
-        let mut runner = CoreRunner::new(core, consumer, NoPlugins)
+        let mut runner = VenueRunner::core(CoreRunner::new(core, consumer, NoPlugins))
             .with_event_transports(public_producer, private_producer);
 
         producer.send(&command(1, Side::Buy, 50_000, 5)).unwrap();

@@ -50,9 +50,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let spec = ContractSpec::new(&args.instrument, 1, 1, 1_000_000);
         TradingCore::new(spec, SymbolId::intern(&args.instrument))
     };
-    let mut runner = VenueRunner::core(
-        CoreRunner::new(core, consumer, NoPlugins).with_event_transports(public, private),
-    );
+    let mut runner = VenueRunner::core(CoreRunner::new(core, consumer, NoPlugins))
+        .with_event_transports(public, private);
 
     let mut ticks = 0u64;
     let mut commands = 0u64;
