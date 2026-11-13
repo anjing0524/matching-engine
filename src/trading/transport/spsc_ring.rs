@@ -47,6 +47,24 @@ pub struct SpscRing {
 // own mapping (`create` / `open`).
 unsafe impl Send for SpscRing {}
 
+/// Touches every mapped page once so the first hot-path access does not take
+/// a minor page fault. The mapping is zero-filled by the kernel; this is a
+/// read-only prefault and does not change ring contents.
+fn prefault(mmap: &MmapMut) {
+    const PAGE: usize = 4096;
+    let len = mmap.len();
+    let base = mmap.as_ptr();
+    let mut offset = 0;
+    while offset < len {
+        // SAFETY: `offset` is within the mapping and the read is volatile so
+        // the compiler cannot remove the page touch.
+        unsafe {
+            std::ptr::read_volatile(base.add(offset));
+        }
+        offset += PAGE;
+    }
+}
+
 impl SpscRing {
     /// Creates a new ring file.
     ///
@@ -69,6 +87,7 @@ impl SpscRing {
             .open(path)?;
         file.set_len(total)?;
         let mut mmap = unsafe { MmapOptions::new().map_mut(&file)? };
+        prefault(&mmap);
         // Initialise the header before exposing the mapping.
         unsafe {
             let base = mmap.as_mut_ptr();
@@ -107,6 +126,7 @@ impl SpscRing {
             ));
         }
         let mut mmap = unsafe { MmapOptions::new().map_mut(&file)? };
+        prefault(&mmap);
         let base = mmap.as_mut_ptr();
         let (magic, version, capacity, slot_size) = unsafe {
             (
