@@ -29,11 +29,11 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 #[non_exhaustive]
 pub struct ComboOrderOwner {
     /// Owning user account.
-    pub user_id: u64,
+    pub user_id: crate::trading::core::domain_ids::AccountId,
     /// Gateway session that submitted the order.
-    pub session_id: u64,
+    pub session_id: crate::trading::core::domain_ids::SessionId,
     /// Client-assigned order id, preserved for private fill reporting.
-    pub client_order_id: u64,
+    pub client_order_id: crate::trading::core::domain_ids::ClientOrderId,
 }
 
 impl ComboOrderOwner {
@@ -41,9 +41,9 @@ impl ComboOrderOwner {
     #[must_use]
     pub const fn new(user_id: u64, session_id: u64, client_order_id: u64) -> Self {
         Self {
-            user_id,
-            session_id,
-            client_order_id,
+            user_id: crate::trading::core::domain_ids::AccountId::new(user_id),
+            session_id: crate::trading::core::domain_ids::SessionId::new(session_id),
+            client_order_id: crate::trading::core::domain_ids::ClientOrderId::new(client_order_id),
         }
     }
 }
