@@ -6,6 +6,7 @@ pub mod combo_book;
 pub mod combo_journal;
 pub mod combo_margin;
 pub mod combo_pair;
+pub mod domain_ids;
 pub mod kernel;
 pub mod leg_liquidity;
 pub mod plugins;
