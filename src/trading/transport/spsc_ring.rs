@@ -41,10 +41,11 @@ pub struct SpscRing {
     stride: usize,
 }
 
-// The SPSC protocol makes concurrent producer/consumer access safe; the raw
-// pointer is only used for byte-addressable mmap access.
+// The SPSC protocol makes one producer and one consumer safe. The type is
+// deliberately not `Sync`: sharing one mapping between threads through a safe
+// API would allow two producers to write the same slot. Each side must own its
+// own mapping (`create` / `open`).
 unsafe impl Send for SpscRing {}
-unsafe impl Sync for SpscRing {}
 
 impl SpscRing {
     /// Creates a new ring file.
@@ -260,7 +261,6 @@ impl Drop for SpscRing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::thread;
     use tempfile::TempDir;
 
@@ -318,24 +318,21 @@ mod tests {
     fn test_two_mappings_concurrent() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("ring");
-        let producer = Arc::new(SpscRing::create(&path, 1024, 64).unwrap());
-        let consumer = Arc::new(SpscRing::open(&path).unwrap());
+        let producer = SpscRing::create(&path, 1024, 64).unwrap();
+        let consumer = SpscRing::open(&path).unwrap();
         let n = 200_000u64;
-        let p = {
-            let producer = Arc::clone(&producer);
-            thread::spawn(move || {
-                for i in 0..n {
-                    let bytes = i.to_le_bytes();
-                    loop {
-                        match producer.try_push(&bytes) {
-                            Ok(()) => break,
-                            Err(PushError::Full) => std::hint::spin_loop(),
-                            Err(PushError::TooLarge) => panic!("too large"),
-                        }
+        let p = thread::spawn(move || {
+            for i in 0..n {
+                let bytes = i.to_le_bytes();
+                loop {
+                    match producer.try_push(&bytes) {
+                        Ok(()) => break,
+                        Err(PushError::Full) => std::hint::spin_loop(),
+                        Err(PushError::TooLarge) => panic!("too large"),
                     }
                 }
-            })
-        };
+            }
+        });
         let mut out = Vec::new();
         let mut expected = 0u64;
         while expected < n {
