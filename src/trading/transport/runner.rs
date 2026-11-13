@@ -194,6 +194,11 @@ impl<P: PreTradePlugin> CoreRunner<P> {
         &self.core
     }
 
+    /// Mutable core access for snapshot restore at the runtime seam.
+    pub fn core_mut(&mut self) -> &mut TradingCore {
+        &mut self.core
+    }
+
     #[must_use]
     pub fn decode_errors(&self) -> u64 {
         self.decode_errors
@@ -395,6 +400,76 @@ fn combo_rejection(command: Command, error: ComboCommandError) -> PrivateEvent {
         filled_delta: 0,
         remaining: 0,
         reason: Some(error.to_string()),
+    }
+}
+
+/// The one runner seam for a runtime.
+///
+/// The target is still one of two execution bodies while Phase 3 is in
+/// progress, but callers own a `VenueRunner`, not a runtime-local enum. This
+/// lets the target implementations collapse without changing the runtime
+/// composition root again.
+pub enum VenueRunner<P> {
+    /// Single Contract core, used by split deployment and focused tests.
+    Core(Box<CoreRunner<P>>),
+    /// Registry-backed venue, used by single-process production.
+    Registry(Box<RegistryRunner<P>>),
+}
+
+impl<P: PreTradePlugin> VenueRunner<P> {
+    /// Wraps a single-core runner.
+    #[must_use]
+    pub fn core(runner: CoreRunner<P>) -> Self {
+        Self::Core(Box::new(runner))
+    }
+
+    /// Wraps a registry-backed runner.
+    #[must_use]
+    pub fn registry(runner: RegistryRunner<P>) -> Self {
+        Self::Registry(Box::new(runner))
+    }
+
+    /// Drains one poll's commands and events.
+    #[must_use]
+    pub fn poll_events(&mut self) -> CoreEvents {
+        match self {
+            Self::Core(runner) => runner.poll_events(),
+            Self::Registry(runner) => runner.poll_events(),
+        }
+    }
+
+    /// Returns the single core, if this is the core target.
+    #[must_use]
+    pub fn as_core(&self) -> Option<&TradingCore> {
+        match self {
+            Self::Core(runner) => Some(runner.core()),
+            Self::Registry(_) => None,
+        }
+    }
+
+    /// Returns the single core mutably, if this is the core target.
+    pub fn as_core_mut(&mut self) -> Option<&mut TradingCore> {
+        match self {
+            Self::Core(runner) => Some(runner.core_mut()),
+            Self::Registry(_) => None,
+        }
+    }
+
+    /// Returns the registry, if this is the registry target.
+    #[must_use]
+    pub fn as_registry(&self) -> Option<&InstrumentRegistry> {
+        match self {
+            Self::Core(_) => None,
+            Self::Registry(runner) => Some(runner.registry()),
+        }
+    }
+
+    /// Returns the registry mutably, if this is the registry target.
+    pub fn as_registry_mut(&mut self) -> Option<&mut InstrumentRegistry> {
+        match self {
+            Self::Core(_) => None,
+            Self::Registry(runner) => Some(runner.registry_mut()),
+        }
     }
 }
 
