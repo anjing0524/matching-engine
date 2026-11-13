@@ -5,15 +5,23 @@
 
 use crate::trading::core::combo_book::ComboPrivateFill;
 
-/// Lifecycle status carried by a private event.
+/// Canonical order lifecycle status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum PrivateStatus {
+pub enum OrderStatus {
+    /// Accepted and currently resting or partially executing.
     Accepted,
+    /// Partially filled and still active.
     PartiallyFilled,
+    /// Fully filled.
     Filled,
+    /// Canceled before full fill.
     Canceled,
+    /// Rejected before entering the book.
     Rejected,
 }
+
+/// Wire-compatible name for [`OrderStatus`] in private-event APIs.
+pub type PrivateStatus = OrderStatus;
 
 /// One private event in per-session order.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

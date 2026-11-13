@@ -20,6 +20,7 @@ use crate::trading::core::leg_liquidity::{
 use crate::trading::core::plugins::NoPlugins;
 use crate::trading::core::plugins::{PreTradePlugin, RiskOrder, ValidationContext};
 use crate::trading::core::positions::{CloseKey, FrozenClose, PositionKey, Positions};
+pub use crate::trading::core::private_events::OrderStatus;
 use crate::trading::core::private_events::{PrivateEvent, PrivateStatus};
 use crate::trading::core::protocol::{
     Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, VolumeCondition,
@@ -133,16 +134,6 @@ impl SubmitOutcome {
             })
         })
     }
-}
-
-/// Lifecycle status of an trading order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum OrderStatus {
-    Accepted,
-    PartiallyFilled,
-    Filled,
-    Canceled,
-    Rejected,
 }
 
 /// Metadata for an order accepted into the book.
