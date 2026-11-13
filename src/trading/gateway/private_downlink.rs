@@ -8,6 +8,7 @@
 
 use crate::shared::collections::U64MixMap;
 use crate::trading::core::combo_book::ComboPrivateFill;
+use crate::trading::core::domain_ids::EventSequence;
 use crate::trading::core::private_events::{PrivateEffect, PrivateEvent};
 use crate::trading::gateway::frame::GatewayFrame;
 use crate::trading::gateway::private_replay::{PrivateDownlinkSnapshot, ReplayBuffer};
@@ -19,7 +20,7 @@ use std::collections::HashSet;
 /// session that owns each account.
 pub struct PrivateDownlink {
     replay: ReplayBuffer,
-    next_private_seq: U64MixMap<u64>,
+    next_private_seq: U64MixMap<EventSequence>,
     unrouted: u64,
     send_errors: u64,
 }
@@ -108,9 +109,12 @@ impl PrivateDownlink {
     }
 
     fn assign_private_seq(&mut self, user_id: u64) -> u64 {
-        let next = self.next_private_seq.entry(user_id).or_insert(1);
-        let seq = *next;
-        *next += 1;
+        let next = self
+            .next_private_seq
+            .entry(user_id)
+            .or_insert(EventSequence::new(1));
+        let seq = next.get();
+        *next = next.next();
         seq
     }
 
@@ -120,7 +124,7 @@ impl PrivateDownlink {
         let mut next_private_seq: Vec<(u64, u64)> = self
             .next_private_seq
             .iter()
-            .map(|(user_id, next)| (*user_id, *next))
+            .map(|(user_id, next)| (*user_id, next.get()))
             .collect();
         next_private_seq.sort_unstable_by_key(|(user_id, _)| *user_id);
         PrivateDownlinkSnapshot {
@@ -191,7 +195,11 @@ impl PrivateDownlink {
 
     /// Replaces the per-user sequence and replay log with a validated snapshot.
     pub fn restore_snapshot(&mut self, snapshot: PrivateDownlinkSnapshot) {
-        self.next_private_seq = snapshot.next_private_seq.into_iter().collect();
+        self.next_private_seq = snapshot
+            .next_private_seq
+            .into_iter()
+            .map(|(user_id, next)| (user_id, EventSequence::new(next)))
+            .collect();
         self.replay.restore(snapshot.replay);
     }
 
