@@ -370,12 +370,8 @@ pub struct RegistrySnapshot {
 /// [`Command::instrument_id`] and rejected when that id is unknown.
 pub struct InstrumentRegistry {
     instruments: U64MixMap<TradingCore>,
-    pairs: U64MixMap<ComboPair>,
-    pairs_by_instrument: U64MixMap<Vec<u32>>,
+    combo: crate::trading::core::combo_config::ComboConfig,
     combo_books: U64MixMap<ComboBook>,
-    prior_settlements: U64MixMap<u64>,
-    margin_balances: U64MixMap<u64>,
-    require_explicit_margin: bool,
     margin: ComboMarginLedger,
     combo_journal: crate::trading::core::combo_journal::ComboEventJournal,
     next_combo_order_id: u64,
@@ -389,12 +385,8 @@ impl InstrumentRegistry {
     pub fn new() -> Self {
         Self {
             instruments: U64MixMap::default(),
-            pairs: U64MixMap::default(),
-            pairs_by_instrument: U64MixMap::default(),
+            combo: crate::trading::core::combo_config::ComboConfig::new(),
             combo_books: U64MixMap::default(),
-            prior_settlements: U64MixMap::default(),
-            margin_balances: U64MixMap::default(),
-            require_explicit_margin: false,
             margin: ComboMarginLedger::default(),
             combo_journal: crate::trading::core::combo_journal::ComboEventJournal::new(),
             next_combo_order_id: 1,
@@ -440,22 +432,14 @@ impl InstrumentRegistry {
     /// Returns [`ComboPairError`] when the definition is not a valid static
     /// pair. No pair is registered in that case.
     pub fn register_pair(&mut self, pair: ComboPair) -> Result<(), ComboPairError> {
-        if self.pairs.contains_key(&u64::from(pair.pair_id)) {
+        if self.combo.contains_pair(pair.pair_id) {
             return Err(ComboPairError::DuplicatePairId {
                 pair_id: pair.pair_id,
             });
         }
         validate_pair(&self.instruments, &pair)?;
         let key = u64::from(pair.pair_id);
-        self.pairs.insert(key, pair);
-        self.pairs_by_instrument
-            .entry(u64::from(pair.leg1_instrument_id))
-            .or_default()
-            .push(pair.pair_id);
-        self.pairs_by_instrument
-            .entry(u64::from(pair.leg2_instrument_id))
-            .or_default()
-            .push(pair.pair_id);
+        self.combo.insert_pair(pair);
         self.combo_books.insert(key, ComboBook::new(pair.pair_id));
         Ok(())
     }
@@ -477,17 +461,14 @@ impl InstrumentRegistry {
         if !self.instruments.contains_key(&u64::from(instrument_id)) {
             return Err(RegistryError::UnknownInstrument { instrument_id });
         }
-        self.prior_settlements
-            .insert(u64::from(instrument_id), price_ticks);
+        self.combo.set_prior_settlement(instrument_id, price_ticks);
         Ok(())
     }
 
     /// Returns the prior settlement configured for `instrument_id`.
     #[must_use]
     pub fn prior_settlement(&self, instrument_id: u32) -> Option<u64> {
-        self.prior_settlements
-            .get(&u64::from(instrument_id))
-            .copied()
+        self.combo.prior_settlement(instrument_id)
     }
 
     /// Configures one account's available margin balance.
@@ -499,13 +480,13 @@ impl InstrumentRegistry {
     /// venue that wants backing enforced must configure every trading account
     /// before matching starts.
     pub fn set_margin_balance(&mut self, account_id: u64, balance: u64) {
-        self.margin_balances.insert(account_id, balance);
+        self.combo.set_margin_balance(account_id, balance);
     }
 
     /// Returns the balance configured for `account_id`, if any.
     #[must_use]
     pub fn margin_balance(&self, account_id: u64) -> Option<u64> {
-        self.margin_balances.get(&account_id).copied()
+        self.combo.margin_balance(account_id)
     }
 
     /// Requires every Combo Order account to have an explicit margin balance.
@@ -515,13 +496,13 @@ impl InstrumentRegistry {
     /// Production runtimes set this when a Combo Pair is configured, so an
     /// unconfigured account is rejected at entry instead of trading unlimited.
     pub fn set_require_explicit_margin(&mut self, required: bool) {
-        self.require_explicit_margin = required;
+        self.combo.set_require_explicit_margin(required);
     }
 
     /// Returns true when Combo Order entry requires an explicit balance.
     #[must_use]
     pub fn requires_explicit_margin(&self) -> bool {
-        self.require_explicit_margin
+        self.combo.require_explicit_margin()
     }
 
     /// Returns the exchange id the next accepted Combo Order will receive.
@@ -557,19 +538,19 @@ impl InstrumentRegistry {
     /// Looks up the Combo Pair for `pair_id`.
     #[must_use]
     pub fn pair(&self, pair_id: u32) -> Option<&ComboPair> {
-        self.pairs.get(&u64::from(pair_id))
+        self.combo.pair(pair_id)
     }
 
     /// Returns true when `pair_id` resolves to a Combo Pair.
     #[must_use]
     pub fn contains_pair(&self, pair_id: u32) -> bool {
-        self.pairs.contains_key(&u64::from(pair_id))
+        self.combo.contains_pair(pair_id)
     }
 
     /// Returns the number of registered Combo Pairs.
     #[must_use]
     pub fn pair_count(&self) -> usize {
-        self.pairs.len()
+        self.combo.pair_count()
     }
 
     /// Returns the base Combo Order book for `pair_id`.
@@ -689,13 +670,9 @@ impl InstrumentRegistry {
             .map(|(instrument_id, core)| (*instrument_id as u32, core.snapshot()))
             .collect();
         instruments.sort_by_key(|(instrument_id, _)| *instrument_id);
-        let mut pairs: Vec<ComboPair> = self.pairs.values().copied().collect();
+        let mut pairs: Vec<ComboPair> = self.combo.pairs();
         pairs.sort_by_key(|pair| pair.pair_id);
-        let mut prior_settlements: Vec<(u32, u64)> = self
-            .prior_settlements
-            .iter()
-            .map(|(instrument_id, price_ticks)| (*instrument_id as u32, *price_ticks))
-            .collect();
+        let mut prior_settlements = self.combo.prior_settlements();
         prior_settlements.sort_by_key(|(instrument_id, _)| *instrument_id);
         let mut combo_books: Vec<ComboBookSnapshot> =
             self.combo_books.values().map(ComboBook::snapshot).collect();
@@ -772,7 +749,6 @@ impl InstrumentRegistry {
         }
 
         let mut pairs: U64MixMap<ComboPair> = U64MixMap::default();
-        let mut pairs_by_instrument: U64MixMap<Vec<u32>> = U64MixMap::default();
         for pair in pair_definitions {
             if pairs.contains_key(&u64::from(pair.pair_id)) {
                 return Err(RegistrySnapshotError::DuplicatePair {
@@ -785,14 +761,6 @@ impl InstrumentRegistry {
                     error,
                 }
             })?;
-            pairs_by_instrument
-                .entry(u64::from(pair.leg1_instrument_id))
-                .or_default()
-                .push(pair.pair_id);
-            pairs_by_instrument
-                .entry(u64::from(pair.leg2_instrument_id))
-                .or_default()
-                .push(pair.pair_id);
             pairs.insert(u64::from(pair.pair_id), pair);
         }
 
@@ -910,10 +878,14 @@ impl InstrumentRegistry {
         }
 
         self.instruments = instruments;
-        self.pairs = pairs;
-        self.pairs_by_instrument = pairs_by_instrument;
+        let pair_definitions: Vec<ComboPair> = pairs.values().copied().collect();
+        let settlement_entries: Vec<(u32, u64)> = prior_settlements
+            .iter()
+            .map(|(instrument_id, price_ticks)| (*instrument_id as u32, *price_ticks))
+            .collect();
+        self.combo
+            .restore_pairs_and_settlements(pair_definitions, settlement_entries);
         self.combo_books = combo_books;
-        self.prior_settlements = prior_settlements;
         self.margin = margin;
         self.combo_journal
             .restore_private(combo_private_events, next_combo_private_seq);
@@ -1060,7 +1032,7 @@ impl InstrumentRegistry {
     fn rest_combo_order(&mut self, command: Command) -> Result<Vec<ComboEvent>, ComboCommandError> {
         self.ensure_continuous_trading()?;
         let pair_id = command.combo_id;
-        let Some(pair) = self.pairs.get(&u64::from(pair_id)).copied() else {
+        let Some(pair) = self.combo.pair(pair_id).copied() else {
             return Err(ComboCommandError::UnknownPair { pair_id });
         };
         let admission =
@@ -1267,19 +1239,15 @@ impl InstrumentRegistry {
     /// Resting orders are visited in combined price-time priority, and each
     /// fill is applied to its book exactly once.
     fn revalue_resting_combos(&mut self, instrument_id: u32, trading_ts_ns: u64) {
-        let mut pair_ids = self
-            .pairs_by_instrument
-            .get(&u64::from(instrument_id))
-            .cloned()
-            .unwrap_or_default();
+        let mut pair_ids = self.combo.pair_ids_for_instrument(instrument_id);
         pair_ids.sort_by_key(|pair_id| {
-            self.pairs
-                .get(&u64::from(*pair_id))
+            self.combo
+                .pair(*pair_id)
                 .map(|pair| (pair.kind.priority(), pair.pair_id))
                 .unwrap_or((u8::MAX, *pair_id))
         });
         for pair_id in pair_ids {
-            if let Some(pair) = self.pairs.get(&u64::from(pair_id)).copied() {
+            if let Some(pair) = self.combo.pair(pair_id).copied() {
                 self.match_resting_combos(&pair, trading_ts_ns);
             }
         }
@@ -1390,7 +1358,7 @@ impl InstrumentRegistry {
             },
         )?;
         let balance = self.margin_balance(order.owner.user_id.get());
-        if balance.is_none() && self.require_explicit_margin {
+        if balance.is_none() && self.combo.require_explicit_margin() {
             return Err(ComboMarginError::MissingMarginBalance {
                 account_id: order.owner.user_id.get(),
             });

@@ -3,6 +3,7 @@
 pub mod auction;
 pub mod combo_admission;
 pub mod combo_book;
+pub(crate) mod combo_config;
 pub mod combo_journal;
 pub mod combo_margin;
 pub mod combo_pair;
