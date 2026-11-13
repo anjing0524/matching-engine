@@ -6,6 +6,7 @@
 //! snapshot fields.
 
 use crate::trading::core::combo_book::ComboPrivateFill;
+use crate::trading::core::domain_ids::EventSequence;
 use crate::trading::core::public_events::PublicEvent;
 
 /// Undrained combo effects plus their private sequence.
@@ -13,7 +14,7 @@ use crate::trading::core::public_events::PublicEvent;
 pub struct ComboEventJournal {
     private: Vec<ComboPrivateFill>,
     public: Vec<PublicEvent>,
-    next_private_seq: u64,
+    next_private_seq: EventSequence,
 }
 
 impl ComboEventJournal {
@@ -23,14 +24,14 @@ impl ComboEventJournal {
         Self {
             private: Vec::new(),
             public: Vec::new(),
-            next_private_seq: 1,
+            next_private_seq: EventSequence::new(1),
         }
     }
 
     /// Buffers one private fill and assigns its sequence.
     pub fn push_private(&mut self, mut fill: ComboPrivateFill) {
-        fill.seq = self.next_private_seq;
-        self.next_private_seq = self.next_private_seq.saturating_add(1);
+        fill.seq = self.next_private_seq.get();
+        self.next_private_seq = self.next_private_seq.next();
         self.private.push(fill);
     }
 
@@ -58,6 +59,12 @@ impl ComboEventJournal {
     /// Returns the sequence the next private fill will receive.
     #[must_use]
     pub fn next_private_seq(&self) -> u64 {
+        self.next_private_seq.get()
+    }
+
+    /// Typed form of [`Self::next_private_seq`] for the new domain seam.
+    #[must_use]
+    pub fn next_private_sequence(&self) -> EventSequence {
         self.next_private_seq
     }
 
@@ -74,13 +81,13 @@ impl ComboEventJournal {
     /// Captures the private buffer and next sequence for a snapshot.
     #[must_use]
     pub fn private_snapshot(&self) -> (Vec<ComboPrivateFill>, u64) {
-        (self.private.clone(), self.next_private_seq)
+        (self.private.clone(), self.next_private_seq.get())
     }
 
     /// Restores a snapshot's private buffer and sequence.
     pub fn restore_private(&mut self, fills: Vec<ComboPrivateFill>, next_private_seq: u64) {
         self.private = fills;
-        self.next_private_seq = next_private_seq;
+        self.next_private_seq = EventSequence::new(next_private_seq);
         self.public.clear();
     }
 }
