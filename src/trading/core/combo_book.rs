@@ -25,28 +25,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
 /// Owner and client identity preserved with a resting Combo Order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[non_exhaustive]
-pub struct ComboOrderOwner {
-    /// Owning user account.
-    pub user_id: crate::trading::core::domain_ids::AccountId,
-    /// Gateway session that submitted the order.
-    pub session_id: crate::trading::core::domain_ids::SessionId,
-    /// Client-assigned order id, preserved for private fill reporting.
-    pub client_order_id: crate::trading::core::domain_ids::ClientOrderId,
-}
-
-impl ComboOrderOwner {
-    /// Creates the owner metadata stored with one Combo Order.
-    #[must_use]
-    pub const fn new(user_id: u64, session_id: u64, client_order_id: u64) -> Self {
-        Self {
-            user_id: crate::trading::core::domain_ids::AccountId::new(user_id),
-            session_id: crate::trading::core::domain_ids::SessionId::new(session_id),
-            client_order_id: crate::trading::core::domain_ids::ClientOrderId::new(client_order_id),
-        }
-    }
-}
+pub use crate::trading::core::order_identity::OrderIdentity as ComboOrderOwner;
 
 /// One atomic direct Combo Fill.
 ///
