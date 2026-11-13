@@ -113,13 +113,13 @@ pub struct ComboPrivateFill {
     /// Combo Pair this execution belongs to.
     pub pair_id: u32,
     /// Exchange id of the owner's Combo Order.
-    pub order_id: u64,
+    pub order_id: crate::trading::core::domain_ids::OrderId,
     /// Client-assigned id preserved from the owner's Combo Order.
-    pub client_order_id: u64,
+    pub client_order_id: crate::trading::core::domain_ids::ClientOrderId,
     /// Owning user account.
-    pub user_id: u64,
+    pub user_id: crate::trading::core::domain_ids::AccountId,
     /// Gateway session that submitted the Combo Order.
-    pub session_id: u64,
+    pub session_id: crate::trading::core::domain_ids::SessionId,
     /// Direction of the owner's Combo Order.
     pub side: Side,
     /// Quantity filled on this Combo Order.

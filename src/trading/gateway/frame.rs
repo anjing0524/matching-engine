@@ -100,8 +100,8 @@ impl GatewayFrame {
                 out[0] = TAG_COMBO_PRIVATE;
                 let at = PAYLOAD_OFFSET;
                 out[at..at + 8].copy_from_slice(&fill.seq.to_le_bytes());
-                out[at + 8..at + 16].copy_from_slice(&fill.order_id.to_le_bytes());
-                out[at + 16..at + 24].copy_from_slice(&fill.user_id.to_le_bytes());
+                out[at + 8..at + 16].copy_from_slice(&fill.order_id.get().to_le_bytes());
+                out[at + 16..at + 24].copy_from_slice(&fill.user_id.get().to_le_bytes());
                 out[at + 24] = match fill.side {
                     crate::trading::core::protocol::Side::Buy => 1,
                     crate::trading::core::protocol::Side::Sell => 2,
@@ -111,8 +111,8 @@ impl GatewayFrame {
                 out[at + 48..at + 56].copy_from_slice(&fill.leg2_price_ticks.to_le_bytes());
                 out[at + 56..at + 64].copy_from_slice(&fill.spread_price.to_le_bytes());
                 out[at + 64..at + 68].copy_from_slice(&fill.pair_id.to_le_bytes());
-                out[at + 72..at + 80].copy_from_slice(&fill.client_order_id.to_le_bytes());
-                out[at + 80..at + 88].copy_from_slice(&fill.session_id.to_le_bytes());
+                out[at + 72..at + 80].copy_from_slice(&fill.client_order_id.get().to_le_bytes());
+                out[at + 80..at + 88].copy_from_slice(&fill.session_id.get().to_le_bytes());
             }
             Self::PrivateEvent(event) => {
                 out[0] = TAG_PRIVATE_EVENT;
@@ -267,17 +267,17 @@ impl GatewayFrame {
                     pair_id: u32::from_le_bytes(
                         frame[at + 64..at + 68].try_into().expect("4 bytes"),
                     ),
-                    order_id: u64::from_le_bytes(
+                    order_id: crate::trading::core::domain_ids::OrderId::new(u64::from_le_bytes(
                         frame[at + 8..at + 16].try_into().expect("8 bytes"),
+                    )),
+                    client_order_id: crate::trading::core::domain_ids::ClientOrderId::new(
+                        u64::from_le_bytes(frame[at + 72..at + 80].try_into().expect("8 bytes")),
                     ),
-                    client_order_id: u64::from_le_bytes(
-                        frame[at + 72..at + 80].try_into().expect("8 bytes"),
-                    ),
-                    user_id: u64::from_le_bytes(
+                    user_id: crate::trading::core::domain_ids::AccountId::new(u64::from_le_bytes(
                         frame[at + 16..at + 24].try_into().expect("8 bytes"),
-                    ),
-                    session_id: u64::from_le_bytes(
-                        frame[at + 80..at + 88].try_into().expect("8 bytes"),
+                    )),
+                    session_id: crate::trading::core::domain_ids::SessionId::new(
+                        u64::from_le_bytes(frame[at + 80..at + 88].try_into().expect("8 bytes")),
                     ),
                     side,
                     quantity: u64::from_le_bytes(
@@ -390,10 +390,10 @@ mod tests {
         let fill = ComboPrivateFill {
             seq: 3,
             pair_id: 10,
-            order_id: 4,
-            client_order_id: 40,
-            user_id: 5,
-            session_id: 50,
+            order_id: crate::trading::core::domain_ids::OrderId::new(4),
+            client_order_id: crate::trading::core::domain_ids::ClientOrderId::new(40),
+            user_id: crate::trading::core::domain_ids::AccountId::new(5),
+            session_id: crate::trading::core::domain_ids::SessionId::new(50),
             side: crate::trading::core::protocol::Side::Sell,
             quantity: 6,
             spread_price: 49_900,
