@@ -895,7 +895,7 @@ impl InstrumentRegistry {
                 });
             };
             if freeze.pair_id != order.pair_id
-                || freeze.account_id != order.owner.user_id
+                || freeze.account_id != order.owner.user_id.get()
                 || freeze.remaining != order.remaining
             {
                 return Err(RegistrySnapshotError::MarginReservationMismatch {
@@ -1223,7 +1223,7 @@ impl InstrumentRegistry {
             self.margin.release_on_fill(fill.order_id, fill.quantity);
             self.apply_combo_owner_fill(
                 pair,
-                fill.owner.user_id,
+                fill.owner.user_id.get(),
                 fill.side,
                 fill.quantity,
                 (fill.leg1_price_ticks, fill.leg2_price_ticks),
@@ -1388,17 +1388,17 @@ impl InstrumentRegistry {
                 instrument_id: pair.leg2_instrument_id,
             },
         )?;
-        let balance = self.margin_balance(order.owner.user_id);
+        let balance = self.margin_balance(order.owner.user_id.get());
         if balance.is_none() && self.require_explicit_margin {
             return Err(ComboMarginError::MissingMarginBalance {
-                account_id: order.owner.user_id,
+                account_id: order.owner.user_id.get(),
             });
         }
         self.margin.try_freeze(
             pair,
             ComboEntryMargin {
                 order_id: order.order_id,
-                account_id: order.owner.user_id,
+                account_id: order.owner.user_id.get(),
                 quantity: order.quantity,
                 leg1_prior_settlement,
                 leg2_prior_settlement,
@@ -1437,14 +1437,14 @@ impl InstrumentRegistry {
             .release_on_fill(fill.sell_order_id, fill.quantity);
         self.apply_combo_owner_fill(
             pair,
-            fill.buy_owner.user_id,
+            fill.buy_owner.user_id.get(),
             Side::Buy,
             fill.quantity,
             leg_prices,
         );
         self.apply_combo_owner_fill(
             pair,
-            fill.sell_owner.user_id,
+            fill.sell_owner.user_id.get(),
             Side::Sell,
             fill.quantity,
             leg_prices,
@@ -1502,11 +1502,9 @@ impl InstrumentRegistry {
             seq: 0,
             pair_id: terms.pair_id,
             order_id: crate::trading::core::domain_ids::OrderId::new(order_id),
-            client_order_id: crate::trading::core::domain_ids::ClientOrderId::new(
-                owner.client_order_id,
-            ),
-            user_id: crate::trading::core::domain_ids::AccountId::new(owner.user_id),
-            session_id: crate::trading::core::domain_ids::SessionId::new(owner.session_id),
+            client_order_id: owner.client_order_id,
+            user_id: owner.user_id,
+            session_id: owner.session_id,
             side,
             quantity: terms.quantity,
             spread_price: terms.spread_price,

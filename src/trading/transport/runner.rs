@@ -302,8 +302,8 @@ impl<P: PreTradePlugin> RegistryRunner<P> {
                         statuses.push(PrivateEvent {
                             seq: 0,
                             order_id: order.order_id,
-                            client_order_id: order.owner.client_order_id,
-                            account_id: order.owner.user_id,
+                            client_order_id: order.owner.client_order_id.get(),
+                            account_id: order.owner.user_id.get(),
                             status: PrivateStatus::Canceled,
                             filled_delta: 0,
                             remaining: 0,
