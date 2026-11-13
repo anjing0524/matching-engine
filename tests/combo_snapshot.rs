@@ -106,7 +106,7 @@ fn rest_leg(registry: &mut InstrumentRegistry, command: Command) -> u64 {
 
 fn rested_order_id(events: &[ComboEvent]) -> u64 {
     match events {
-        [ComboEvent::Rested { order }] => order.order_id,
+        [ComboEvent::Rested { order }] => order.order_id.get(),
         other => panic!("expected one rested combo order, got {other:?}"),
     }
 }
@@ -293,7 +293,7 @@ fn partial_or_incompatible_snapshots_are_rejected() {
         .combo_books
         .iter()
         .flat_map(|book| book.bids.iter().chain(book.asks.iter()))
-        .map(|order| order.order_id)
+        .map(|order| order.order_id.get())
         .chain(
             snapshot
                 .combo_private_events

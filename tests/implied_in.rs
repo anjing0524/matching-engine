@@ -339,7 +339,7 @@ fn multi_level_implied_fills_consume_minimum_and_rest_the_residual() {
     let book = registry.combo_book(10).unwrap();
     assert_eq!(book.len(), 1, "only the base residual order may be stored");
     assert_eq!(book.best_bid(), Some(10_010));
-    assert_eq!(book.order(residual.order_id).unwrap().remaining, 1);
+    assert_eq!(book.order(residual.order_id.get()).unwrap().remaining, 1);
     assert_eq!(book.last_trade_price(), Some(10_010));
 
     assert_eq!(registry.core(1).unwrap().best_ask(), Some(50_020));

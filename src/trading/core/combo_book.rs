@@ -63,9 +63,9 @@ pub struct ComboFill {
     /// Equal quantity executed on the buy and sell Combo Orders.
     pub quantity: u64,
     /// Exchange id of the buy-side Combo Order.
-    pub buy_order_id: u64,
+    pub buy_order_id: crate::trading::core::domain_ids::OrderId,
     /// Exchange id of the sell-side Combo Order.
-    pub sell_order_id: u64,
+    pub sell_order_id: crate::trading::core::domain_ids::OrderId,
     /// Owner of the buy-side Combo Order.
     pub buy_owner: ComboOrderOwner,
     /// Owner of the sell-side Combo Order.
@@ -84,7 +84,7 @@ pub struct ImpliedComboFill {
     /// Combo Pair this execution belongs to.
     pub pair_id: u32,
     /// Exchange id of the implied-in taker Combo Order.
-    pub order_id: u64,
+    pub order_id: crate::trading::core::domain_ids::OrderId,
     /// Owner of the taker Combo Order.
     pub owner: ComboOrderOwner,
     /// Direction of the taker Combo Order.
@@ -151,7 +151,7 @@ pub struct ComboPrivateFill {
 #[non_exhaustive]
 pub struct ComboOrder {
     /// Exchange-assigned combo order id.
-    pub order_id: u64,
+    pub order_id: crate::trading::core::domain_ids::OrderId,
     /// Combo Pair this order trades.
     pub pair_id: u32,
     /// Owner/session/client identity.
@@ -180,7 +180,7 @@ impl ComboOrder {
         quantity: u64,
     ) -> Self {
         Self {
-            order_id,
+            order_id: crate::trading::core::domain_ids::OrderId::new(order_id),
             pair_id,
             owner,
             side,
@@ -476,7 +476,7 @@ impl ComboBook {
                 self.execution_price(order.side, order.spread_price, resting.spread_price)
             };
             let _consumed = self
-                .consume_resting(resting.order_id, quantity)
+                .consume_resting(resting.order_id.get(), quantity)
                 .expect("resting combo order selected from the book must consume");
             order.remaining -= quantity;
             self.last_trade_price = Some(spread_price);
@@ -594,7 +594,7 @@ impl ComboBook {
                 validate_restored_order(&order, snapshot.pair_id, expected_side, &locations)?;
                 if !arrivals.insert(order.arrival_seq) {
                     return Err(ComboBookError::DuplicateArrivalSeq {
-                        order_id: order.order_id,
+                        order_id: order.order_id.get(),
                         arrival_seq: order.arrival_seq,
                     });
                 }
@@ -606,7 +606,7 @@ impl ComboBook {
                     .entry(order.spread_price)
                     .or_insert_with(VecDeque::new)
                     .push_back(order);
-                locations.insert(order.order_id, (expected_side, order.spread_price));
+                locations.insert(order.order_id.get(), (expected_side, order.spread_price));
             }
         }
         if let Some(max_arrival_seq) = max_arrival_seq
@@ -634,7 +634,7 @@ impl ComboBook {
     fn validate_order(&self, order: &ComboOrder) -> Result<(), ComboBookError> {
         if order.order_id == 0 {
             return Err(ComboBookError::ZeroOrderId {
-                order_id: order.order_id,
+                order_id: order.order_id.get(),
             });
         }
         if order.pair_id != self.pair_id {
@@ -645,19 +645,19 @@ impl ComboBook {
         }
         if order.quantity == 0 {
             return Err(ComboBookError::ZeroQuantity {
-                order_id: order.order_id,
+                order_id: order.order_id.get(),
             });
         }
         if order.remaining == 0 || order.remaining > order.quantity {
             return Err(ComboBookError::InvalidRemaining {
-                order_id: order.order_id,
+                order_id: order.order_id.get(),
                 quantity: order.quantity,
                 remaining: order.remaining,
             });
         }
-        if self.locations.contains_key(&order.order_id) {
+        if self.locations.contains_key(&order.order_id.get()) {
             return Err(ComboBookError::DuplicateOrderId {
-                order_id: order.order_id,
+                order_id: order.order_id.get(),
             });
         }
         Ok(())
@@ -671,7 +671,7 @@ impl ComboBook {
             .or_default()
             .push_back(order);
         self.locations
-            .insert(order.order_id, (order.side, order.spread_price));
+            .insert(order.order_id.get(), (order.side, order.spread_price));
         order
     }
 
@@ -851,7 +851,7 @@ fn validate_restored_order(
 ) -> Result<(), ComboBookError> {
     if order.order_id == 0 {
         return Err(ComboBookError::ZeroOrderId {
-            order_id: order.order_id,
+            order_id: order.order_id.get(),
         });
     }
     if order.pair_id != pair_id {
@@ -862,26 +862,26 @@ fn validate_restored_order(
     }
     if order.quantity == 0 {
         return Err(ComboBookError::ZeroQuantity {
-            order_id: order.order_id,
+            order_id: order.order_id.get(),
         });
     }
     if order.remaining == 0 || order.remaining > order.quantity {
         return Err(ComboBookError::InvalidRemaining {
-            order_id: order.order_id,
+            order_id: order.order_id.get(),
             quantity: order.quantity,
             remaining: order.remaining,
         });
     }
     if order.side != expected_side {
         return Err(ComboBookError::SideMismatch {
-            order_id: order.order_id,
+            order_id: order.order_id.get(),
             expected: expected_side,
             actual: order.side,
         });
     }
-    if locations.contains_key(&order.order_id) {
+    if locations.contains_key(&order.order_id.get()) {
         return Err(ComboBookError::DuplicateOrderId {
-            order_id: order.order_id,
+            order_id: order.order_id.get(),
         });
     }
     Ok(())
@@ -1117,7 +1117,9 @@ mod tests {
 
         assert_eq!(restored.snapshot(), snapshot);
         assert_eq!(
-            restored.best_order(Side::Buy).map(|order| order.order_id),
+            restored
+                .best_order(Side::Buy)
+                .map(|order| order.order_id.get()),
             Some(1)
         );
         restored
@@ -1131,7 +1133,7 @@ mod tests {
         let mut book = book_with_two_orders();
         let mut snapshot = book.snapshot();
         let mut duplicate = snapshot.bids[0];
-        duplicate.order_id = 9;
+        duplicate.order_id = crate::trading::core::domain_ids::OrderId::new(9);
         snapshot.bids.push(duplicate);
 
         assert_eq!(

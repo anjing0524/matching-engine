@@ -59,7 +59,7 @@ fn combo_order(
 
 fn rested_order_id(events: &[ComboEvent]) -> u64 {
     match events {
-        [ComboEvent::Rested { order }] => order.order_id,
+        [ComboEvent::Rested { order }] => order.order_id.get(),
         other => panic!("expected one rested order, got {other:?}"),
     }
 }
@@ -152,7 +152,7 @@ fn partial_fill_leaves_the_residual_resting_for_later_execution() {
 
     let book = registry.combo_book(10).unwrap();
     assert_eq!(book.best_bid(), Some(111));
-    assert_eq!(book.order(residual.order_id).unwrap().remaining, 3);
+    assert_eq!(book.order(residual.order_id.get()).unwrap().remaining, 3);
     assert_eq!(book.len(), 1);
 }
 
@@ -203,7 +203,7 @@ fn taker_walks_opposite_orders_by_price_then_time_priority() {
         .iter()
         .filter_map(|event| match event {
             ComboEvent::Filled { fill } => {
-                Some((fill.sell_order_id, fill.spread_price, fill.quantity))
+                Some((fill.sell_order_id.get(), fill.spread_price, fill.quantity))
             }
             _ => None,
         })
@@ -361,7 +361,7 @@ fn sell_taker_walks_bids_by_price_then_time_priority() {
         .iter()
         .filter_map(|event| match event {
             ComboEvent::Filled { fill } => {
-                Some((fill.buy_order_id, fill.spread_price, fill.quantity))
+                Some((fill.buy_order_id.get(), fill.spread_price, fill.quantity))
             }
             _ => None,
         })

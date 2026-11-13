@@ -114,7 +114,7 @@ fn same_price_orders_keep_time_priority() {
     assert_eq!(book.best_order(Side::Buy).unwrap().order_id, first.order_id);
 
     registry
-        .execute_combo(cancel_order(first.order_id, 1))
+        .execute_combo(cancel_order(first.order_id.get(), 1))
         .unwrap();
     let book = registry.combo_book(10).unwrap();
     assert_eq!(
@@ -169,14 +169,14 @@ fn cancel_removes_the_order_and_preserves_remaining_quantity() {
         registry
             .combo_book(10)
             .unwrap()
-            .order(rested.order_id)
+            .order(rested.order_id.get())
             .unwrap()
             .remaining,
         8
     );
 
     let canceled = registry
-        .execute_combo(cancel_order(rested.order_id, 7))
+        .execute_combo(cancel_order(rested.order_id.get(), 7))
         .unwrap();
     let canceled = match canceled.as_slice() {
         [ComboEvent::Canceled { order }] => *order,
@@ -189,7 +189,7 @@ fn cancel_removes_the_order_and_preserves_remaining_quantity() {
     let book = registry.combo_book(10).unwrap();
     assert!(book.is_empty());
     assert_eq!(book.best_ask(), None);
-    assert!(book.order(rested.order_id).is_none());
+    assert!(book.order(rested.order_id.get()).is_none());
 }
 
 #[test]
@@ -218,7 +218,7 @@ fn duplicate_cancel_is_rejected_without_mutating_the_book() {
         .execute_combo(combo_order(501, 7, 21, Side::Buy, 45, 8))
         .unwrap();
     let order_id = match rested.as_slice() {
-        [ComboEvent::Rested { order }] => order.order_id,
+        [ComboEvent::Rested { order }] => order.order_id.get(),
         other => panic!("expected one rested order, got {other:?}"),
     };
 
@@ -401,7 +401,7 @@ fn cancel_by_another_owner_is_rejected_without_mutating_book() {
         .execute_combo(combo_order(950, 1, 11, Side::Buy, 10, 5))
         .unwrap();
     let order_id = match order.as_slice() {
-        [ComboEvent::Rested { order }] => order.order_id,
+        [ComboEvent::Rested { order }] => order.order_id.get(),
         other => panic!("expected rested order, got {other:?}"),
     };
     let error = registry
@@ -439,7 +439,7 @@ fn combo_cancel_is_rejected_outside_continuous_trading() {
         .execute_combo(combo_order(991, 1, 11, Side::Buy, 10, 5))
         .unwrap();
     let order_id = match order.as_slice() {
-        [ComboEvent::Rested { order }] => order.order_id,
+        [ComboEvent::Rested { order }] => order.order_id.get(),
         other => panic!("expected rested order, got {other:?}"),
     };
     registry.set_phase(TradingPhase::Break);
