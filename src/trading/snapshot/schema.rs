@@ -26,7 +26,7 @@ pub struct SnapshotSchema {
 /// Current core snapshot schema.
 pub const CORE: SnapshotSchema = SnapshotSchema {
     kind: SnapshotKind::Core,
-    version: 7,
+    version: 8,
 };
 
 /// Current registry snapshot schema.
@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn versions_are_unique_per_kind_and_stable() {
-        assert_eq!(version(SnapshotKind::Core), 7);
+        assert_eq!(version(SnapshotKind::Core), 8);
         assert_eq!(version(SnapshotKind::Registry), 4);
         assert_eq!(version(SnapshotKind::Trading), 10);
     }
