@@ -54,7 +54,7 @@ configuration and are not part of `RegistrySnapshot`.
 
 | Snapshot | Version | Source |
 |---|---:|---|
-| `CoreSnapshot` | 7 | `trading/snapshot/mod.rs` |
+| `CoreSnapshot` | 8 | `trading/snapshot/mod.rs` |
 | `RegistrySnapshot` | 4 | `trading/snapshot/mod.rs` |
 | `TradingSnapshot` | 8 | `trading/runtime/engine.rs` |
 

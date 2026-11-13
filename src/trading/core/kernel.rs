@@ -142,8 +142,8 @@ impl SubmitOutcome {
 /// attributes needed to update positions and release close reservations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OrderMeta {
-    pub client_order_id: u64,
-    pub account_id: u64,
+    /// Canonical order identity (account, session, client id).
+    pub identity: crate::trading::core::order_identity::OrderIdentity,
     pub side: Side,
     pub offset: Offset,
     pub hedge: Hedge,
@@ -578,8 +578,11 @@ impl TradingCore {
                 self.orders.insert(
                     order.order_id,
                     OrderMeta {
-                        client_order_id: 0,
-                        account_id: order.user_id,
+                        identity: crate::trading::core::order_identity::OrderIdentity::new(
+                            order.user_id,
+                            0,
+                            0,
+                        ),
                         side: order.side,
                         offset: order.offset,
                         hedge: order.hedge,
@@ -664,20 +667,24 @@ impl TradingCore {
                 if let Some(mut meta) = self.orders.remove(&command.order_id) {
                     if meta.offset == Offset::Open {
                         self.pending_open.release_open(
-                            PositionKey::new(meta.account_id, meta.side, meta.hedge),
+                            PositionKey::new(meta.identity.user_id.get(), meta.side, meta.hedge),
                             meta.remaining,
                         );
                     }
                     if meta.offset != Offset::Open {
                         let key = CloseKey::new(
-                            PositionKey::new(meta.account_id, meta.side.opposite(), meta.hedge),
+                            PositionKey::new(
+                                meta.identity.user_id.get(),
+                                meta.side.opposite(),
+                                meta.hedge,
+                            ),
                             meta.offset,
                         );
                         self.frozen_close.release(key, meta.remaining);
                     }
                     let canceled_quantity = meta.remaining;
-                    let client_order_id = meta.client_order_id;
-                    let account_id = meta.account_id;
+                    let client_order_id = meta.identity.client_order_id.get();
+                    let account_id = meta.identity.user_id.get();
                     let price_ticks = meta.price_ticks;
                     let side = meta.side;
                     let public = meta.public;
@@ -873,8 +880,11 @@ impl TradingCore {
             self.orders.insert(
                 order_id,
                 OrderMeta {
-                    client_order_id: command.client_order_id,
-                    account_id: u64::from(command.user_id),
+                    identity: crate::trading::core::order_identity::OrderIdentity::new(
+                        u64::from(command.user_id),
+                        command.session_id,
+                        command.client_order_id,
+                    ),
                     side: command.side,
                     offset: command.offset,
                     hedge: command.hedge,
@@ -1048,8 +1058,8 @@ impl TradingCore {
                 OrderStatus::PartiallyFilled
             };
             Some((
-                meta.client_order_id,
-                meta.account_id,
+                meta.identity.client_order_id.get(),
+                meta.identity.user_id.get(),
                 meta.side,
                 meta.offset,
                 meta.hedge,
