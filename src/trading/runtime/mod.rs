@@ -2,5 +2,7 @@
 
 pub mod engine;
 pub(crate) mod event_fanout;
+pub mod snapshot;
 
-pub use self::engine::{RuntimeOptions, TradingRuntime, TradingSnapshot, TradingSnapshotData};
+pub use self::engine::{RuntimeOptions, TradingRuntime};
+pub use self::snapshot::{TradingSnapshot, TradingSnapshotData};
