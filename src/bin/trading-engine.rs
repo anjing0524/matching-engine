@@ -206,7 +206,7 @@ fn run(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
             if args.registry_snapshot.is_none()
                 && !full_snapshot
                     .as_ref()
-                    .is_some_and(|snapshot| snapshot.registry.is_some())
+                    .is_some_and(|snapshot| snapshot.registry().is_some())
             {
                 registry
                     .register(1, ContractSpec::new("BTCUSDT", 1, 1, 1_000_000))

@@ -196,8 +196,8 @@ fn combo_command_reaches_registry_and_private_fill_through_runtime() {
 
     // The runtime is the registry path, not the legacy combo engine.
     let snapshot = runtime.snapshot();
-    assert!(snapshot.registry.is_some());
-    assert!(snapshot.core.is_none());
+    assert!(snapshot.registry().is_some());
+    assert!(snapshot.core().is_none());
     let _ = std::fs::remove_file(path);
 }
 
@@ -266,22 +266,19 @@ fn runtime_snapshot_roundtrip_restores_registry_combo_state() {
     };
     let (runtime, _address) = runtime_with_registry(registry, &path);
     let snapshot = runtime.snapshot();
-    let registry_snapshot = snapshot.registry.clone().expect("registry snapshot");
+    let registry_snapshot = snapshot.registry().cloned().expect("registry snapshot");
     assert_eq!(
         registry_snapshot.next_combo_order_id,
         resting_order_id.get() + 1
     );
     snapshot.save(&snapshot_path).unwrap();
     let loaded = TradingSnapshot::load(&snapshot_path).unwrap();
-    assert_eq!(loaded.registry.as_ref(), Some(&registry_snapshot));
+    assert_eq!(loaded.registry(), Some(&registry_snapshot));
 
     let path = temp_path("snapshot-restored-ring");
     let (mut restored, address) = runtime_with_registry(registry_with_pair(), &path);
     restored.restore_snapshot(loaded).unwrap();
-    assert_eq!(
-        restored.snapshot().registry.as_ref(),
-        Some(&registry_snapshot)
-    );
+    assert_eq!(restored.snapshot().registry(), Some(&registry_snapshot));
 
     // The restored resting Combo Order still matches: a sell taker crosses it.
     let mut stream = TcpStream::connect(&address).unwrap();

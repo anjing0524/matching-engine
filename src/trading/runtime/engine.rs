@@ -22,24 +22,55 @@ use std::time::{Duration, Instant};
 
 /// Full runtime snapshot for either command path.
 ///
-/// A plain `CoreRunner` runtime fills `core` and may fill `combo` with the
-/// legacy engine state. The production single-process registry runtime fills
-/// `registry` instead; the two shapes are mutually exclusive so a restore can
-/// never silently mix a core path with a registry path.
+/// The command owner is a closed enum: a snapshot cannot simultaneously carry
+/// core and registry state, or carry neither. Version/schema changes are still
+/// rejected by `snapshot_file`.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TradingSnapshot {
-    /// Legacy single-core state.
-    pub core: Option<CoreSnapshot>,
-    /// Registry-backed combo state for the single-process production path.
-    pub registry: Option<RegistrySnapshot>,
     /// Per-user private sequence and replay log.
     #[serde(default)]
     pub private: Option<crate::trading::gateway::private_replay::PrivateDownlinkSnapshot>,
+    /// Exactly one command-owner shape.
+    pub data: TradingSnapshotData,
 }
 
-const TRADING_SNAPSHOT_VERSION: u32 = 9;
+/// The mutually exclusive command-owner shapes.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TradingSnapshotData {
+    /// Legacy/split core runtime.
+    Core {
+        /// Single Contract core state.
+        core: CoreSnapshot,
+    },
+    /// Production single-process registry runtime.
+    Registry {
+        /// Registry-backed venue state.
+        registry: RegistrySnapshot,
+    },
+}
+
+const TRADING_SNAPSHOT_VERSION: u32 = 10;
 
 impl TradingSnapshot {
+    /// Returns the core shape, if present.
+    #[must_use]
+    pub fn core(&self) -> Option<&CoreSnapshot> {
+        match &self.data {
+            TradingSnapshotData::Core { core } => Some(core),
+            TradingSnapshotData::Registry { .. } => None,
+        }
+    }
+
+    /// Returns the registry shape, if present.
+    #[must_use]
+    pub fn registry(&self) -> Option<&RegistrySnapshot> {
+        match &self.data {
+            TradingSnapshotData::Registry { registry } => Some(registry),
+            TradingSnapshotData::Core { .. } => None,
+        }
+    }
+
     /// Writes a versioned, checksummed snapshot with atomic replacement.
     ///
     /// # Errors
@@ -221,14 +252,16 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
     pub fn snapshot(&self) -> TradingSnapshot {
         match &self.core {
             RuntimeCore::Core(runner) => TradingSnapshot {
-                core: Some(runner.core().snapshot()),
-                registry: None,
                 private: Some(self.gateway.private_snapshot()),
+                data: TradingSnapshotData::Core {
+                    core: runner.core().snapshot(),
+                },
             },
             RuntimeCore::Registry(runner) => TradingSnapshot {
-                core: None,
-                registry: Some(runner.registry().snapshot()),
                 private: Some(self.gateway.private_snapshot()),
+                data: TradingSnapshotData::Registry {
+                    registry: runner.registry().snapshot(),
+                },
             },
         }
     }
@@ -246,40 +279,23 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         if self.gateway.session_counts().0 > 0 {
             return Err("cannot restore a snapshot while sessions are active".to_string());
         }
-        let TradingSnapshot {
-            core,
-            registry,
-            private,
-        } = snapshot;
+        let TradingSnapshot { private, data } = snapshot;
         if let Some(private) = &private {
             self.gateway.validate_private_snapshot(private)?;
         }
-        match &mut self.core {
-            RuntimeCore::Core(runner) => {
-                let core = core.ok_or_else(|| "snapshot has no core state".to_string())?;
-                if registry.is_some() {
-                    return Err(
-                        "snapshot registry state does not match the core runtime".to_string()
-                    );
-                }
+        match (&mut self.core, data) {
+            (RuntimeCore::Core(runner), TradingSnapshotData::Core { core }) => {
                 runner
                     .restore_snapshot(core)
                     .map_err(|error| error.to_string())?;
-                Ok(())
             }
-            RuntimeCore::Registry(runner) => {
-                if core.is_some() {
-                    return Err(
-                        "snapshot core state does not match the registry runtime".to_string()
-                    );
-                }
-                let registry =
-                    registry.ok_or_else(|| "snapshot has no registry state".to_string())?;
+            (RuntimeCore::Registry(runner), TradingSnapshotData::Registry { registry }) => {
                 runner
                     .restore_snapshot(registry)
-                    .map_err(|error| error.to_string())
+                    .map_err(|error| error.to_string())?;
             }
-        }?;
+            _ => return Err("snapshot shape does not match runtime command path".to_string()),
+        }
         if let Some(private) = private {
             self.gateway.restore_private_snapshot(private);
         }
@@ -699,9 +715,10 @@ mod tests {
             SymbolId::intern("BTCUSDT"),
         );
         let snapshot = TradingSnapshot {
-            core: Some(core.snapshot()),
-            registry: None,
             private: None,
+            data: TradingSnapshotData::Core {
+                core: core.snapshot(),
+            },
         };
         let path = std::env::temp_dir().join(format!(
             "trading-runtime-snapshot-{}.json",
@@ -709,7 +726,7 @@ mod tests {
         ));
         snapshot.save(&path).unwrap();
         let loaded = TradingSnapshot::load(&path).unwrap();
-        assert_eq!(loaded.core, snapshot.core);
+        assert_eq!(loaded.core(), snapshot.core());
 
         let corrupted = std::fs::read(&path).unwrap();
         let mut corrupted = corrupted;
@@ -751,9 +768,10 @@ mod tests {
             })
             .unwrap();
         let snapshot = TradingSnapshot {
-            core: Some(runtime.core().snapshot()),
-            registry: None,
             private: None,
+            data: TradingSnapshotData::Core {
+                core: runtime.core().snapshot(),
+            },
         };
         assert!(runtime.restore_snapshot(snapshot).is_err());
         let _ = std::fs::remove_file(&path);

@@ -57,9 +57,10 @@ fn binary_restores_runtime_snapshot() {
     existing.quantity = 1;
     let _ = registry.execute(existing);
     let snapshot = TradingSnapshot {
-        core: None,
-        registry: Some(registry.snapshot()),
         private: None,
+        data: trading_system_engine::trading::runtime::TradingSnapshotData::Registry {
+            registry: registry.snapshot(),
+        },
     };
     snapshot.save(&snapshot_path).unwrap();
 
