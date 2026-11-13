@@ -106,8 +106,8 @@ impl SpscRing {
                 "SPSC ring is truncated",
             ));
         }
-        let mmap = unsafe { MmapOptions::new().map_mut(&file)? };
-        let base = mmap.as_ptr() as *mut u8;
+        let mut mmap = unsafe { MmapOptions::new().map_mut(&file)? };
+        let base = mmap.as_mut_ptr();
         let (magic, version, capacity, slot_size) = unsafe {
             (
                 ptr::read(base as *const u64),
@@ -253,8 +253,9 @@ impl SpscRing {
 
 impl Drop for SpscRing {
     fn drop(&mut self) {
+        // Best-effort flush: unmap happens when `mmap` drops. Durability is
+        // provided by the explicit log/snapshot paths, not by the ring.
         let _ = self.mmap.flush();
-        let _ = &self.mmap;
     }
 }
 
