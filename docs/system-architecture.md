@@ -65,7 +65,7 @@ Recovery plane: command log + snapshot -> deterministic replay.
 | `TradingCore` (2.2k lines) owns kernel, orders, positions, snapshots, events | `InstrumentMatching` + `OrderBook` + `RiskState` + `CoreSnapshot` | separate state machines |
 | `CoreRunner` and `RegistryRunner` both poll/project | one `VenueRunner` over a `CommandTarget` | one command path |
 | dense array core book, BTreeMap combo book | one generic `PriceLevelBook` with pluggable level storage and order slab | one order lifecycle |
-| many event structs | one `VenueEvent` envelope; private/public/gateway/log are projections | one sequence/audit truth |
+| many event structs | one canonical envelope per stream (`PrivateEffect`, `PublicEvent`); internal matching events stay internal | independent sequence domains |
 | six snapshot structs/versions | one `SnapshotEnvelope` with registered schema versions | recovery is a first-class plane |
 | primitive ids (`u64`, `u32`) everywhere | newtypes for instrument/account/session/order/pair/sequence | compile-time domain safety |
 
@@ -95,9 +95,12 @@ Order (common)
   state: accepted | resting | partially_filled | filled | canceled | rejected
   kind: limit | market | advanced_market | combo | auction
 
-VenueEvent
-  seq, ts, source, instrument/pair, payload
-  PrivateProjection, PublicProjection, GatewayFrame, ResultLogSlot
+PrivateEffect
+  canonical private delivery envelope (core + combo)
+PublicEvent
+  canonical public delivery envelope (core + combo trade)
+CoreEvent / ComboEvent
+  internal matching results, projected by the runtime
 ```
 
 `ComboOrder` remains a different aggregate (two legs, pair, spread), but it
@@ -128,9 +131,9 @@ target makes ownership explicit.
 Do not rewrite in one pass. The order below preserves behavior and benchmarks
 at every step:
 
-1. **Domain newtypes + event envelope**  
-   Introduce ids/sequences and one `VenueEvent`; keep adapters to existing
-   `CoreEvent`/`ComboEvent` until all projections move.
+1. **Domain newtypes + per-stream event truth**  
+   Introduce ids/sequences; keep `PrivateEffect`/`PublicEvent` as the canonical
+   envelopes. Internal `CoreEvent`/`ComboEvent` projects into them. See ADR-0004.
 
 2. **Generic price-level book**  
    Extract `PriceLevelBook` from the core book and make the combo book use the
