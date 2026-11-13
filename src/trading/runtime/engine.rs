@@ -16,7 +16,7 @@ use crate::trading::market_data::metrics::TradingMetrics;
 use crate::trading::market_data::repair::RepairServer;
 use crate::trading::runtime::event_fanout::{EventFanout, EventFanoutOptions};
 use crate::trading::transport::result_log::{PrivateResultLog, PublicResultLog};
-use crate::trading::transport::runner::{CoreRunner, RegistryRunner};
+use crate::trading::transport::runner::{CoreRunner, RegistryRunner, VenueRunner};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -99,16 +99,10 @@ pub struct RuntimeOptions {
     pub idle_timeout: Option<Duration>,
 }
 
-/// The command owner for one runtime: legacy single core or instrument registry.
-enum RuntimeCore<P> {
-    Core(Box<CoreRunner<P>>),
-    Registry(Box<RegistryRunner<P>>),
-}
-
 /// Composite gateway/middleware/core runtime for one process.
 pub struct TradingRuntime<P> {
     gateway: GatewayRuntime,
-    core: RuntimeCore<P>,
+    core: VenueRunner<P>,
     server: GatewayServerHandle,
     idle_timeout: Option<Duration>,
     last_expire: Instant,
@@ -122,7 +116,7 @@ pub struct TradingRuntime<P> {
 impl<P: PreTradePlugin> TradingRuntime<P> {
     #[must_use]
     pub fn new(gateway: GatewayRuntime, core: CoreRunner<P>, server: GatewayServerHandle) -> Self {
-        Self::with_core(gateway, RuntimeCore::Core(Box::new(core)), server)
+        Self::with_core(gateway, VenueRunner::core(core), server)
     }
 
     /// Builds the production single-process runtime over an [`InstrumentRegistry`].
@@ -135,12 +129,12 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         core: RegistryRunner<P>,
         server: GatewayServerHandle,
     ) -> Self {
-        Self::with_core(gateway, RuntimeCore::Registry(Box::new(core)), server)
+        Self::with_core(gateway, VenueRunner::registry(core), server)
     }
 
     fn with_core(
         gateway: GatewayRuntime,
-        core: RuntimeCore<P>,
+        core: VenueRunner<P>,
         server: GatewayServerHandle,
     ) -> Self {
         Self {
@@ -194,10 +188,7 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         if idle_timeout.is_some() {
             self.last_expire = Instant::now();
         }
-        let events = match &mut self.core {
-            RuntimeCore::Core(runner) => runner.poll_events(),
-            RuntimeCore::Registry(runner) => runner.poll_events(),
-        };
+        let events = self.core.poll_events();
         self.metrics.commands_executed += events.commands as u64;
         self.private_events.extend(events.private);
         self.public_events.extend(events.public);
@@ -240,29 +231,31 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
     #[must_use]
     #[cfg(test)]
     pub(crate) fn core(&self) -> &TradingCore {
-        match &self.core {
-            RuntimeCore::Core(runner) => runner.core(),
-            RuntimeCore::Registry(_) => {
-                panic!("the registry-backed runtime does not expose one TradingCore")
-            }
-        }
+        self.core
+            .as_core()
+            .expect("the registry-backed runtime does not expose one TradingCore")
     }
 
     #[must_use]
     pub fn snapshot(&self) -> TradingSnapshot {
-        match &self.core {
-            RuntimeCore::Core(runner) => TradingSnapshot {
+        if let Some(core) = self.core.as_core() {
+            TradingSnapshot {
                 private: Some(self.gateway.private_snapshot()),
                 data: TradingSnapshotData::Core {
-                    core: runner.core().snapshot(),
+                    core: core.snapshot(),
                 },
-            },
-            RuntimeCore::Registry(runner) => TradingSnapshot {
+            }
+        } else {
+            let registry = self
+                .core
+                .as_registry()
+                .expect("a VenueRunner always has one target");
+            TradingSnapshot {
                 private: Some(self.gateway.private_snapshot()),
                 data: TradingSnapshotData::Registry {
-                    registry: runner.registry().snapshot(),
+                    registry: registry.snapshot(),
                 },
-            },
+            }
         }
     }
 
@@ -283,18 +276,23 @@ impl<P: PreTradePlugin> TradingRuntime<P> {
         if let Some(private) = &private {
             self.gateway.validate_private_snapshot(private)?;
         }
-        match (&mut self.core, data) {
-            (RuntimeCore::Core(runner), TradingSnapshotData::Core { core }) => {
-                runner
+        match data {
+            TradingSnapshotData::Core { core } => {
+                let target = self.core.as_core_mut().ok_or_else(|| {
+                    "snapshot shape does not match runtime command path".to_string()
+                })?;
+                target
                     .restore_snapshot(core)
                     .map_err(|error| error.to_string())?;
             }
-            (RuntimeCore::Registry(runner), TradingSnapshotData::Registry { registry }) => {
-                runner
+            TradingSnapshotData::Registry { registry } => {
+                let target = self.core.as_registry_mut().ok_or_else(|| {
+                    "snapshot shape does not match runtime command path".to_string()
+                })?;
+                target
                     .restore_snapshot(registry)
                     .map_err(|error| error.to_string())?;
             }
-            _ => return Err("snapshot shape does not match runtime command path".to_string()),
         }
         if let Some(private) = private {
             self.gateway.restore_private_snapshot(private);
