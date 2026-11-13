@@ -36,6 +36,24 @@ fn flush_queue<T>(
     }
 }
 
+fn drain_commands(
+    consumer: &CommandConsumer,
+    decode_errors: &mut u64,
+    mut execute: impl FnMut(Command),
+) -> usize {
+    let mut commands = 0;
+    while let Some(result) = consumer.recv() {
+        match result {
+            Ok(command) => {
+                execute(command);
+                commands += 1;
+            }
+            Err(_) => *decode_errors += 1,
+        }
+    }
+    commands
+}
+
 /// Snapshot restore failure returned by [`CoreRunner`].
 #[derive(Debug)]
 pub struct CoreRestoreError(String);
@@ -145,19 +163,13 @@ impl<P: PreTradePlugin> CoreRunner<P> {
     /// Drains commands and returns the resulting events through one seam.
     #[must_use]
     pub fn poll_events(&mut self) -> CoreEvents {
-        let mut commands = 0;
-        while let Some(result) = self.consumer.recv() {
-            match result {
-                Ok(command) => {
-                    self.core
-                        .execute_with_plugins_discard(command, &self.plugin);
-                    commands += 1;
-                }
-                Err(_) => {
-                    self.decode_errors += 1;
-                }
-            }
-        }
+        let consumer = &self.consumer;
+        let core = &mut self.core;
+        let plugin = &self.plugin;
+        let decode_errors = &mut self.decode_errors;
+        let commands = drain_commands(consumer, decode_errors, |command| {
+            core.execute_with_plugins_discard(command, plugin);
+        });
         let private = if self.private_producer.is_some() {
             self.flush_private();
             Vec::new()
@@ -220,6 +232,47 @@ pub struct RegistryRunner<P> {
     decode_errors: u64,
 }
 
+fn execute_combo_command(
+    registry: &mut InstrumentRegistry,
+    command: Command,
+    statuses: &mut Vec<PrivateEvent>,
+) {
+    let next_order_id = registry.next_combo_order_id();
+    match registry.execute_combo(command) {
+        Ok(events) => {
+            if command.command_type == CommandType::Cancel {
+                if let Some(ComboEvent::Canceled { order }) = events.first() {
+                    statuses.push(PrivateEvent {
+                        seq: 0,
+                        order_id: order.order_id.get(),
+                        client_order_id: order.owner.client_order_id.get(),
+                        account_id: order.owner.user_id.get(),
+                        status: PrivateStatus::Canceled,
+                        filled_delta: 0,
+                        remaining: 0,
+                        reason: None,
+                    });
+                }
+                return;
+            }
+            let filled = taker_filled_quantity(next_order_id, &events);
+            statuses.push(PrivateEvent {
+                seq: 0,
+                order_id: next_order_id,
+                client_order_id: command.client_order_id,
+                account_id: u64::from(command.user_id),
+                status: PrivateStatus::Accepted,
+                filled_delta: 0,
+                remaining: command.quantity.saturating_sub(filled),
+                reason: None,
+            });
+        }
+        Err(error) => {
+            statuses.push(combo_rejection(command, error));
+        }
+    }
+}
+
 impl<P: PreTradePlugin> RegistryRunner<P> {
     /// Creates a runner over an already configured registry.
     ///
@@ -242,44 +295,33 @@ impl<P: PreTradePlugin> RegistryRunner<P> {
     /// always learns that an unsupported combo order or cancel was refused.
     #[must_use]
     pub fn poll_events(&mut self) -> CoreEvents {
-        let mut commands = 0;
         let mut ordered_private = Vec::new();
         let mut core_private = Vec::new();
         let mut combo_private = Vec::new();
-        while let Some(result) = self.consumer.recv() {
-            match result {
-                Ok(command) => {
-                    commands += 1;
-                    if command.combo_id != 0 {
-                        let mut statuses = Vec::new();
-                        self.execute_combo_command(command, &mut statuses);
-                        for status in statuses {
-                            ordered_private.push(PrivateEffect::Core(status.clone()));
-                            core_private.push(status);
-                        }
-                        for fill in self.registry.drain_combo_private_events() {
-                            ordered_private.push(PrivateEffect::Combo(fill));
-                            combo_private.push(fill);
-                        }
-                    } else {
-                        let _ = self
-                            .registry
-                            .execute_with_plugins_discard(command, &self.plugin);
-                        for event in self.registry.drain_private_events() {
-                            ordered_private.push(PrivateEffect::Core(event.clone()));
-                            core_private.push(event);
-                        }
-                        for fill in self.registry.drain_combo_private_events() {
-                            ordered_private.push(PrivateEffect::Combo(fill));
-                            combo_private.push(fill);
-                        }
-                    }
+        let consumer = &self.consumer;
+        let registry = &mut self.registry;
+        let plugin = &self.plugin;
+        let decode_errors = &mut self.decode_errors;
+        let commands = drain_commands(consumer, decode_errors, |command| {
+            if command.combo_id != 0 {
+                let mut statuses = Vec::new();
+                execute_combo_command(registry, command, &mut statuses);
+                for status in statuses {
+                    ordered_private.push(PrivateEffect::Core(status.clone()));
+                    core_private.push(status);
                 }
-                Err(_) => {
-                    self.decode_errors += 1;
+            } else {
+                let _ = registry.execute_with_plugins_discard(command, plugin);
+                for event in registry.drain_private_events() {
+                    ordered_private.push(PrivateEffect::Core(event.clone()));
+                    core_private.push(event);
                 }
             }
-        }
+            for fill in registry.drain_combo_private_events() {
+                ordered_private.push(PrivateEffect::Combo(fill));
+                combo_private.push(fill);
+            }
+        });
         if commands == 0 {
             return CoreEvents {
                 commands,
@@ -295,43 +337,6 @@ impl<P: PreTradePlugin> RegistryRunner<P> {
             public: self.registry.drain_public_events(),
             combo_private,
             ordered_private,
-        }
-    }
-
-    fn execute_combo_command(&mut self, command: Command, statuses: &mut Vec<PrivateEvent>) {
-        let next_order_id = self.registry.next_combo_order_id();
-        match self.registry.execute_combo(command) {
-            Ok(events) => {
-                if command.command_type == CommandType::Cancel {
-                    if let Some(ComboEvent::Canceled { order }) = events.first() {
-                        statuses.push(PrivateEvent {
-                            seq: 0,
-                            order_id: order.order_id.get(),
-                            client_order_id: order.owner.client_order_id.get(),
-                            account_id: order.owner.user_id.get(),
-                            status: PrivateStatus::Canceled,
-                            filled_delta: 0,
-                            remaining: 0,
-                            reason: None,
-                        });
-                    }
-                    return;
-                }
-                let filled = taker_filled_quantity(next_order_id, &events);
-                statuses.push(PrivateEvent {
-                    seq: 0,
-                    order_id: next_order_id,
-                    client_order_id: command.client_order_id,
-                    account_id: u64::from(command.user_id),
-                    status: PrivateStatus::Accepted,
-                    filled_delta: 0,
-                    remaining: command.quantity.saturating_sub(filled),
-                    reason: None,
-                });
-            }
-            Err(error) => {
-                statuses.push(combo_rejection(command, error));
-            }
         }
     }
 
