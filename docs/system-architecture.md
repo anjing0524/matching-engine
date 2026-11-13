@@ -135,9 +135,9 @@ at every step:
    Introduce ids/sequences; keep `PrivateEffect`/`PublicEvent` as the canonical
    envelopes. Internal `CoreEvent`/`ComboEvent` projects into them. See ADR-0004.
 
-2. **Generic price-level book**  
-   Extract `PriceLevelBook` from the core book and make the combo book use the
-   same level/slab machinery; keep dense storage for the core initially.
+2. **Shared order lifecycle, not shared storage**  
+   Unify order identity/state and atomic execution semantics. Keep the core
+   dense array and the combo sparse ladder (ADR-0005).
 
 3. **One runner**  
    Collapse `CoreRunner` and `RegistryRunner` into a `VenueRunner` over a
