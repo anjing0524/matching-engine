@@ -9,6 +9,7 @@ pub mod combo_pair;
 pub mod domain_ids;
 pub mod kernel;
 pub mod leg_liquidity;
+pub mod order_identity;
 pub mod plugins;
 pub mod positions;
 pub mod private_events;
