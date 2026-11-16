@@ -1,0 +1,25 @@
+[Unit]
+Description=Trading middleware sequencing and market-data process
+After=network.target
+Before=trading-core.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=trading
+Group=trading
+EnvironmentFile=/etc/trading/middleware.env
+ExecStart=/opt/trading/bin/trading-middleware
+Restart=on-failure
+RestartSec=2s
+LimitNOFILE=1048576
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/run/trading /var/lib/trading
+KillSignal=SIGTERM
+TimeoutStopSec=20s
+
+[Install]
+WantedBy=multi-user.target

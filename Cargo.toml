@@ -1,0 +1,55 @@
+[package]
+name = "trading-system-engine"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+
+[workspace]
+members = ["crates/trading-domain"]
+resolver = "3"
+
+[dependencies]
+trading-domain = { path = "crates/trading-domain" }
+serde = { version = "1.0", features = ["derive"] }
+tracing = "0.1"
+tikv-jemallocator = "0.5"
+memmap2 = "0.9"
+socket2 = { version = "0.5", features = ["all"] }
+smallvec = "1.13"
+clap = { version = "4.5.52", features = ["derive"] }
+crc32fast = "1.4"
+serde_json = "1.0"
+
+# Optional dependencies
+
+[dev-dependencies]
+criterion = "0.7"
+tempfile = "3.10"
+
+[[bench]]
+name = "tick_orderbook_benchmark"
+harness = false
+
+[[bench]]
+name = "trading_core_benchmark"
+harness = false
+
+[[bench]]
+name = "trading_middleware_benchmark"
+harness = false
+
+# Performance profile
+[profile.release]
+opt-level = 3           # maximum performance
+lto = "fat"             # full LTO: one codegen unit, best optimization
+codegen-units = 1       # one codegen unit: best optimization, slower build
+strip = false           # keep symbols for debugging (set to true in production)
+
+# Binary-size profile (optional, for deployment)
+[profile.release-small]
+inherits = "release"
+opt-level = "z"         # optimize for binary size
+lto = true              # full link-time optimization
+codegen-units = 1       # single codegen unit
+strip = true            # strip symbols
+panic = "abort"         # abort on panic to shrink the binary

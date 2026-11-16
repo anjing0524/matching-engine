@@ -1,0 +1,6 @@
+target
+.git
+*.ring
+*.log
+docs
+deploy

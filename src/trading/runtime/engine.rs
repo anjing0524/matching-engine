@@ -1,0 +1,708 @@
+//! Minimal end-to-end runtime: gateway TCP ↔ middleware ↔ core.
+//!
+//! One `tick()` drains gateway events into the middleware command ring, runs the
+//! core command consumer, then routes core private events back to the matching
+//! gateway session.
+
+#[cfg(test)]
+use crate::trading::core::TradingCore;
+use crate::trading::core::plugins::PreTradePlugin;
+use crate::trading::gateway::runtime::GatewayRuntime;
+use crate::trading::gateway::server::GatewayServerHandle;
+use crate::trading::market_data::MarketDataPublisher;
+use crate::trading::market_data::metrics::TradingMetrics;
+use crate::trading::market_data::repair::RepairServer;
+use crate::trading::runtime::event_fanout::{EventFanout, EventFanoutOptions};
+use crate::trading::runtime::snapshot::{TradingSnapshot, TradingSnapshotData};
+use crate::trading::transport::result_log::{PrivateResultLog, PublicResultLog};
+use crate::trading::transport::runner::{CoreRunner, RegistryRunner, VenueRunner};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// Optional collaborators for one runtime instance.
+#[derive(Default)]
+pub struct RuntimeOptions {
+    pub public_log: Option<PublicResultLog>,
+    pub private_log: Option<PrivateResultLog>,
+    pub repair_server: Option<RepairServer>,
+    pub market_data: Option<MarketDataPublisher>,
+    pub metrics_sink: Option<Arc<Mutex<TradingMetrics>>>,
+    pub idle_timeout: Option<Duration>,
+}
+
+/// Composite gateway/middleware/core runtime for one process.
+pub struct TradingRuntime<P> {
+    gateway: GatewayRuntime,
+    core: VenueRunner<P>,
+    server: GatewayServerHandle,
+    idle_timeout: Option<Duration>,
+    last_expire: Instant,
+    fanout: EventFanout,
+    metrics: TradingMetrics,
+    metrics_sink: Option<Arc<Mutex<TradingMetrics>>>,
+    private_events: Vec<crate::trading::core::private_events::PrivateEvent>,
+    public_events: Vec<crate::trading::core::public_events::PublicEvent>,
+}
+
+impl<P: PreTradePlugin> TradingRuntime<P> {
+    #[must_use]
+    pub fn new(gateway: GatewayRuntime, core: CoreRunner<P>, server: GatewayServerHandle) -> Self {
+        Self::with_core(gateway, VenueRunner::core(core), server)
+    }
+
+    /// Builds the production single-process runtime over an [`InstrumentRegistry`].
+    ///
+    /// The registry owns every ordinary Contract book, the static Combo Pairs,
+    /// and Combo Order routing, so combo commands never start a second engine.
+    #[must_use]
+    pub fn from_registry(
+        gateway: GatewayRuntime,
+        core: RegistryRunner<P>,
+        server: GatewayServerHandle,
+    ) -> Self {
+        Self::with_core(gateway, VenueRunner::registry(core), server)
+    }
+
+    fn with_core(
+        gateway: GatewayRuntime,
+        core: VenueRunner<P>,
+        server: GatewayServerHandle,
+    ) -> Self {
+        Self {
+            gateway,
+            core,
+            server,
+            idle_timeout: None,
+            last_expire: Instant::now(),
+            fanout: EventFanout::new(),
+            metrics: TradingMetrics::new(),
+            metrics_sink: None,
+            private_events: Vec::new(),
+            public_events: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_options(mut self, options: RuntimeOptions) -> Self {
+        self.fanout = self.fanout.with_options(EventFanoutOptions {
+            public_log: options.public_log,
+            private_log: options.private_log,
+            repair_server: options.repair_server,
+            market_data: options.market_data,
+        });
+        self.metrics_sink = options.metrics_sink;
+        self.idle_timeout = options.idle_timeout;
+        self
+    }
+
+    #[must_use]
+    pub fn repair_sent(&self) -> u64 {
+        self.fanout.repair_sent()
+    }
+
+    #[must_use]
+    pub fn public_sent(&self) -> u64 {
+        self.fanout.public_sent()
+    }
+
+    pub fn tick(&mut self) {
+        let tick_start = Instant::now();
+        let idle_timeout = self
+            .idle_timeout
+            .filter(|timeout| self.last_expire.elapsed() >= *timeout / 2);
+        let effects = self.gateway.apply_effects(&self.server, idle_timeout);
+        self.metrics.gateway_events += effects.events as u64;
+        self.metrics.active_sessions = effects.active_sessions as u64;
+        self.metrics.closed_sessions = effects.closed_sessions as u64;
+        self.metrics.replay_events_sent += effects.replays as u64;
+        self.metrics.idle_sessions_expired += effects.expired as u64;
+        if idle_timeout.is_some() {
+            self.last_expire = Instant::now();
+        }
+        let events = self.core.poll_events();
+        self.metrics.commands_executed += events.commands as u64;
+        self.private_events.extend(events.private);
+        self.public_events.extend(events.public);
+        self.fanout.emit(&self.private_events, &[]);
+        let sent = if events.ordered_private.is_empty() {
+            let core = self
+                .gateway
+                .dispatch_private(&self.server, self.private_events.drain(..));
+            let combo = self
+                .gateway
+                .dispatch_combo_private(&self.server, events.combo_private);
+            core + combo
+        } else {
+            self.private_events.clear();
+            self.gateway
+                .dispatch_private_effects(&self.server, events.ordered_private)
+        };
+        self.metrics.private_events_sent += sent as u64;
+        let public_sent = self.fanout.emit(&[], &self.public_events);
+        self.metrics.public_events_sent += public_sent;
+        // Project each public event once; stale events must not be re-emitted.
+        self.public_events.clear();
+        let repaired = self.fanout.poll_repair();
+        self.metrics.repair_events_sent += repaired;
+        self.metrics.fanout_errors = self.fanout.sink_errors();
+        let elapsed_ns = u64::try_from(tick_start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.metrics.tick_latency.observe(elapsed_ns);
+        if let Some(sink) = &self.metrics_sink
+            && let Ok(mut snapshot) = sink.lock()
+        {
+            *snapshot = self.metrics;
+        }
+    }
+
+    #[must_use]
+    pub fn metrics(&self) -> TradingMetrics {
+        self.metrics
+    }
+
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn core(&self) -> &TradingCore {
+        self.core
+            .as_core()
+            .expect("the registry-backed runtime does not expose one TradingCore")
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> TradingSnapshot {
+        if let Some(core) = self.core.as_core() {
+            TradingSnapshot {
+                private: Some(self.gateway.private_snapshot()),
+                data: TradingSnapshotData::Core {
+                    core: core.snapshot(),
+                },
+            }
+        } else {
+            let registry = self
+                .core
+                .as_registry()
+                .expect("a VenueRunner always has one target");
+            TradingSnapshot {
+                private: Some(self.gateway.private_snapshot()),
+                data: TradingSnapshotData::Registry {
+                    registry: registry.snapshot(),
+                },
+            }
+        }
+    }
+
+    /// Restores core, legacy combo, or registry-backed combo state.
+    ///
+    /// The snapshot shape must match the runtime command path: a registry
+    /// runtime rejects a core snapshot and a core runtime rejects registry
+    /// state, so a restore can never silently mix paths.
+    ///
+    /// # Errors
+    /// Returns an error when sessions are active, the snapshot shape does not
+    /// match the runtime, or the captured state is inconsistent.
+    pub fn restore_snapshot(&mut self, snapshot: TradingSnapshot) -> Result<(), String> {
+        if self.gateway.session_counts().0 > 0 {
+            return Err("cannot restore a snapshot while sessions are active".to_string());
+        }
+        let TradingSnapshot { private, data } = snapshot;
+        if let Some(private) = &private {
+            self.gateway.validate_private_snapshot(private)?;
+        }
+        match data {
+            TradingSnapshotData::Core { core } => {
+                let target = self.core.as_core_mut().ok_or_else(|| {
+                    "snapshot shape does not match runtime command path".to_string()
+                })?;
+                target
+                    .restore_snapshot(core)
+                    .map_err(|error| error.to_string())?;
+            }
+            TradingSnapshotData::Registry { registry } => {
+                let target = self.core.as_registry_mut().ok_or_else(|| {
+                    "snapshot shape does not match runtime command path".to_string()
+                })?;
+                target
+                    .restore_snapshot(registry)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        if let Some(private) = private {
+            self.gateway.restore_private_snapshot(private);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gateway_mut(&mut self) -> &mut GatewayRuntime {
+        &mut self.gateway
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::orderbook::ContractSpec;
+    use crate::shared::SymbolId;
+    use crate::trading::core::plugins::NoPlugins;
+    use crate::trading::core::protocol::{
+        Command, CommandType, Hedge, Offset, PriceType, Side, TimeCondition, TriggerType,
+        VolumeCondition,
+    };
+    use crate::trading::gateway::GatewayFrame;
+    use crate::trading::gateway::runtime::GatewayRuntime;
+    use crate::trading::gateway::server::start;
+    use crate::trading::transport::create;
+    use crate::trading::transport::middleware::MiddlewareSequencer;
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    fn command() -> Command {
+        Command {
+            global_seq: 0,
+            gateway_seq: 1,
+            ingress_ts_ns: 0,
+            trading_ts_ns: 0,
+            client_order_id: 1,
+            session_id: 0,
+            gateway_id: 1,
+            member_id: 0,
+            user_id: 2,
+            seat_id: 3,
+            instrument_id: 1,
+            combo_id: 0,
+            session_epoch: 1,
+            command_type: CommandType::NewOrder,
+            price_type: PriceType::Limit,
+            time_condition: TimeCondition::Gfd,
+            volume_condition: VolumeCondition::Any,
+            side: Side::Buy,
+            offset: Offset::Open,
+            hedge: Hedge::Spec,
+            flags: 0,
+            leg2_ratio: 0,
+            price_ticks: 50_000,
+            quantity: 5,
+            trigger_price_ticks: 0,
+            leg2_instrument_id: 0,
+            leg2_offset: Offset::Open,
+            leg2_hedge: Hedge::Spec,
+            trigger_type: TriggerType::None,
+            cancel_order_id: 0,
+        }
+    }
+
+    #[test]
+    fn multiple_gateway_clients_fan_out_public_events() {
+        use crate::trading::core::protocol::{Command, CommandType, Hedge, Offset, Side};
+        use crate::trading::market_data::{MarketDataPublisher, MarketDataSubscriber};
+        use std::io::Write;
+
+        let path = std::env::temp_dir().join(format!(
+            "trading-system-engine-fanout-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 1024).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let gateway = GatewayRuntime::new(middleware, events).with_anonymous_access();
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let runner = CoreRunner::new(core, consumer, NoPlugins);
+        let subscriber = MarketDataSubscriber::bind("127.0.0.1:0").unwrap();
+        let publisher =
+            MarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap()).unwrap();
+        let mut runtime =
+            TradingRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
+                market_data: Some(publisher),
+                ..Default::default()
+            });
+
+        let clients = 4u64;
+        let per_client = 25u64;
+        let mut streams = Vec::new();
+        for client in 0..clients {
+            let mut stream = TcpStream::connect(addr).unwrap();
+            stream
+                .write_all(
+                    &GatewayFrame::Login {
+                        member_id: client as u32 + 1,
+                        auth_token: 0,
+                        user_id: client as u32 + 1,
+                        seat_id: 1,
+                        session_epoch: 1,
+                        last_private_seq: 0,
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            for seq in 0..per_client {
+                let mut command = Command::zeroed();
+                command.command_type = CommandType::NewOrder;
+                command.client_order_id = client * per_client + seq + 1;
+                command.user_id = client as u32 + 1;
+                command.side = Side::Buy;
+                command.price_ticks = 50_000 + client as i64 * 100 + seq as i64;
+                command.quantity = 1;
+                command.offset = Offset::Open;
+                command.hedge = Hedge::Spec;
+                stream
+                    .write_all(&GatewayFrame::Command(command).encode())
+                    .unwrap();
+            }
+            streams.push(stream);
+        }
+
+        for _ in 0..2000 {
+            runtime.tick();
+            if runtime.public_sent() == clients * per_client {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(runtime.public_sent(), clients * per_client);
+        for _ in 0..clients * per_client {
+            subscriber.recv().unwrap();
+        }
+        drop(streams);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn runtime_repair_server_serves_nack() {
+        use crate::trading::market_data::repair::{NackRequest, RepairServer};
+        use crate::trading::market_data::tracker::NackClient;
+        use crate::trading::market_data::{MarketDataPublisher, MarketDataSubscriber};
+
+        let path = std::env::temp_dir().join(format!(
+            "trading-system-engine-trading-runtime-repair-server-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 16).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let gateway = GatewayRuntime::new(middleware, events).with_anonymous_access();
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let runner = CoreRunner::new(core, consumer, NoPlugins);
+        let subscriber = MarketDataSubscriber::bind("127.0.0.1:0").unwrap();
+        let publisher =
+            MarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap()).unwrap();
+        let repair = RepairServer::bind("127.0.0.1:0", publisher, 16).unwrap();
+        let repair_addr = repair.local_addr().unwrap();
+        let mut runtime =
+            TradingRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
+                repair_server: Some(repair),
+                ..Default::default()
+            });
+
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    auth_token: 0,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        stream
+            .write_all(&GatewayFrame::Command(command()).encode())
+            .unwrap();
+        let mut saw_public = false;
+        for _ in 0..100 {
+            runtime.tick();
+            if runtime.public_sent() > 0 || runtime.repair_sent() > 0 {
+                saw_public = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        // Public events are pushed into the repair server even without a normal
+        // publisher, so use a NACK to pull the first event back.
+        assert!(!saw_public);
+        let client = NackClient::bind("127.0.0.1:0", repair_addr).unwrap();
+        client
+            .send(NackRequest {
+                from_seq: 1,
+                to_seq: 1,
+            })
+            .unwrap();
+        for _ in 0..100 {
+            runtime.tick();
+            if runtime.repair_sent() > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(runtime.repair_sent(), 1);
+        assert_eq!(subscriber.recv().unwrap().seq, 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn core_public_events_reach_udp_subscriber() {
+        use crate::trading::market_data::MarketDataSubscriber;
+
+        let path = std::env::temp_dir().join(format!(
+            "trading-system-engine-trading-runtime-udp-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 16).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let gateway = GatewayRuntime::new(middleware, events).with_anonymous_access();
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let runner = CoreRunner::new(core, consumer, NoPlugins);
+        let subscriber = MarketDataSubscriber::bind("127.0.0.1:0").unwrap();
+        let publisher =
+            MarketDataPublisher::bind("127.0.0.1:0", subscriber.local_addr().unwrap()).unwrap();
+        let mut runtime =
+            TradingRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
+                market_data: Some(publisher),
+                ..Default::default()
+            });
+
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    auth_token: 0,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        stream
+            .write_all(&GatewayFrame::Command(command()).encode())
+            .unwrap();
+        for _ in 0..100 {
+            runtime.tick();
+            if runtime.public_sent() > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let event = subscriber.recv().unwrap();
+        assert_eq!(
+            event.event_type,
+            crate::trading::core::public_events::PublicEventType::OrderRested
+        );
+        assert_eq!(runtime.public_sent(), 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn runtime_expires_idle_gateway() {
+        let path = std::env::temp_dir().join(format!(
+            "trading-system-engine-trading-runtime-idle-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 16).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let gateway = GatewayRuntime::new(middleware, events).with_anonymous_access();
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let runner = CoreRunner::new(core, consumer, NoPlugins);
+        let mut runtime =
+            TradingRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
+                idle_timeout: Some(Duration::from_millis(30)),
+                ..Default::default()
+            });
+
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    auth_token: 0,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        for _ in 0..50 {
+            runtime.tick();
+            if runtime
+                .gateway_mut()
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_some()
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        std::thread::sleep(Duration::from_millis(40));
+        runtime.tick();
+        assert!(
+            runtime
+                .gateway_mut()
+                .middleware_mut()
+                .sessions_mut()
+                .find_active_by_user(2)
+                .is_none()
+        );
+        drop(stream);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn order_flows_gateway_to_core_and_private_back() {
+        let path = std::env::temp_dir().join(format!(
+            "trading-system-engine-trading-runtime-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 16).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let gateway = GatewayRuntime::new(middleware, events).with_anonymous_access();
+        let spec = ContractSpec::new("BTCUSDT", 1, 40_000, 70_000);
+        let core = TradingCore::new(spec, SymbolId::intern("BTCUSDT"));
+        let runner = CoreRunner::new(core, consumer, NoPlugins);
+        let metrics_sink = Arc::new(Mutex::new(TradingMetrics::new()));
+        let mut runtime =
+            TradingRuntime::new(gateway, runner, server).with_options(RuntimeOptions {
+                metrics_sink: Some(Arc::clone(&metrics_sink)),
+                ..Default::default()
+            });
+
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        stream
+            .write_all(
+                &GatewayFrame::Login {
+                    member_id: 10,
+                    auth_token: 0,
+                    user_id: 2,
+                    seat_id: 3,
+                    session_epoch: 1,
+                    last_private_seq: 0,
+                }
+                .encode(),
+            )
+            .unwrap();
+        stream
+            .write_all(&GatewayFrame::Command(command()).encode())
+            .unwrap();
+
+        let mut received = None;
+        for _ in 0..200 {
+            runtime.tick();
+            let mut frame = [0u8; crate::trading::gateway::GATEWAY_FRAME_SIZE];
+            if stream.read_exact(&mut frame).is_ok() {
+                received = Some(GatewayFrame::decode(&frame).unwrap());
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        match received {
+            Some(GatewayFrame::PrivateEvent(event)) => {
+                assert_eq!(event.account_id, 2);
+                assert_eq!(event.remaining, 5);
+            }
+            other => panic!("expected private event, got {other:?}"),
+        }
+        let metrics = runtime.metrics();
+        assert!(metrics.gateway_events > 0);
+        assert_eq!(metrics.commands_executed, 1);
+        assert_eq!(metrics.private_events_sent, 1);
+        assert!(metrics.tick_latency.count() > 0);
+        let shared = *metrics_sink.lock().unwrap();
+        assert_eq!(shared.commands_executed, 1);
+        let _ = std::fs::remove_file(&path);
+    }
+    #[test]
+    fn trading_snapshot_file_roundtrip() {
+        let core = TradingCore::new(
+            ContractSpec::new("BTCUSDT", 1, 1, 1_000_000),
+            SymbolId::intern("BTCUSDT"),
+        );
+        let snapshot = TradingSnapshot {
+            private: None,
+            data: TradingSnapshotData::Core {
+                core: core.snapshot(),
+            },
+        };
+        let path = std::env::temp_dir().join(format!(
+            "trading-runtime-snapshot-{}.json",
+            std::process::id()
+        ));
+        snapshot.save(&path).unwrap();
+        let loaded = TradingSnapshot::load(&path).unwrap();
+        assert_eq!(loaded.core(), snapshot.core());
+
+        let corrupted = std::fs::read(&path).unwrap();
+        let mut corrupted = corrupted;
+        corrupted[20] ^= 0xff;
+        std::fs::write(&path, corrupted).unwrap();
+        assert!(TradingSnapshot::load(&path).is_err());
+
+        let _ = std::fs::remove_file(path);
+    }
+    #[test]
+    fn restore_is_rejected_with_active_sessions() {
+        use crate::trading::transport::session::SessionInfo;
+
+        let path =
+            std::env::temp_dir().join(format!("trading-restore-active-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let (producer, consumer) = create(&path, 8).unwrap();
+        let middleware = MiddlewareSequencer::new(producer);
+        let (server, events) = start("127.0.0.1:0").unwrap();
+        let gateway = GatewayRuntime::new(middleware, events).with_anonymous_access();
+        let core = TradingCore::new(
+            ContractSpec::new("BTCUSDT", 1, 1, 1_000_000),
+            SymbolId::intern("BTCUSDT"),
+        );
+        let runner = CoreRunner::new(core, consumer, NoPlugins);
+        let mut runtime = TradingRuntime::new(gateway, runner, server);
+        runtime
+            .gateway_mut()
+            .middleware_mut()
+            .sessions_mut()
+            .open_or_takeover(SessionInfo {
+                session_id: 1,
+                gateway_id: 1,
+                member_id: 1,
+                user_id: 1,
+                seat_id: 1,
+                last_private_seq: 0,
+                active: true,
+            })
+            .unwrap();
+        let snapshot = TradingSnapshot {
+            private: None,
+            data: TradingSnapshotData::Core {
+                core: runtime.core().snapshot(),
+            },
+        };
+        assert!(runtime.restore_snapshot(snapshot).is_err());
+        let _ = std::fs::remove_file(&path);
+    }
+}
