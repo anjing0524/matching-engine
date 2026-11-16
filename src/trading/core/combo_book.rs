@@ -258,6 +258,15 @@ pub enum ComboBookError {
         /// Pair id carried by the order.
         order_pair_id: u32,
     },
+    /// A fill tried to consume more quantity than the order still carries.
+    QuantityExceedsRemaining {
+        /// Exchange order id being consumed.
+        order_id: u64,
+        /// Quantity still resting on the order.
+        remaining: u64,
+        /// Quantity the fill tried to consume.
+        requested: u64,
+    },
     /// Cancel named an order that is not resting in this book.
     UnknownOrder {
         /// Exchange order id that was not found.
@@ -324,6 +333,14 @@ impl Display for ComboBookError {
             } => write!(
                 formatter,
                 "combo order for pair {order_pair_id} cannot rest in pair {book_pair_id} book"
+            ),
+            Self::QuantityExceedsRemaining {
+                order_id,
+                remaining,
+                requested,
+            } => write!(
+                formatter,
+                "combo order {order_id} has {remaining} remaining but the fill needs {requested}"
             ),
             Self::UnknownOrder { order_id } => {
                 write!(formatter, "combo order {order_id} is not resting")
@@ -676,9 +693,15 @@ impl ComboBook {
             let Some(resting) = queue.get_mut(index) else {
                 return Err(ComboBookError::UnknownOrder { order_id });
             };
-            debug_assert!(quantity <= resting.remaining);
-            resting.remaining -= quantity;
-            if resting.remaining == 0 {
+            let Some(updated) = resting.remaining.checked_sub(quantity) else {
+                return Err(ComboBookError::QuantityExceedsRemaining {
+                    order_id,
+                    remaining: resting.remaining,
+                    requested: quantity,
+                });
+            };
+            resting.remaining = updated;
+            if updated == 0 {
                 queue.remove(index);
                 (None, queue.is_empty())
             } else {
@@ -715,7 +738,7 @@ impl ComboBook {
             Side::Buy => floor,
             Side::Sell => floor + sum.rem_euclid(2),
         };
-        i64::try_from(midpoint).unwrap_or(buy_limit)
+        i64::try_from(midpoint).expect("a midpoint of two i64 limits always fits in i64")
     }
 
     /// Removes and returns a resting order owned by `user_id`.
@@ -1105,6 +1128,22 @@ mod tests {
             .submit(order(4, Side::Sell, 90, 1))
             .expect("a crossing order must execute");
         assert_eq!(restored.last_trade_price(), Some(90));
+    }
+
+    #[test]
+    fn implied_fill_cannot_exceed_remaining() {
+        let mut book = book_with_two_orders();
+        let error = book.apply_implied_fill(1, 4).unwrap_err();
+        assert_eq!(
+            error,
+            ComboBookError::QuantityExceedsRemaining {
+                order_id: 1,
+                remaining: 3,
+                requested: 4,
+            }
+        );
+        assert_eq!(book.order(1).map(|order| order.remaining), Some(3));
+        assert_eq!(book.len(), 3);
     }
 
     #[test]

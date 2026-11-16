@@ -146,6 +146,22 @@ self.auth_token.is_none_or(|expected| expected == auth_token)
 2. **`Command` 扁平哨兵与 `flags` 复用**：`Command` 直接镜像 256 字节线格式，改成内部枚举会引入线格式与内存布局的双重维护；`flags` 承载 Control 的 phase 属于既有协议约定。若后续要改，建议“线格式层保持扁平 + 内核入口转 `enum CommandKind`”，作为独立重构。
 3. **`margin_amount` 饱和乘法**：溢出方向是多算保证金（fail-closed，会拒单而非少收保证金），且真实参数远达不到 u128 溢出；改成 `checked_*` 需要给释放/恢复/实际成交三条路径新增错误变体，收益低于复杂度，故保留并在函数文档注明饱和语义。
 
+## 第二轮审查（combo_book / runtime / transport）
+
+聚焦审查报告建议的三个方向后，发现并修复 2 处，其余确认无问题：
+
+| 编号 | 原则 | 问题 | 处理 |
+| --- | --- | --- | --- |
+| R1 | 强不变量 / Fail Fast | `ComboBook::consume_resting` 只有 `debug_assert!` 保护，随后用未检查减法；release 构建下超量成交会让 `remaining` 回绕成巨大值 | 改为 `checked_sub`，超量时返回新增的 `QuantityExceedsRemaining { order_id, remaining, requested }`，并补回归测试 |
+| R2 | Fail Fast / 不静默 | `MiddlewareSequencer::submit` 中命令日志 `append` 失败会返回错误，但紧随其后的 `fsync` 用 `let _ =` 忽略：日志可能未落盘却已向上游确认 | 改为 `log.sync().map_err(CommandTransportError::Io)?`，与轮转日志的错误处理保持一致 |
+
+确认无问题的部分：
+
+- `SpscRing`：容量/槽位在 `open` 时校验，head/tail 使用 release/acquire 且计数回绕安全，pop 时校验槽位长度，未发现越界或撕裂读。
+- `ComboBook::match_taker` / `snapshot` / `restore_snapshot`：价格优先、时间优先一致；恢复时校验重复 arrival、过期 next seq、交叉盘口。
+- `TradingRuntime::tick` 与 `EventFanout`：私有事件在派发前先写日志；sink 错误计入 `fanout_errors`，不吞掉计数。
+- `SessionRegistry`：重复/零 session 显式拒绝，takeover 先停旧会话再激活新会话。
+
 ## 下一轮审查建议
 
 - `combo_book.rs`（1156 行）：撮合/隐含撮合的边界与优先级不变量。

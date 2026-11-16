@@ -135,7 +135,9 @@ impl MiddlewareSequencer {
         producer.send(&command)?;
         if let Some(log) = &mut self.command_log {
             log.append(&command).map_err(CommandTransportError::Io)?;
-            let _ = log.sync();
+            // A failed fsync means the replay log is no longer trustworthy;
+            // surface it instead of acknowledging an undurable command.
+            log.sync().map_err(CommandTransportError::Io)?;
         }
         if let Some(log) = &mut self.rotating_log {
             log.append(&command).map_err(CommandTransportError::Io)?;
